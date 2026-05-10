@@ -3,5 +3,8 @@
 # STK
 
 # Physical models (Matlab)
-
+*.asv
+*.slxc
+*.autosave
+slprj
 # Data-driven model (Python)
