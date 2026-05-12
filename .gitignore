@@ -6,5 +6,6 @@ AGI STK/
 *.slxc
 *.mat
 *.xml
+*.autosave
 slprj/
 # Data-driven model (Python)
