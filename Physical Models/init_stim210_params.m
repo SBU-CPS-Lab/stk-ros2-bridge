@@ -26,8 +26,8 @@ stim210_dt = 1 / stim210_fs;
 %% Dynamic parameters
 % bandwidth: 262 HZ (Datasheet p.7)
 stim210_bw_hz = 262;
-stim210_tau = 1 / (2 * pi * stim210_bw_hz); % Time constant [s]
+stim210_tau = 1 / (2 * pi * stim210_bw_hz);
 
 %% Physical constraints(Saturation)
-% measurement range: ±400 deg/s (Datasheet p.5)
+% measurement range: +/- 400 deg/s (Datasheet p.5)
 stim210_range = 400;
