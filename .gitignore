@@ -1,7 +1,9 @@
 # Ignore all the files here
 
 # STK
-
+AGI STK
 # Physical models (Matlab)
-
+*.slxc
+*.mat
+*.xml
 # Data-driven model (Python)
