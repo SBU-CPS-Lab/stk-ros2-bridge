@@ -8,5 +8,6 @@ AGI STK/
 *.autosave
 *.asv
 slprj/
+*.slx.*
 
 # Data-driven model (Python)
