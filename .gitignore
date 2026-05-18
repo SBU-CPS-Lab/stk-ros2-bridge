@@ -1,5 +1,5 @@
 # STK
-AGI STK
+AGI STK/
 
 # Physical models (Matlab)
 *.slxc
@@ -8,5 +8,6 @@ AGI STK
 *.autosave
 *.asv
 slprj/
+*.slx.*
 
 # Data-driven model (Python)
