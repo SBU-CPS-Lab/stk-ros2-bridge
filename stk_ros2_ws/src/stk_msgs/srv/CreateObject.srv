@@ -1,0 +1,8 @@
+string object_type       # "Satellite" | "Facility" | "Sensor"
+string object_name
+string parent_path        # "" for top-level scenario children, else e.g.
+                            # "*/Satellite/SSS-1" when creating a Sensor
+---
+bool success
+string message
+string object_path

@@ -1,0 +1,13 @@
+# Executes an Astrogator maneuver segment mutation + RunMCS, with progress
+# feedback. Rejected immediately (result.success = false, no feedback) if
+# Astrogator is not licensed -- see BackendDiagnostics.licensed_astrogator.
+
+stk_msgs/ManeuverCommand maneuver
+---
+bool success
+string message
+float64 actual_delta_v_mps
+builtin_interfaces/Time completion_time
+---
+string phase   # "validating" | "configuring_segment" | "running_mcs" | "propagating"
+float64 fraction_complete

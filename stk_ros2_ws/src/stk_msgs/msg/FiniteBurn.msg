@@ -1,0 +1,4 @@
+float64 duration_s
+float64 thrust_n
+float64 specific_impulse_s
+geometry_msgs/Vector3 thrust_direction_unit_vector

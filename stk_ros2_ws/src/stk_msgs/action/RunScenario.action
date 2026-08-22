@@ -1,0 +1,15 @@
+# Runs the scenario from the current sim time to a target time, reporting
+# progress. In LOCKSTEP mode this drives the step loop directly rather than
+# competing with it; in other modes it drives STK's Animate command.
+
+builtin_interfaces/Time target_time
+float64 max_wall_time_s   # abort if exceeded, 0.0 = no limit
+---
+bool success
+string message
+builtin_interfaces/Time final_sim_time
+uint32 steps_executed
+---
+builtin_interfaces/Time current_sim_time
+float64 fraction_complete
+uint32 step_index

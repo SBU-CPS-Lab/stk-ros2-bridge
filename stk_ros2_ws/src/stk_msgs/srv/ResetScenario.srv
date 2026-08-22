@@ -1,0 +1,9 @@
+# Resets scenario time and clears any real-time position/attitude data
+# accumulated via SetPosition / AddAttitude (equivalent to SetAttitude
+# ClearData for every real-time-attitude object plus animation reset).
+# Does NOT reload from disk -- use LoadScenario for that.
+
+bool clear_realtime_data
+---
+bool success
+string message

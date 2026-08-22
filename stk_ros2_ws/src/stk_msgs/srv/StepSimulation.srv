@@ -1,0 +1,11 @@
+# Explicit single-step request, valid only in LOCKSTEP mode. This is the
+# service form of what clock_node.py otherwise drives automatically off the
+# lockstep barrier; useful for manual/debug stepping from a MATLAB script
+# or a test harness. See docs/05_time_synchronization.md.
+
+float64 step_s   # 0.0 => use the configured default step from bridge_params.yaml
+---
+bool success
+string message
+builtin_interfaces/Time new_sim_time
+uint32 step_index

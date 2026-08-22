@@ -1,0 +1,12 @@
+uint8 FREE_RUN = 0
+uint8 PACED = 1
+uint8 LOCKSTEP = 2
+uint8 EXTERNAL = 3
+
+uint8 mode
+float64 real_time_factor        # valid if mode == PACED
+string[] lockstep_barrier_nodes  # valid if mode == LOCKSTEP; node names the
+                                    # clock authority waits on each step
+---
+bool success
+string message

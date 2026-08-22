@@ -1,0 +1,10 @@
+# Loads an existing STK scenario (.sc / .stk) file, replacing any currently
+# loaded scenario. Blocks until STK reports the scenario is fully loaded.
+
+string scenario_path
+bool close_existing_first
+---
+bool success
+string message
+string scenario_name
+builtin_interfaces/Time scenario_epoch

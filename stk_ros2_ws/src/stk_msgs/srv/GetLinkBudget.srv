@@ -1,0 +1,7 @@
+string transmitter_path
+string receiver_path
+builtin_interfaces/Time at_time
+---
+bool success
+string message
+stk_msgs/LinkBudget link

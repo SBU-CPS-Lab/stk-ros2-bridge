@@ -1,0 +1,22 @@
+# Python dependencies for the stk_bridge runtime, on top of whatever ROS 2
+# Humble's Python environment already provides (rclpy, etc.).
+#
+# Install into the SAME Python environment ROS 2 Humble uses (Python 3.8 on
+# the official Windows Humble build), so both `import rclpy` and
+# `import agi.stk12` resolve in one interpreter. See
+# docs/01_installation_windows.md for the full environment setup, including
+# why this must not be a separate venv from the one `local_setup.ps1`
+# activates.
+#
+# agi.stk12 itself is NOT listed here: it ships as a wheel inside your STK
+# 12.6 install (typically
+# C:\Program Files\AGI\STK 12\bin\AgPythonAPI\agi.stk12-12.6.0-py3-none-any.whl)
+# and must be pip-installed from that local path, not from PyPI:
+#   pip install "C:\Program Files\AGI\STK 12\bin\AgPythonAPI\agi.stk12-12.6.0-py3-none-any.whl"
+# scripts/check_environment.py (Phase 2) verifies this install and its
+# version at runtime.
+
+pywin32>=306          # COM backend: win32com.client, pythoncom, win32api
+comtypes>=1.2.0        # fallback / diagnostic COM introspection
+numpy>=1.24,<2.0        # bulk data provider extraction (ToNumpyArray)
+pyyaml>=6.0             # config file loading

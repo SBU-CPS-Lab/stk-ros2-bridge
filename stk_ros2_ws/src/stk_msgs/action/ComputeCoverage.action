@@ -1,0 +1,21 @@
+# Runs an STK Coverage analysis (asset x grid over a time span), which can
+# take from seconds to minutes depending on grid resolution -- hence an
+# action rather than a service. NOTE: assets using the Real-time propagator
+# are excluded from STK Coverage analysis (see PositionCommand.msg); the
+# goal is rejected up front with a clear message if the requested asset is
+# currently on that propagator, rather than silently returning empty
+# results.
+
+string[] asset_object_paths
+string coverage_definition_name   # must already exist in the scenario
+builtin_interfaces/Time start_time
+builtin_interfaces/Time stop_time
+---
+bool success
+string message
+float64 percent_covered
+uint32 grid_points_total
+uint32 grid_points_covered
+---
+float64 fraction_complete
+string current_phase

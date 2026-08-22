@@ -1,0 +1,23 @@
+# Switches a satellite's propagator. Setting REALTIME activates the
+# real-time orbit propagator that PositionCommand.msg feeds via
+# SetPosition; it does NOT by itself switch attitude -- attitude's
+# real-time channel is activated independently via `SetAttitude Standard`,
+# performed automatically by core/actuation.py the first time an
+# AttitudeCommand arrives for an object, so callers of this service do not
+# need to sequence the two.
+
+string object_path
+
+uint8 TWO_BODY = 0
+uint8 J4_PERTURBATION = 1
+uint8 HPOP = 2
+uint8 REALTIME = 3
+uint8 EXTERNAL = 4
+uint8 propagator_type
+
+float64 realtime_look_ahead_s    # valid if propagator_type == REALTIME
+float64 realtime_look_behind_s   # valid if propagator_type == REALTIME
+string external_ephemeris_path    # valid if propagator_type == EXTERNAL
+---
+bool success
+string message
