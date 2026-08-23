@@ -713,8 +713,14 @@ class ComBackend(StkBackend):
 
         applied = []
         for candidates, value in (
-            (("LookAheadDuration", "LookAheadTime", "LookAhead"),
-             look_ahead_s),
+            # "Duration" confirmed present on STK 12.6's real-time
+            # propagator via dir(); the LookAhead*/LookBehind* spellings
+            # are not. Duration is tried first for look-ahead. Note that
+            # 12.6 exposes no separate look-behind property here, so
+            # look_behind_s may be unsettable -- reported, not silently
+            # ignored.
+            (("Duration", "LookAheadDuration", "LookAheadTime",
+              "LookAhead"), look_ahead_s),
             (("LookBehindDuration", "LookBehindTime", "LookBehind"),
              look_behind_s),
         ):

@@ -91,8 +91,9 @@ class _MockObject:
     look_behind_s: float = 3600.0
     position_samples: List[Tuple[float, Tuple[float, float, float]]] = \
         field(default_factory=list)
-    attitude_samples: List[Tuple[float, Tuple[float, float, float, float]]] = \
-        field(default_factory=list)
+    #: (stamp, quaternion_xyzw, was_inertial)
+    attitude_samples: List[Tuple[float, Tuple[float, float, float, float],
+                                bool]] = field(default_factory=list)
     rate_samples: List[Tuple[float, Tuple[float, float, float]]] = \
         field(default_factory=list)
 
@@ -297,13 +298,47 @@ class MockBackend(StkBackend):
                     r31 * vx_p + r32 * vy_p)
         return position, velocity
 
-    def _attitude_at(self, obj: _MockObject, when: float
+    def _earth_rotation(self, when: float) -> Tuple[float, float, float, float]:
+        """ECI->ECF rotation about z at ``when``. Quaternion (x,y,z,w).
+
+        Deliberately simplified (uniform sidereal rate, arbitrary zero
+        epoch) -- fidelity is irrelevant here. What matters is that it is
+        NON-IDENTITY and time-varying, so a mock that pairs an
+        ECF-commanded attitude with an inertial read-back produces a
+        large error, exactly as real STK does. Without this the mock
+        cannot catch the frame-pairing bug that a live STK 12.6 run
+        exposed.
+        """
+        omega = 7.2921159e-5
+        angle = (omega * (when - self._epoch)) % (2.0 * math.pi)
+        half = angle / 2.0
+        return (0.0, 0.0, math.sin(half), math.cos(half))
+
+    def _attitude_at(self, obj: _MockObject, when: float,
+                     inertial: bool = True
                      ) -> Tuple[float, float, float, float]:
-        """Latest commanded attitude, or nadir-ish identity if none."""
+        """Latest commanded attitude, expressed in the requested frame.
+
+        Rotates between inertial and central-body-fixed as needed, so
+        requesting the wrong frame yields a plausible but wrong
+        quaternion -- the failure mode this mock must reproduce.
+        """
         candidates = [s for s in obj.attitude_samples if s[0] <= when]
-        if candidates:
-            return max(candidates, key=lambda s: s[0])[1]
-        return (0.0, 0.0, 0.0, 1.0)
+        if not candidates:
+            return (0.0, 0.0, 0.0, 1.0)
+        stamp, quaternion, was_inertial = max(candidates, key=lambda s: s[0])
+        if was_inertial == inertial:
+            return quaternion
+
+        from stk_bridge.core.conversions import (
+            quaternion_conjugate, quaternion_multiply,
+        )
+
+        rotation = self._earth_rotation(stamp)
+        if inertial:      # stored fixed, want inertial
+            return quaternion_multiply(quaternion_conjugate(rotation),
+                                       quaternion)
+        return quaternion_multiply(rotation, quaternion)
 
     def _rate_at(self, obj: _MockObject, when: float
                  ) -> Tuple[float, float, float]:
@@ -326,9 +361,21 @@ class MockBackend(StkBackend):
             self._require_group(query, {"ICRF", "J2000", "Fixed"})
             return self._columns(query, times, self._velocity_columns(obj))
         if name in ("attitude quaternions", "attitude quaternion"):
-            return self._columns(query, times, self._quaternion_columns(obj))
-        if name in ("body axes angular velocity", "angular velocity"):
-            return self._columns(query, times, self._rate_columns(obj))
+            return self._columns(query, times,
+                                 self._quaternion_columns(obj, inertial=True))
+        if name in ("ecf attitude quaternions",
+                    "attitude segment ecf quaternions"):
+            return self._columns(query, times,
+                                 self._quaternion_columns(obj, inertial=False))
+        if name == "attitude segment quaternions":
+            return self._columns(query, times,
+                                 self._segment_columns(obj))
+        # NOTE: deliberately absent. A live STK 12.6 inventory has NO
+        # "Body Axes Angular Velocity" provider -- body rates come from
+        # "Attitude Segment Quaternions" instead. Serving a provider real
+        # STK lacks would let the discovery path pass here and fail
+        # there, which is the whole failure mode this mock exists to
+        # prevent.
         if name == "lla state":
             self._require_group(query, {"Fixed", "Detic"})
             return self._columns(query, times, self._lla_columns(obj))
@@ -399,10 +446,19 @@ class MockBackend(StkBackend):
             return {"x": velocity[0], "y": velocity[1], "z": velocity[2]}
         return build
 
-    def _quaternion_columns(self, obj: _MockObject):
+    def _quaternion_columns(self, obj: _MockObject, inertial: bool = True):
         def build(when: float) -> Dict[str, float]:
-            qx, qy, qz, qw = self._attitude_at(obj, when)
+            qx, qy, qz, qw = self._attitude_at(obj, when, inertial=inertial)
             return {"q1": qx, "q2": qy, "q3": qz, "q4": qw}
+        return build
+
+    def _segment_columns(self, obj: _MockObject):
+        """Quaternion + body rates together, inertial-referenced."""
+        def build(when: float) -> Dict[str, float]:
+            qx, qy, qz, qw = self._attitude_at(obj, when, inertial=True)
+            wx, wy, wz = self._rate_at(obj, when)
+            return {"q1": qx, "q2": qy, "q3": qz, "q4": qw,
+                    "wx": wx, "wy": wy, "wz": wz}
         return build
 
     def _rate_columns(self, obj: _MockObject):
@@ -443,14 +499,19 @@ class MockBackend(StkBackend):
         against real STK.
         """
         self._obj(object_path)
-        frames = ["ICRF", "J2000", "Fixed"]
+        frames = ["TrueOfDateRotating", "Fixed", "ICRF", "MeanOfDate",
+                  "MeanOfEpoch", "TrueOfDate"]
         return {
             "Cartesian Position": list(frames),
             "Cartesian Velocity": list(frames),
-            "Attitude Quaternions": ["Fixed", "ICRF", "Body"],
-            "Body Axes Angular Velocity": ["Body", "ICRF"],
-            "LLA State": ["Fixed", "Detic"],
-            "Lighting Times": [],
+            # Mirrors a real STK 12.6 inventory: the attitude providers
+            # are UNGROUPED, there is no "Body Axes Angular Velocity",
+            # and Lighting Times is grouped by condition.
+            "Attitude Quaternions": [],
+            "ECF Attitude Quaternions": [],
+            "Attitude Segment Quaternions": [],
+            "LLA State": ["TrueOfDateRotating", "Fixed"],
+            "Lighting Times": ["Sunlight", "Penumbra", "Umbra"],
         }
 
     def compute_access(self, from_path: str, to_path: str,
@@ -542,9 +603,15 @@ class MockBackend(StkBackend):
                                f"quaternion is not unit-norm (|q|={norm:.6f})")
         stamp = when.epoch_seconds
         if obj.attitude_samples and stamp <= obj.attitude_samples[-1][0]:
+            # STK 12.6 NACKs this rather than dropping silently (confirmed
+            # on a live install), so raise instead of counting quietly.
             obj.dropped_attitudes += 1
-            return
-        obj.attitude_samples.append((stamp, quaternion_xyzw))
+            raise CommandError(
+                "AddAttitude", object_path,
+                f"non-monotonic sample: {stamp} <= "
+                f"{obj.attitude_samples[-1][0]}",
+            )
+        obj.attitude_samples.append((stamp, quaternion_xyzw, inertial))
 
     def add_attitude_angular_velocity(
         self, object_path: str, when: StkTime,

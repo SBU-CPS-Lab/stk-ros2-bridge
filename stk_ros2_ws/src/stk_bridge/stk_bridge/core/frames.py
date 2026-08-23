@@ -68,11 +68,33 @@ BUILTIN_FRAMES: Dict[str, FrameDefinition] = {
         ros_id="icrf", stk_name="ICRF", parent=None, inertial=True,
         description="International Celestial Reference Frame. Tree root.",
     ),
-    "j2000": FrameDefinition(
-        ros_id="j2000", stk_name="J2000", parent="icrf", inertial=True,
-        description="Mean equator and equinox of J2000. Differs from ICRF "
-                    "by the frame bias (~20 mas) -- not zero, but far "
-                    "below anything this bridge resolves.",
+    # NOTE: "J2000" is NOT a data-provider group member on STK 12.6.
+    # The Cartesian Position/Velocity groups are TrueOfDateRotating,
+    # Fixed, ICRF, MeanOfDate, MeanOfEpoch, TrueOfDate. Requesting
+    # "J2000" fails at runtime, so it is kept only as an ALIAS for the
+    # frame STK actually offers -- see MEAN_OF_EPOCH below -- rather than
+    # as a frame in its own right.
+    "mean_of_epoch": FrameDefinition(
+        ros_id="mean_of_epoch", stk_name="MeanOfEpoch", parent="icrf",
+        inertial=True,
+        description="Mean equator and equinox of the scenario epoch. The "
+                    "closest STK 12.6 analogue to J2000; identical to it "
+                    "only when the scenario epoch is J2000.",
+    ),
+    "mean_of_date": FrameDefinition(
+        ros_id="mean_of_date", stk_name="MeanOfDate", parent="icrf",
+        inertial=False,
+        description="Mean equator and equinox of date.",
+    ),
+    "true_of_date": FrameDefinition(
+        ros_id="true_of_date", stk_name="TrueOfDate", parent="icrf",
+        inertial=False,
+        description="True equator and equinox of date.",
+    ),
+    "true_of_date_rotating": FrameDefinition(
+        ros_id="true_of_date_rotating", stk_name="TrueOfDateRotating",
+        parent="icrf", inertial=False,
+        description="True of date, rotating with the central body.",
     ),
     "fixed": FrameDefinition(
         ros_id="fixed", stk_name="Fixed", parent="icrf", inertial=False,
@@ -108,10 +130,13 @@ BUILTIN_FRAMES: Dict[str, FrameDefinition] = {
 #: ``AddAttitude Quat`` takes inertial axes -- there is no third option,
 #: so commanding attitude relative to LVLH requires the caller to rotate
 #: into one of these first.
-ATTITUDE_REFERENCE_FRAMES: Set[str] = {"fixed", "icrf", "j2000", "inertial"}
+ATTITUDE_REFERENCE_FRAMES: Set[str] = {"fixed", "icrf", "inertial"}
 
 #: Frames valid as the reference for ``SetPosition``.
-POSITION_REFERENCE_FRAMES: Set[str] = {"icrf", "j2000", "fixed", "inertial"}
+POSITION_REFERENCE_FRAMES: Set[str] = {
+    "icrf", "fixed", "inertial", "mean_of_epoch", "mean_of_date",
+    "true_of_date", "true_of_date_rotating",
+}
 
 
 class FrameRegistry:
@@ -130,6 +155,13 @@ class FrameRegistry:
         # naming convention without knowing which they hold.
         for frame in self._frames.values():
             self._aliases[frame.stk_name.lower()] = frame.ros_id
+
+        # "J2000" is a name users will reach for, but STK 12.6 offers no
+        # such group member. Alias it to the nearest real frame so that
+        # requests resolve rather than failing deep inside a query --
+        # with the caveat recorded in MEAN_OF_EPOCH's description.
+        if "mean_of_epoch" in self._frames and "j2000" not in self._frames:
+            self._aliases.setdefault("j2000", "mean_of_epoch")
 
         for alias, target in (aliases or {}).items():
             self.add_alias(alias, target)
@@ -296,3 +328,35 @@ class FrameRegistry:
     def __repr__(self) -> str:
         return (f"<FrameRegistry {len(self._frames)} frames, "
                 f"{len(self._aliases)} aliases, root={self.root_frame()!r}>")
+
+
+def validate_against_backend(registry: "FrameRegistry", backend,
+                             object_path: str,
+                             provider_name: str = "Cartesian Position"
+                             ) -> Dict[str, bool]:
+    """Check which declared frames actually exist on this STK install.
+
+    Frame names drift between STK versions -- "J2000" is a group member
+    on some installs and absent on STK 12.6 -- and a frame that does not
+    exist fails only when first queried, typically deep in a running
+    control loop. Cross-checking the registry against the live
+    enumeration at startup turns that into a startup-time warning.
+
+    Returns ``{ros_id: available}`` for every frame in the registry that
+    could be checked. Frames the provider does not group by (attitude
+    providers on 12.6 are ungrouped) are reported as available, since
+    their absence from the group list carries no information.
+    """
+    try:
+        providers = backend.list_data_providers(object_path)
+    except Exception:
+        return {}
+    members = providers.get(provider_name) or []
+    if not members:
+        return {}
+
+    lowered = {m.strip().lower() for m in members}
+    return {
+        frame_id: registry.stk_name(frame_id).strip().lower() in lowered
+        for frame_id in registry.known_frames()
+    }

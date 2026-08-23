@@ -129,8 +129,14 @@ CARTESIAN_VELOCITY = ProviderSpec(
 ATTITUDE_QUATERNION = ProviderSpec(
     key="attitude_quaternion",
     provider_name="Attitude Quaternions",
-    provider_alternatives=("Attitude Quaternion", "Body Axes Orientation"),
-    group_element="<frame>",
+    provider_alternatives=("Attitude Quaternion",),
+    # UNGROUPED. Confirmed against a live STK 12.6 inventory: this
+    # provider takes no reference-frame group member and always reports
+    # attitude relative to the central body INERTIAL axes. Passing a
+    # frame here was silently ignored, which is how an ECF-commanded
+    # attitude came to be compared against an inertial read-back and
+    # produced a ~99 deg "ordering" error that was really a frame error.
+    group_element=None,
     fields=(
         TIME_FIELD,
         FieldSpec("q1", ("q1", "Q1", "qx", "x")),
@@ -142,6 +148,28 @@ ATTITUDE_QUATERNION = ProviderSpec(
         "Body attitude relative to the requested frame. Q1..Q3 vector "
         "part, Q4 scalar -- mapped to ROS (x,y,z,w) by "
         "conversions.quaternion_from_stk_elements."
+    ),
+)
+
+ECF_ATTITUDE_QUATERNION = ProviderSpec(
+    key="ecf_attitude_quaternion",
+    provider_name="ECF Attitude Quaternions",
+    provider_alternatives=("Attitude Segment ECF Quaternions",),
+    group_element=None,
+    fields=(
+        TIME_FIELD,
+        FieldSpec("q1", ("q1", "Q1")),
+        FieldSpec("q2", ("q2", "Q2")),
+        FieldSpec("q3", ("q3", "Q3")),
+        FieldSpec("q4", ("q4", "Q4")),
+    ),
+    description=(
+        "Body attitude relative to central-body-FIXED axes. This is the "
+        "correct read-back counterpart for `AddAttitude CBFQuat`; "
+        "ATTITUDE_QUATERNION is the counterpart for `AddAttitude Quat`. "
+        "Pairing them the wrong way round differs by the Earth-rotation "
+        "angle at the sample epoch -- tens of degrees, and entirely "
+        "plausible-looking."
     ),
 )
 
@@ -207,17 +235,29 @@ LLA_STATE = ProviderSpec(
     description="Geodetic position. Angles in radians once units are SI.",
 )
 
+#: NOTE: on STK 12.6 "Lighting Times" is GROUPED, with one member per
+#: condition ("Sunlight", "Penumbra", "Umbra", and Subpoint variants),
+#: each returning START/STOP intervals -- NOT a single provider with a
+#: "Condition" column. Determining the instantaneous condition therefore
+#: means querying the members and testing interval membership, which
+#: core/sensing.py does. The group_element is supplied explicitly by the
+#: caller rather than via "<frame>", since these members are conditions.
 LIGHTING = ProviderSpec(
     key="lighting",
     provider_name="Lighting Times",
-    provider_alternatives=("Eclipse Times", "Vehicle Lighting Times"),
+    provider_alternatives=("Eclipse Times",),
+    group_element=None,
     fields=(
-        TIME_FIELD,
-        FieldSpec("condition", ("Condition", "Lighting Condition", "Type"),
-                  scale=1.0),
+        FieldSpec("start", ("Start Time", "Start"), required=False),
+        FieldSpec("stop", ("Stop Time", "Stop"), required=False),
+        FieldSpec("duration", ("Duration",), required=False),
     ),
-    description="Umbra / Penumbra / Direct Sun.",
+    description="Lighting intervals. Grouped by condition on STK 12.6.",
 )
+
+#: The group members of "Lighting Times", in the order sensing should
+#: test them. Sunlight first because it is the common case.
+LIGHTING_CONDITIONS = ("Sunlight", "Penumbra", "Umbra")
 
 LINK_INFORMATION = ProviderSpec(
     key="link_information",
@@ -251,8 +291,8 @@ AER = ProviderSpec(
 ALL_SPECS: Dict[str, ProviderSpec] = {
     spec.key: spec for spec in (
         CARTESIAN_POSITION, CARTESIAN_VELOCITY, ATTITUDE_QUATERNION,
-        ATTITUDE_SEGMENT, ANGULAR_VELOCITY, LLA_STATE, LIGHTING,
-        LINK_INFORMATION, AER,
+        ECF_ATTITUDE_QUATERNION, ATTITUDE_SEGMENT, ANGULAR_VELOCITY,
+        LLA_STATE, LIGHTING, LINK_INFORMATION, AER,
     )
 }
 

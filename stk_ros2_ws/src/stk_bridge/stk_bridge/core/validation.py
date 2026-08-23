@@ -119,6 +119,14 @@ class ValidationReport:
     #: exception (STK 12.6 over COM does). False means the loss is
     #: silent and only core/actuation.py's guard makes it visible.
     monotonicity_is_observable: bool = False
+    #: Provider name that round-tripped attitude correctly, and the
+    #: command form it pairs with. core/sensing.py (Phase 4) reads these
+    #: rather than hardcoding a pairing, so the bridge uses whatever this
+    #: install actually supports.
+    attitude_provider: str = ""
+    attitude_command_inertial: bool = False
+    #: Provider that supplied a readable body angular rate, if any.
+    angular_rate_provider: str = ""
 
     @property
     def failures(self) -> List[CheckResult]:
@@ -366,97 +374,135 @@ class ConventionValidator:
                 "sample")
 
     def _check_quaternion_ordering(self) -> str:
-        """Inject a known rotation and confirm it reads back unchanged.
+        """Determine the correct command/read-back pairing empirically.
 
-        The injected quaternion has four distinct non-zero components, so
-        any permutation -- most importantly a scalar-first vs
-        scalar-last swap -- changes the represented rotation detectably.
-        Comparison uses the angle between orientations, which is immune
-        to the q/-q double cover that would otherwise produce spurious
-        failures.
+        STK 12.6 offers two real-time attitude command forms and two
+        matching read-back providers, and they must be paired correctly:
+
+        ==========================  ==============================
+        Command                     Read-back provider
+        ==========================  ==============================
+        ``AddAttitude CBFQuat``     ``ECF Attitude Quaternions``
+        ``AddAttitude Quat``        ``Attitude Quaternions``
+        ==========================  ==============================
+
+        Both read-back providers are **ungrouped** on 12.6 -- they take
+        no reference-frame argument -- so a mismatched pairing does not
+        error. It silently returns an attitude that differs by the
+        Earth-rotation angle at the sample epoch: tens of degrees, and
+        indistinguishable from a real attitude. That is exactly what a
+        naive version of this check produced (a 99 deg "ordering error"
+        that was actually a frame error), so rather than assume a
+        pairing, both are tried and the one that round-trips is recorded
+        on the report for ``core/sensing.py`` to use.
+
+        The test rotation has four distinct non-zero components, so a
+        genuine element-ordering fault still cannot hide behind a
+        correct pairing.
         """
         commanded = _test_quaternion()
         epoch = self._backend.get_scenario_epoch()
-        sample_time = self._next_stamp(epoch)
 
-        self._backend.enable_realtime_attitude(self._path)
-        self._backend.add_attitude_quaternion(
-            self._path, sample_time, commanded, inertial=False
+        pairings = (
+            (False, dp.ECF_ATTITUDE_QUATERNION,
+             "AddAttitude CBFQuat <-> ECF Attitude Quaternions"),
+            (True, dp.ATTITUDE_QUATERNION,
+             "AddAttitude Quat <-> Attitude Quaternions"),
         )
 
-        # Try the grouped provider first, then the ungrouped
-        # "Attitude Segment Quaternions", which needs no frame argument
-        # and therefore works on objects whose attitude is expressed
-        # relative to axes the grouped provider does not offer.
-        spec: Optional[dp.ProviderSpec] = None
-        data = None
-        mapping = None
-        errors: List[str] = []
-        for candidate in (dp.ATTITUDE_QUATERNION, dp.ATTITUDE_SEGMENT):
-            for frame in ("Fixed", "ICRF", "Body"):
-                try:
-                    data, mapping = dp.execute(
-                        self._backend, candidate, self._path,
-                        frame=frame, start=sample_time, stop=sample_time,
-                    )
-                    spec = candidate
-                    break
-                except QueryError as exc:
-                    errors.append(f"{candidate.provider_name}/{frame}: {exc}")
-            if spec is not None:
-                break
+        attempts: List[str] = []
+        best: Optional[tuple] = None
 
-        if spec is None:
+        for inertial, spec, label in pairings:
+            sample_time = self._next_stamp(epoch)
+            try:
+                self._backend.enable_realtime_attitude(self._path)
+                self._backend.add_attitude_quaternion(
+                    self._path, sample_time, commanded, inertial=inertial
+                )
+                data, mapping = dp.execute(
+                    self._backend, spec, self._path,
+                    start=sample_time, stop=sample_time,
+                )
+            except StkBridgeError as exc:
+                attempts.append(f"{label}: {exc}")
+                continue
+
+            read = conv.quaternion_from_stk_elements(
+                dp.first_value(data, spec, mapping, "q1"),
+                dp.first_value(data, spec, mapping, "q2"),
+                dp.first_value(data, spec, mapping, "q3"),
+                dp.first_value(data, spec, mapping, "q4"),
+            )
+
+            if not conv.is_unit_quaternion(read, tolerance=1e-3):
+                norm = math.sqrt(sum(c * c for c in read))
+                attempts.append(f"{label}: read-back |q| = {norm:.6f}, "
+                                f"not a unit quaternion")
+                continue
+
+            error_rad = conv.quaternion_angle_between(commanded, read)
+            attempts.append(f"{label}: {math.degrees(error_rad):.4f} deg")
+            if best is None or error_rad < best[0]:
+                best = (error_rad, spec, label, inertial, read, data)
+
+        if best is None:
             inventory = dp.format_available(self._backend, self._path)
             raise ConventionValidationError(
-                "could not read attitude back to verify quaternion "
-                "ordering. Attempts:\n  " + "\n  ".join(errors[:4]) +
-                "\nData providers actually available on this object:\n" +
-                inventory +
-                "\nWithout this check the bridge cannot confirm that STK's "
-                "Q1..Q4 maps to ROS (x,y,z,w). If no provider on this "
-                "install reports attitude quaternions, set "
-                "validation.fatal.quaternion_ordering: false in "
-                "bridge_params.yaml to proceed at your own risk."
+                "no attitude command/read-back pairing worked.\n  " +
+                "\n  ".join(attempts) +
+                "\nProviders available on this object:\n" + inventory
             )
 
-        read = conv.quaternion_from_stk_elements(
-            dp.first_value(data, spec, mapping, "q1"),
-            dp.first_value(data, spec, mapping, "q2"),
-            dp.first_value(data, spec, mapping, "q3"),
-            dp.first_value(data, spec, mapping, "q4"),
-        )
+        error_rad, spec, label, inertial, read, data = best
 
-        if not conv.is_unit_quaternion(read, tolerance=1e-3):
-            norm = math.sqrt(sum(c * c for c in read))
-            raise ConventionValidationError(
-                f"attitude read back is not unit-norm (|q| = {norm:.6f}); "
-                f"the elements resolved to "
-                f"{mapping['q1']}/{mapping['q2']}/{mapping['q3']}/"
-                f"{mapping['q4']} are probably not a quaternion"
-            )
-
-        error_rad = conv.quaternion_angle_between(commanded, read)
         if error_rad > math.radians(1.0):
-            swapped = (read[3], read[0], read[1], read[2])
-            swap_error = conv.quaternion_angle_between(commanded, swapped)
-            hint = ""
-            if swap_error < math.radians(1.0):
-                hint = ("\nA scalar-first interpretation (w,x,y,z) DOES "
-                        "match. This install reports the scalar part in "
-                        "Q1, not Q4. Fix "
-                        "conversions.quaternion_from_stk_elements.")
+            # Every pairing failed. Distinguish an ordering fault from a
+            # frame fault: a permutation preserves the multiset of
+            # component magnitudes, a frame rotation does not.
+            commanded_mags = sorted(abs(c) for c in commanded)
+            read_mags = sorted(abs(c) for c in read)
+            same_mags = all(abs(a - b) < 1e-3
+                            for a, b in zip(commanded_mags, read_mags))
+
+            if same_mags:
+                swapped = (read[3], read[0], read[1], read[2])
+                hint = ""
+                if conv.quaternion_angle_between(commanded,
+                                                 swapped) < math.radians(1.0):
+                    hint = ("\n  A scalar-FIRST interpretation (w,x,y,z) "
+                            "matches. This install puts the scalar part in "
+                            "Q1, not Q4. Fix "
+                            "conversions.quaternion_from_stk_elements.")
+                diagnosis = ("component magnitudes MATCH, so this is an "
+                             "element-ORDERING fault." + hint)
+            else:
+                diagnosis = (
+                    "component magnitudes DIFFER, so this is a FRAME "
+                    "fault, not an ordering fault -- the read-back is a "
+                    "different rotation, not a reshuffle of the same one. "
+                    "Check that the command form and read-back provider "
+                    "are paired as documented above."
+                )
+
             raise ConventionValidationError(
-                f"quaternion round-trip error is "
-                f"{math.degrees(error_rad):.3f} deg.\n"
+                f"best attitude round-trip error is "
+                f"{math.degrees(error_rad):.3f} deg ({label}).\n"
                 f"  commanded (x,y,z,w): "
                 f"{tuple(round(c, 6) for c in commanded)}\n"
                 f"  read back  (x,y,z,w): "
-                f"{tuple(round(c, 6) for c in read)}{hint}"
+                f"{tuple(round(c, 6) for c in read)}\n"
+                f"  {diagnosis}\n"
+                f"  all attempts:\n    " + "\n    ".join(attempts)
             )
 
-        return (f"round-trip error {math.degrees(error_rad):.4f} deg -- "
-                f"STK Q1..Q4 maps to ROS (x,y,z,w) as assumed")
+        self._report.attitude_provider = data.provider_name
+        self._report.attitude_command_inertial = inertial
+        return (f"round-trip error {math.degrees(error_rad):.4f} deg via "
+                f"{label}.\nSTK Q1..Q4 maps to ROS (x,y,z,w) as assumed. "
+                f"core/sensing.py will read attitude from "
+                f"{data.provider_name!r}.\nall attempts: " +
+                "; ".join(attempts))
 
     def _check_angle_rate_scale(self) -> str:
         """Measure whether STK reports body rates in rad/s or deg/s.
@@ -521,6 +567,11 @@ class ConventionValidator:
                 "\n  providers available on this object:\n" + inventory
             )
 
+        # data.provider_name is the name that actually resolved, which
+        # may be one of the spec's alternatives -- reporting the spec's
+        # primary name here would tell the operator to look for a
+        # provider this install does not have.
+        self._report.angular_rate_provider = data.provider_name
         read = dp.first_value(data, spec, mapping, "wz",
                               angle_rate_scale=conv.AngleRateScale(factor=1.0))
         if abs(read) < 1e-9:
@@ -531,12 +582,13 @@ class ConventionValidator:
         ratio = read / commanded_radps
         if abs(ratio - 1.0) < 0.05:
             self._report.angle_rate_scale = conv.AngleRateScale.radians_per_second()
-            return f"STK reports rad/s (ratio {ratio:.4f})"
+            return (f"STK reports rad/s (ratio {ratio:.4f}) via "
+                    f"{data.provider_name!r}")
         if abs(ratio - conv.RAD_TO_DEG) < 0.05 * conv.RAD_TO_DEG:
             self._report.angle_rate_scale = conv.AngleRateScale.degrees_per_second()
-            return (f"STK reports deg/s (ratio {ratio:.4f}); a "
-                    f"{conv.DEG_TO_RAD:.8f} scale will be applied to every "
-                    f"angular-rate field")
+            return (f"STK reports deg/s (ratio {ratio:.4f}) via "
+                    f"{data.provider_name!r}; a {conv.DEG_TO_RAD:.8f} scale "
+                    f"will be applied to every angular-rate field")
 
         self._report.angle_rate_scale = conv.AngleRateScale()
         raise ConventionValidationError(
