@@ -290,6 +290,38 @@ def run_live_checks(backend_type: str, host: str, port: int) -> None:
         except Exception as exc:
             record("Data provider: Cartesian Position/ICRF", FAIL, str(exc))
 
+        # Enumerate what this install actually offers. Printed before any
+        # propagator change, because switching to RealTime alters what is
+        # queryable. This inventory is the authoritative reference for
+        # fixing a FieldSpec that stops matching after an STK upgrade.
+        try:
+            providers = backend.list_data_providers(satellite)
+            if providers:
+                interesting = {
+                    name: members for name, members in providers.items()
+                    if any(token in name.lower() for token in
+                           ("position", "velocity", "quaternion", "attitude",
+                            "angular", "lla", "lighting", "eclipse"))
+                }
+                lines = [f"{len(providers)} providers total; "
+                         f"{len(interesting)} relevant to the ADCS twin:"]
+                for name in sorted(interesting):
+                    members = interesting[name]
+                    lines.append(f"  {name}" +
+                                 (f"  [{', '.join(members[:6])}]"
+                                  if members else ""))
+                record("Data provider inventory", PASS, "\n".join(lines))
+            else:
+                record("Data provider inventory", WARN,
+                       "backend could not enumerate data providers")
+        except Exception as exc:
+            record("Data provider inventory", WARN, str(exc))
+
+        # NOTE: everything below MUTATES the satellite -- switching to the
+        # RealTime propagator DISCARDS its analytic ephemeris, and the
+        # attitude samples consume timestamps. Convention validation
+        # therefore runs on its own dedicated object (see
+        # ConventionValidator), not on this one.
         try:
             from stk_bridge.backends.base import PropagatorType, StkTime
 
@@ -329,7 +361,10 @@ def run_live_checks(backend_type: str, host: str, port: int) -> None:
         try:
             from stk_bridge.core.validation import ConventionValidator
 
-            report = ConventionValidator(backend, satellite).validate()
+            # No object path passed: the validator creates, propagates,
+            # and disposes of its own satellite, so it is unaffected by
+            # the mutations performed above.
+            report = ConventionValidator(backend).validate()
             for result in report.results:
                 if result.skipped:
                     status = WARN

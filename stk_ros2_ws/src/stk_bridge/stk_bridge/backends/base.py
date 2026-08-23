@@ -460,6 +460,25 @@ class StkBackend(abc.ABC):
         Phase 6 conformance tests rely on.
         """
 
+    def list_data_providers(self, object_path: str) -> Dict[str, List[str]]:
+        """Enumerate the data providers available on an object.
+
+        Returns ``{provider_name: [group_member, ...]}`` with an empty
+        list for ungrouped providers.
+
+        Guessing provider and element names across STK versions does not
+        scale -- every wrong guess costs a round trip to a live install
+        to discover. Enumeration turns that into a single query whose
+        answer is authoritative for *this* install, which is what
+        ``core/validation.py`` uses to report real options when a spec
+        fails to match, and what ``data_providers.discover()`` uses to
+        resolve a provider by keyword rather than exact spelling.
+
+        Default implementation returns ``{}`` (unsupported); backends
+        that can enumerate override it.
+        """
+        return {}
+
     @abc.abstractmethod
     def compute_access(self, from_path: str, to_path: str,
                        start: StkTime, stop: StkTime

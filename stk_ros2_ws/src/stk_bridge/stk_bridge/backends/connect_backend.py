@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import socket
 import threading
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from stk_bridge.backends.base import (
     AccessIntervalData,
@@ -425,6 +425,27 @@ class ConnectBackend(StkBackend):
             columns=columns,
             row_count=len(rows),
         )
+
+    def list_data_providers(self, object_path: str) -> Dict[str, List[str]]:
+        """Enumerate providers via the ``AvailableData`` Connect command.
+
+        Connect exposes far less structure than the Object Model here --
+        the reply is a flat text list with no reliable group/member
+        distinction -- so every provider is reported as ungrouped. That
+        is honest rather than convenient: inventing group membership the
+        protocol did not report would send callers down the wrong path.
+        """
+        try:
+            response = self._command(f"AvailableData {object_path}",
+                                     expect_data=True, tolerate_nack=True)
+        except (ConnectProtocolError, ConnectNackError):
+            return {}
+        providers: Dict[str, List[str]] = {}
+        for message in response.messages:
+            name = message.strip().strip('"')
+            if name and not name.upper().startswith(("ACK", "NACK")):
+                providers[name] = []
+        return providers
 
     def compute_access(self, from_path: str, to_path: str,
                        start: StkTime, stop: StkTime

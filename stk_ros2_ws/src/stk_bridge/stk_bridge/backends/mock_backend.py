@@ -87,6 +87,8 @@ class _MockObject:
     elements: Dict[str, float] = field(default_factory=dict)
 
     realtime_attitude_enabled: bool = False
+    look_ahead_s: float = 3600.0
+    look_behind_s: float = 3600.0
     position_samples: List[Tuple[float, Tuple[float, float, float]]] = \
         field(default_factory=list)
     attitude_samples: List[Tuple[float, Tuple[float, float, float, float]]] = \
@@ -196,6 +198,29 @@ class MockBackend(StkBackend):
         self._now = when.epoch_seconds
 
     # -- propagation -------------------------------------------------------
+
+    def _has_ephemeris_at(self, obj: _MockObject, when: float) -> bool:
+        """Does this object have ephemeris covering ``when``?
+
+        Reproduces the behaviour that broke Phase 3 bring-up on a real
+        STK 12.6 install: switching a satellite to the **RealTime orbit
+        propagator discards its analytic ephemeris**. The object then has
+        data only within Look-Behind..Look-Ahead of the samples actually
+        injected, so a query at scenario epoch -- before any sample --
+        returns zero rows rather than an extrapolated state.
+
+        Without this, the mock silently propagates a Kepler orbit for a
+        real-time object and every test passes while the real system
+        fails. A mock that is kinder than production is worse than no
+        mock at all.
+        """
+        if obj.propagator != PropagatorType.REALTIME.value:
+            return True
+        if not obj.position_samples:
+            return False
+        earliest = obj.position_samples[0][0] - obj.look_behind_s
+        latest = obj.position_samples[-1][0] + obj.look_ahead_s
+        return earliest <= when <= latest
 
     def _propagate(self, obj: _MockObject, when: float
                    ) -> Tuple[Tuple[float, float, float],
@@ -338,7 +363,17 @@ class MockBackend(StkBackend):
 
     def _columns(self, query: DataProviderQuery, times: List[float],
                  builder) -> DataProviderData:
+        obj = self._obj(query.object_path)
+        # Epochs outside the object's ephemeris coverage produce no rows,
+        # exactly as STK does -- not an exception, just nothing.
+        times = [t for t in times if self._has_ephemeris_at(obj, t)]
         columns: Dict[str, List] = {"Time": []}
+        if not times:
+            return DataProviderData(
+                object_path=query.object_path,
+                provider_name=query.provider_name,
+                columns={}, row_count=0,
+            )
         for when in times:
             columns["Time"].append(when - self._epoch)
             for key, value in builder(when).items():
@@ -399,6 +434,25 @@ class MockBackend(StkBackend):
             }
         return build
 
+    def list_data_providers(self, object_path: str) -> Dict[str, List[str]]:
+        """Advertise exactly the providers query_data_provider implements.
+
+        Kept deliberately in sync with the dispatch table in
+        :meth:`query_data_provider`: a mock that claims providers it
+        cannot serve would let a discovery bug pass tests and fail only
+        against real STK.
+        """
+        self._obj(object_path)
+        frames = ["ICRF", "J2000", "Fixed"]
+        return {
+            "Cartesian Position": list(frames),
+            "Cartesian Velocity": list(frames),
+            "Attitude Quaternions": ["Fixed", "ICRF", "Body"],
+            "Body Axes Angular Velocity": ["Body", "ICRF"],
+            "LLA State": ["Fixed", "Detic"],
+            "Lighting Times": [],
+        }
+
     def compute_access(self, from_path: str, to_path: str,
                        start: StkTime, stop: StkTime
                        ) -> List[AccessIntervalData]:
@@ -443,6 +497,12 @@ class MockBackend(StkBackend):
             raise CommandError("SetPropagator", object_path,
                                "EXTERNAL propagator requires external_file")
         obj.propagator = propagator.value
+        obj.look_ahead_s = look_ahead_s
+        obj.look_behind_s = look_behind_s
+        if propagator is PropagatorType.REALTIME:
+            # Real STK discards analytic ephemeris on this switch. Mirror
+            # it, so tests see the same empty-data cliff.
+            obj.position_samples.clear()
 
     def set_position(self, object_path: str, when: StkTime, frame: str,
                      position_m: Tuple[float, float, float],

@@ -145,10 +145,43 @@ ATTITUDE_QUATERNION = ProviderSpec(
     ),
 )
 
+#: STK's "Attitude Segment Quaternions" provider carries the quaternion
+#: AND the body angular velocity in a single result, documented as "the
+#: attitude quaternion and angular velocity of the vehicle's body axes
+#: computed with respect to the vehicle's central body inertial
+#: coordinate system", with q1..q3 the vector part and q4 the scalar.
+#: One query for both quantities is also one round trip instead of two,
+#: which matters on the fast rate group.
+ATTITUDE_SEGMENT = ProviderSpec(
+    key="attitude_segment",
+    provider_name="Attitude Segment Quaternions",
+    fields=(
+        TIME_FIELD,
+        FieldSpec("q1", ("q1", "Q1")),
+        FieldSpec("q2", ("q2", "Q2")),
+        FieldSpec("q3", ("q3", "Q3")),
+        FieldSpec("q4", ("q4", "Q4")),
+        FieldSpec("wx", ("wx", "x", "Angular Velocity x"),
+                  required=False, scale=None),
+        FieldSpec("wy", ("wy", "y", "Angular Velocity y"),
+                  required=False, scale=None),
+        FieldSpec("wz", ("wz", "z", "Angular Velocity z"),
+                  required=False, scale=None),
+    ),
+    description=(
+        "Quaternion + body angular velocity w.r.t. central body inertial. "
+        "Ungrouped, so it works where the grouped attitude providers "
+        "require a frame the object does not define."
+    ),
+)
+
 ANGULAR_VELOCITY = ProviderSpec(
     key="angular_velocity",
     provider_name="Body Axes Angular Velocity",
-    provider_alternatives=("Angular Velocity", "Body Axes Angular Rate"),
+    provider_alternatives=(
+        "Angular Velocity", "Body Axes Angular Rate",
+        "Attitude Segment Quaternions",
+    ),
     group_element="<frame>",
     fields=(
         TIME_FIELD,
@@ -218,7 +251,8 @@ AER = ProviderSpec(
 ALL_SPECS: Dict[str, ProviderSpec] = {
     spec.key: spec for spec in (
         CARTESIAN_POSITION, CARTESIAN_VELOCITY, ATTITUDE_QUATERNION,
-        ANGULAR_VELOCITY, LLA_STATE, LIGHTING, LINK_INFORMATION, AER,
+        ATTITUDE_SEGMENT, ANGULAR_VELOCITY, LLA_STATE, LIGHTING,
+        LINK_INFORMATION, AER,
     )
 }
 
@@ -400,3 +434,72 @@ def describe_available(backend: StkBackend, object_path: str,
         return f"{provider_name}: query failed -- {exc}"
     return (f"{provider_name}: {data.row_count} rows, columns = "
             f"{list(data.columns) or '(none)'}")
+
+
+# ---------------------------------------------------------------------------
+# Discovery
+# ---------------------------------------------------------------------------
+
+def discover(backend: StkBackend, object_path: str, *keywords: str
+             ) -> List[Tuple[str, List[str]]]:
+    """Find providers on an object whose name contains all ``keywords``.
+
+    Case-insensitive substring matching against
+    ``backend.list_data_providers``. This is the escape from
+    guess-and-check: rather than hardcoding one more spelling each time
+    an STK version renames something, ask the install what it has.
+
+    Returns ``[(provider_name, [group_members...]), ...]``, best match
+    (shortest name) first, on the reasoning that ``"Angular Velocity"``
+    is more likely the general-purpose provider than
+    ``"Sensor Body Angular Velocity Delta"``.
+    """
+    providers = backend.list_data_providers(object_path)
+    wanted = [k.strip().lower() for k in keywords if k.strip()]
+    matches = [
+        (name, members) for name, members in providers.items()
+        if all(k in name.lower() for k in wanted)
+    ]
+    return sorted(matches, key=lambda item: (len(item[0]), item[0]))
+
+
+def resolve_spec_provider(backend: StkBackend, spec: ProviderSpec,
+                          object_path: str, *keywords: str
+                          ) -> Optional[str]:
+    """Pick a working provider name for ``spec`` on this object.
+
+    Tries the spec's declared names first (cheap, no enumeration), then
+    falls back to keyword discovery. Returns None if nothing matches, so
+    callers can produce an error that lists what *is* available rather
+    than repeating the names that failed.
+    """
+    available = backend.list_data_providers(object_path)
+    if not available:
+        return None
+
+    lowered = {name.lower(): name for name in available}
+    for candidate in (spec.provider_name,) + spec.provider_alternatives:
+        if candidate.lower() in lowered:
+            return lowered[candidate.lower()]
+
+    if keywords:
+        found = discover(backend, object_path, *keywords)
+        if found:
+            return found[0][0]
+    return None
+
+
+def format_available(backend: StkBackend, object_path: str,
+                     limit: int = 40) -> str:
+    """Human-readable provider inventory, for error messages."""
+    providers = backend.list_data_providers(object_path)
+    if not providers:
+        return "(this backend cannot enumerate data providers)"
+    lines = []
+    for name in sorted(providers)[:limit]:
+        members = providers[name]
+        lines.append(f"  {name}" + (f"  [{', '.join(members)}]"
+                                    if members else ""))
+    if len(providers) > limit:
+        lines.append(f"  ... and {len(providers) - limit} more")
+    return "\n".join(lines)

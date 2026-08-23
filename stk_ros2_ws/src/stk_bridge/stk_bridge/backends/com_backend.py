@@ -566,6 +566,43 @@ class ComBackend(StkBackend):
             columns=columns, row_count=row_count,
         )
 
+    def list_data_providers(self, object_path: str) -> Dict[str, List[str]]:
+        """Enumerate this object's data providers and their group members.
+
+        Walks ``obj.DataProviders`` by index. Individual providers that
+        raise while being inspected are skipped rather than aborting the
+        walk, because a single unavailable provider (unlicensed module,
+        wrong object type) must not hide the other eighty.
+        """
+        obj = self._get_object(object_path)
+        providers: Dict[str, List[str]] = {}
+        try:
+            collection = obj.DataProviders
+            count = collection.Count
+        except Exception as exc:
+            LOGGER.debug("cannot enumerate data providers on %s: %s",
+                         object_path, exc)
+            return {}
+
+        for index in range(count):
+            try:
+                item = collection.Item(index)
+                name = str(item.Name)
+            except Exception:
+                continue
+            members: List[str] = []
+            try:
+                group = item.Group
+                for group_index in range(group.Count):
+                    try:
+                        members.append(str(group.Item(group_index).Name))
+                    except Exception:
+                        continue
+            except Exception:
+                members = []
+            providers[name] = members
+        return providers
+
     def compute_access(self, from_path: str, to_path: str,
                        start: StkTime, stop: StkTime
                        ) -> List[AccessIntervalData]:
@@ -675,27 +712,49 @@ class ComBackend(StkBackend):
             return
 
         applied = []
-        for attribute, value in (
-            (("LookAheadDuration", "LookAheadTime"), look_ahead_s),
-            (("LookBehindDuration", "LookBehindTime"), look_behind_s),
+        for candidates, value in (
+            (("LookAheadDuration", "LookAheadTime", "LookAhead"),
+             look_ahead_s),
+            (("LookBehindDuration", "LookBehindTime", "LookBehind"),
+             look_behind_s),
         ):
-            for name in attribute:
+            for name in candidates:
                 try:
                     setattr(propagator, name, value)
                     applied.append(f"{name}={value}")
                     break
                 except Exception:
                     continue
+
         if applied:
             LOGGER.info("real-time durations on %s: %s", object_path,
                         ", ".join(applied))
-        else:
-            LOGGER.warning(
-                "could not set Look-Ahead/Look-Behind on %s; STK defaults "
-                "apply. If data providers return no rows near the newest "
-                "injected sample, this is the first thing to check.",
-                object_path,
-            )
+            return
+
+        # None of the candidate spellings worked. Rather than leave the
+        # operator to guess, enumerate what the propagator object
+        # actually exposes -- that turns a dead-end warning into the
+        # exact list of names to add above.
+        discovered = []
+        try:
+            discovered = [
+                name for name in dir(propagator)
+                if not name.startswith("_")
+                and any(token in name.lower()
+                        for token in ("look", "ahead", "behind", "duration"))
+            ]
+        except Exception:
+            pass
+
+        LOGGER.warning(
+            "could not set Look-Ahead/Look-Behind on %s; STK defaults "
+            "apply. Candidate properties on this propagator that look "
+            "relevant: %s. Note that Look-Ahead/Look-Behind bound the "
+            "interval over which a real-time object has ANY ephemeris, so "
+            "a too-small default is a likely cause of empty data provider "
+            "results near the newest injected sample.",
+            object_path, discovered or "(none found)",
+        )
 
     def propagate(self, object_path: str) -> bool:
         """Force ephemeris generation for an object.

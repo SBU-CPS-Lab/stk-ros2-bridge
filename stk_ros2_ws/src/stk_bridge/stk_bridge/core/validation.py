@@ -29,6 +29,30 @@ Checks performed
    out-of-order samples, so that ``core/actuation.py``'s guard is doing
    necessary work rather than defending against a phantom.
 
+Isolation
+---------
+The validator creates and owns a **dedicated, disposable satellite**
+rather than testing whatever object the caller names. This is not
+fastidiousness -- it was a real bug. An earlier version validated a
+caller-supplied object that had already been switched to the RealTime
+orbit propagator and already had attitude samples injected at the exact
+timestamps the checks wanted to use. Both produced failures that looked
+like STK defects and were actually test contamination:
+
+* Switching a satellite to the **RealTime orbit propagator discards its
+  analytic ephemeris**. The object then has data only inside
+  Look-Ahead/Look-Behind of whatever samples have been injected, so a
+  query at scenario epoch returns zero rows. Orbit-state checks must run
+  on a normally-propagated object.
+* Real-time attitude is **append-only with strictly increasing
+  timestamps**, and STK 12.6 returns a NACK (not a silent drop) for an
+  out-of-order sample. Re-using a timestamp another test already
+  consumed therefore fails hard.
+
+So: the validator makes its own satellite, propagates it, leaves the
+orbit propagator alone, allocates every attitude timestamp from a
+monotonic counter, and deletes the object afterwards.
+
 Policy
 ------
 Failures raise :class:`ConventionValidationError` and are fatal at
@@ -91,6 +115,10 @@ class ValidationReport:
     results: List[CheckResult] = field(default_factory=list)
     angle_rate_scale: conv.AngleRateScale = field(
         default_factory=conv.AngleRateScale)
+    #: True if the backend surfaces out-of-order sample rejection as an
+    #: exception (STK 12.6 over COM does). False means the loss is
+    #: silent and only core/actuation.py's guard makes it visible.
+    monotonicity_is_observable: bool = False
 
     @property
     def failures(self) -> List[CheckResult]:
@@ -135,15 +163,73 @@ class ValidationReport:
 class ConventionValidator:
     """Runs the startup self-tests against a live backend."""
 
+    #: Name of the disposable satellite the validator creates.
+    TEST_OBJECT_NAME = "StkBridgeValidation"
+
     def __init__(self, backend: StkBackend,
-                 test_object_path: str,
+                 test_object_path: Optional[str] = None,
                  fatal_checks: Optional[Dict[str, bool]] = None,
-                 cleanup: bool = True):
+                 cleanup: bool = True,
+                 use_dedicated_object: bool = True):
         self._backend = backend
-        self._path = conv.canonical_object_path(test_object_path)
+        self._requested_path = (conv.canonical_object_path(test_object_path)
+                                if test_object_path else None)
+        self._path = self._requested_path or ""
         self._fatal = fatal_checks or {}
         self._cleanup = cleanup
+        self._use_dedicated = use_dedicated_object
+        self._owns_object = False
         self._report = ValidationReport()
+
+        # Every attitude timestamp comes from here, so no two checks can
+        # collide on a stamp and trip STK's monotonicity NACK.
+        self._stamp_offset_s = 100.0
+
+    def _next_stamp(self, epoch: StkTime) -> StkTime:
+        """Allocate a fresh, strictly-increasing attitude timestamp."""
+        self._stamp_offset_s += 5.0
+        return epoch + self._stamp_offset_s
+
+    def _setup_object(self) -> str:
+        """Create and propagate the validator's own satellite.
+
+        Falls back to the caller-supplied path if creation fails or if
+        dedicated objects are disabled, warning clearly that results may
+        be affected by that object's existing state.
+        """
+        if not self._use_dedicated:
+            return self._path
+
+        try:
+            path = self._backend.create_object(
+                "Satellite", self.TEST_OBJECT_NAME
+            )
+            path = conv.canonical_object_path(path)
+            propagate = getattr(self._backend, "propagate", None)
+            if propagate is not None:
+                propagate(path)
+            self._owns_object = True
+            LOGGER.info("validation using dedicated object %s", path)
+            return path
+        except Exception as exc:
+            if not self._requested_path:
+                raise
+            LOGGER.warning(
+                "could not create a dedicated validation object (%s); "
+                "falling back to %s. Results may be affected by that "
+                "object's existing propagator and attitude data.",
+                exc, self._requested_path,
+            )
+            return self._requested_path
+
+    def _teardown_object(self) -> None:
+        if not (self._owns_object and self._cleanup):
+            return
+        try:
+            self._backend.delete_object(self._path)
+            LOGGER.debug("removed validation object %s", self._path)
+        except Exception:
+            LOGGER.debug("could not remove %s", self._path, exc_info=True)
 
     def _is_fatal(self, name: str, default: bool = True) -> bool:
         return bool(self._fatal.get(name, default))
@@ -169,18 +255,27 @@ class ConventionValidator:
     # -- entry point -------------------------------------------------------
 
     def validate(self) -> ValidationReport:
-        LOGGER.info("running startup convention validation on %s", self._path)
+        try:
+            self._path = self._setup_object()
+        except Exception as exc:
+            self._record("setup", False,
+                         f"could not create a validation object: {exc}")
+            return self._report
 
-        self._run("ephemeris_present", self._check_ephemeris)
-        self._run("data_provider_returns_data", self._check_data_present)
-        self._run("distance_is_metres", self._check_distance_units)
-        self._run("realtime_attitude_available",
-                  self._check_realtime_attitude)
-        self._run("quaternion_ordering", self._check_quaternion_ordering)
-        self._run("angular_rate_scale", self._check_angle_rate_scale,
-                  default_fatal=False)
-        self._run("monotonicity_enforced", self._check_monotonicity,
-                  default_fatal=False)
+        LOGGER.info("running startup convention validation on %s", self._path)
+        try:
+            self._run("ephemeris_present", self._check_ephemeris)
+            self._run("data_provider_returns_data", self._check_data_present)
+            self._run("distance_is_metres", self._check_distance_units)
+            self._run("realtime_attitude_available",
+                      self._check_realtime_attitude)
+            self._run("quaternion_ordering", self._check_quaternion_ordering)
+            self._run("angular_rate_scale", self._check_angle_rate_scale,
+                      default_fatal=False)
+            self._run("monotonicity_enforced", self._check_monotonicity,
+                      default_fatal=False)
+        finally:
+            self._teardown_object()
 
         LOGGER.info("validation complete:\n%s", self._report.summary())
         return self._report
@@ -264,7 +359,8 @@ class ConventionValidator:
         self._backend.enable_realtime_attitude(self._path)
         epoch = self._backend.get_scenario_epoch()
         self._backend.add_attitude_quaternion(
-            self._path, epoch + 1.0, _test_quaternion(), inertial=False
+            self._path, self._next_stamp(epoch), _test_quaternion(),
+            inertial=False,
         )
         return ("SetAttitude Standard + AddAttitude CBFQuat accepted a "
                 "sample")
@@ -281,33 +377,54 @@ class ConventionValidator:
         """
         commanded = _test_quaternion()
         epoch = self._backend.get_scenario_epoch()
-        sample_time = epoch + 2.0
+        sample_time = self._next_stamp(epoch)
 
         self._backend.enable_realtime_attitude(self._path)
         self._backend.add_attitude_quaternion(
             self._path, sample_time, commanded, inertial=False
         )
 
-        try:
-            data, mapping = dp.execute(
-                self._backend, dp.ATTITUDE_QUATERNION, self._path,
-                frame="Fixed", start=sample_time, stop=sample_time,
-            )
-        except QueryError as exc:
+        # Try the grouped provider first, then the ungrouped
+        # "Attitude Segment Quaternions", which needs no frame argument
+        # and therefore works on objects whose attitude is expressed
+        # relative to axes the grouped provider does not offer.
+        spec: Optional[dp.ProviderSpec] = None
+        data = None
+        mapping = None
+        errors: List[str] = []
+        for candidate in (dp.ATTITUDE_QUATERNION, dp.ATTITUDE_SEGMENT):
+            for frame in ("Fixed", "ICRF", "Body"):
+                try:
+                    data, mapping = dp.execute(
+                        self._backend, candidate, self._path,
+                        frame=frame, start=sample_time, stop=sample_time,
+                    )
+                    spec = candidate
+                    break
+                except QueryError as exc:
+                    errors.append(f"{candidate.provider_name}/{frame}: {exc}")
+            if spec is not None:
+                break
+
+        if spec is None:
+            inventory = dp.format_available(self._backend, self._path)
             raise ConventionValidationError(
                 "could not read attitude back to verify quaternion "
-                f"ordering: {exc}\nWithout this check the bridge cannot "
-                "confirm that STK's Q1..Q4 maps to ROS (x,y,z,w). If this "
-                "install cannot report attitude quaternions, set "
+                "ordering. Attempts:\n  " + "\n  ".join(errors[:4]) +
+                "\nData providers actually available on this object:\n" +
+                inventory +
+                "\nWithout this check the bridge cannot confirm that STK's "
+                "Q1..Q4 maps to ROS (x,y,z,w). If no provider on this "
+                "install reports attitude quaternions, set "
                 "validation.fatal.quaternion_ordering: false in "
                 "bridge_params.yaml to proceed at your own risk."
-            ) from exc
+            )
 
         read = conv.quaternion_from_stk_elements(
-            dp.first_value(data, dp.ATTITUDE_QUATERNION, mapping, "q1"),
-            dp.first_value(data, dp.ATTITUDE_QUATERNION, mapping, "q2"),
-            dp.first_value(data, dp.ATTITUDE_QUATERNION, mapping, "q3"),
-            dp.first_value(data, dp.ATTITUDE_QUATERNION, mapping, "q4"),
+            dp.first_value(data, spec, mapping, "q1"),
+            dp.first_value(data, spec, mapping, "q2"),
+            dp.first_value(data, spec, mapping, "q3"),
+            dp.first_value(data, spec, mapping, "q4"),
         )
 
         if not conv.is_unit_quaternion(read, tolerance=1e-3):
@@ -353,32 +470,58 @@ class ConventionValidator:
         """
         commanded_radps = 0.05     # ~2.86 deg/s: distinct in either unit
         epoch = self._backend.get_scenario_epoch()
-        sample_time = epoch + 3.0
+        sample_time = self._next_stamp(epoch)
 
         self._backend.enable_realtime_attitude(self._path)
         self._backend.add_attitude_quaternion(
-            self._path, sample_time - 0.5, _test_quaternion(), inertial=False
+            self._path, sample_time - 1.0, _test_quaternion(), inertial=False
         )
         self._backend.add_attitude_angular_velocity(
             self._path, sample_time, (0.0, 0.0, commanded_radps)
         )
 
-        data, mapping = dp.execute(
+        # The angular-velocity provider is the least consistently named
+        # across STK versions, so resolve it by enumeration rather than
+        # exhausting a hardcoded alternatives list.
+        spec, data, mapping = dp.ANGULAR_VELOCITY, None, None
+        resolved = dp.resolve_spec_provider(
             self._backend, dp.ANGULAR_VELOCITY, self._path,
-            frame="Body", start=sample_time, stop=sample_time,
-            allow_empty=True,
+            "angular", "velocity",
         )
-        if data.row_count == 0:
+        attempts = []
+        for candidate, frame in (
+            (dp.ANGULAR_VELOCITY, "Body"),
+            (dp.ANGULAR_VELOCITY, "ICRF"),
+            (dp.ATTITUDE_SEGMENT, "Body"),
+        ):
+            try:
+                data, mapping = dp.execute(
+                    self._backend, candidate, self._path, frame=frame,
+                    start=sample_time, stop=sample_time, allow_empty=True,
+                )
+                spec = candidate
+                break
+            except QueryError as exc:
+                attempts.append(f"{candidate.provider_name}/{frame}: {exc}")
+                data = None
+
+        if data is None or data.row_count == 0:
             self._report.angle_rate_scale = conv.AngleRateScale()
+            hint = (f"enumeration suggests {resolved!r}" if resolved
+                    else "enumeration found no angular-velocity provider")
+            inventory = dp.format_available(self._backend, self._path)
             raise ConventionValidationError(
                 "angular velocity could not be read back, so its unit "
                 "could not be measured. Angular-rate output will be "
                 "published with an UNVERIFIED scale (assumed rad/s). If "
                 "the twin's rate signals look wrong by a factor of ~57, "
-                "this is why."
+                "this is why.\n"
+                f"  {hint}\n  attempts:\n    " +
+                "\n    ".join(attempts[:3]) +
+                "\n  providers available on this object:\n" + inventory
             )
 
-        read = dp.first_value(data, dp.ANGULAR_VELOCITY, mapping, "wz",
+        read = dp.first_value(data, spec, mapping, "wz",
                               angle_rate_scale=conv.AngleRateScale(factor=1.0))
         if abs(read) < 1e-9:
             raise ConventionValidationError(
@@ -412,22 +555,28 @@ class ConventionValidator:
         something subtler than assumed, which is worth knowing.
         """
         epoch = self._backend.get_scenario_epoch()
-        base = epoch + 10.0
+        newer = self._next_stamp(epoch)
+        older = newer - 2.0
         quaternion = _test_quaternion()
 
         self._backend.enable_realtime_attitude(self._path)
-        self._backend.add_attitude_quaternion(self._path, base + 1.0,
+        self._backend.add_attitude_quaternion(self._path, newer,
                                               quaternion, inertial=False)
         try:
-            self._backend.add_attitude_quaternion(self._path, base,
+            self._backend.add_attitude_quaternion(self._path, older,
                                                   quaternion, inertial=False)
         except StkBridgeError as exc:
-            return (f"backend rejected an out-of-order sample explicitly "
-                    f"({type(exc).__name__}) rather than silently -- the "
-                    f"actuation guard remains correct either way")
-        return ("out-of-order sample accepted without error, as expected: "
-                "STK drops it silently. core/actuation.py's guard is what "
-                "makes this observable.")
+            self._report.monotonicity_is_observable = True
+            return (f"STK rejected the out-of-order sample explicitly "
+                    f"({type(exc).__name__}). Confirmed on STK 12.6: the "
+                    f"rejection is a NACK, not a silent drop, so failures "
+                    f"are observable. core/actuation.py's guard still runs "
+                    f"first so the drop is counted rather than merely "
+                    f"logged.")
+        self._report.monotonicity_is_observable = False
+        return ("out-of-order sample accepted without error -- this backend "
+                "drops it silently, so core/actuation.py's guard is the "
+                "only thing that makes the loss observable.")
 
 
 # ---------------------------------------------------------------------------
