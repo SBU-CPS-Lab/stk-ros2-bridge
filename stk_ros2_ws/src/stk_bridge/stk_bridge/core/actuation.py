@@ -106,12 +106,21 @@ class ActuationDispatcher:
         return self._objects[key]
 
     def reset(self, object_path: Optional[str] = None) -> None:
-        """Forget accumulated state.
+        """Forget this dispatcher's own last-stamp bookkeeping.
 
-        Called by ``ResetScenario``. Clearing the last-stamp bookkeeping
-        matters: after ``SetAttitude ClearData`` STK will accept an
-        earlier timestamp again, and a stale guard would reject valid
-        samples for the rest of the run.
+        This clears LOCAL state only. It does not touch STK -- callers
+        must call ``backend.clear_attitude_data()`` (or
+        ``ScenarioManager.reset()``, which does that for every real-time
+        object) BEFORE this, not after. Calling this alone leaves the
+        guard willing to accept an earlier timestamp while STK itself
+        still remembers the newer one and will reject it -- a real
+        failure mode, not a hypothetical: see
+        test_actuation.py::test_reset_alone_does_not_clear_stk_side_data,
+        added after this exact gap surfaced in the test suite.
+
+        The correct order, and the one ``interfaces/ros_services.py``'s
+        ``ResetScenario`` handler follows: clear STK-side data first,
+        then call this to match the guard's memory to it.
         """
         if object_path is None:
             self._objects.clear()

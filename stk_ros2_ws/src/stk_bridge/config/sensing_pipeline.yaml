@@ -1,0 +1,30 @@
+# Standalone rate-group reference. bridge_params.yaml embeds an equivalent
+# `sensing.rate_groups` block for single-file launches; this file exists
+# so rate tuning can be iterated on and diffed independently of the rest
+# of the configuration, and so benchmark_rates.py (scripts/) has one
+# canonical source to sweep.
+#
+# Guidance for choosing rates (see core/rate_group.py for the scheduling
+# semantics, and docs/00_architecture.md section 3.3 for the design):
+#
+#   fast    Control-relevant: orbit, attitude, body rate. Bounded above by
+#           whatever benchmark_rates.py measures as the sustained COM/
+#           Connect round-trip rate for THIS scenario -- do not guess.
+#   medium  Slowly-varying context: LLA, eclipse/lighting.
+#   slow    Orbital-timescale: access windows, link budget.
+#   on_demand  Not polled at all; reachable only via QueryDataProvider.
+
+sensing:
+  rate_groups:
+    fast:
+      rate_hz: 10.0
+      enabled: true
+    medium:
+      rate_hz: 1.0
+      enabled: true
+    slow:
+      rate_hz: 0.1
+      enabled: true
+    on_demand:
+      rate_hz: 0.01
+      enabled: false

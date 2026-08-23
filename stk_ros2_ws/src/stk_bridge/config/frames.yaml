@@ -1,0 +1,27 @@
+# Frame registry configuration. See core/frames.py.
+#
+# BUILTIN_FRAMES already covers everything confirmed present on a live
+# STK 12.6 install (icrf, fixed, inertial, mean_of_epoch, mean_of_date,
+# true_of_date, true_of_date_rotating, lvlh, vvlh, body) -- this file is
+# for ALIASES and mission-specific additions only. Do not redeclare a
+# builtin frame here; FrameRegistry.add_alias refuses to shadow one.
+
+frames:
+  tf_prefix: ""
+
+  aliases:
+    # REP-105-style names some tooling expects. These point at the
+    # nearest STK equivalent, NOT an identical frame -- see
+    # core/frames.py's module docstring on why orbital frames are not
+    # forced into REP-105 semantics. Uncomment only if a specific
+    # downstream consumer requires the name.
+    # map: icrf
+    # odom: icrf
+
+  # additional:
+  #   topocentric_gs1:
+  #     stk_name: Topocentric
+  #     parent: fixed
+  #     inertial: false
+  #     vehicle_relative: true
+  #     description: "Ground station GS1 local topocentric frame."

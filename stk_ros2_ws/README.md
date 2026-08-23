@@ -22,14 +22,28 @@ docs/           Design docs, one per topic -- see docs/00_architecture.md first
 
 | Phase | Contents | Status |
 |---|---|---|
-| 1 | `stk_msgs` complete; `stk_bridge` package plumbing + exception taxonomy | ✅ this delivery |
-| 2 | `backends/` (com, engine, connect, mock) | not yet generated |
-| 3 | `core/` conversions, frames, data providers, rate groups | not yet generated |
-| 4 | `core/` time sync, sensing, actuation | not yet generated |
-| 5 | `interfaces/` + `nodes/` -- bridge becomes runnable | not yet generated |
-| 6 | config, launch, tests, MATLAB side, docs | not yet generated |
+| 1 | `stk_msgs` complete; `stk_bridge` package plumbing + exception taxonomy | ✅ |
+| 2 | `backends/` (com, engine, connect, mock) | ✅ |
+| 3 | `core/` conversions, frames, data providers, rate groups, validation | ✅ |
+| 4 | `core/` time sync, sensing, actuation, scenario mgmt, health | ✅ |
+| 5 | `interfaces/` + `nodes/` -- bridge is runnable | ✅ |
+| 6 | config, launch, tests, MATLAB/Simulink side, docs | ✅ |
 
-## Quick start (once all phases land)
+**All phases complete.** ~13,800 lines across the workspace (Python,
+MATLAB, ROS interfaces, YAML, docs). Test suite: 105 passed, 1 skipped
+(the skip is a `builtin_interfaces` import guard for running outside a
+sourced ROS 2 workspace -- see `test/test_conversions.py`).
+
+Several of this project's design decisions were corrected against a
+**live STK 12.6 install** partway through development, not assumed from
+documentation alone -- see `docs/06_troubleshooting.md` for the specific
+findings (the CBFQuat/ECF attitude frame pairing, the RealTime
+propagator's ephemeris-discarding behaviour, `SetPosition`'s true
+argument order, and others). `core/validation.py`'s startup self-tests
+exist specifically because these were real, not hypothetical, failure
+modes.
+
+## Quick start
 
 ```powershell
 # Windows, PowerShell, with ROS 2 Humble already sourced
@@ -37,26 +51,55 @@ cd stk_ros2_ws
 colcon build --symlink-install
 . install\local_setup.ps1
 pip install -r src\stk_bridge\requirements.txt
-python src\stk_bridge\scripts\check_environment.py
-ros2 launch stk_bridge stk_bridge_mock.launch.py   # no STK required
+
+# Verify the environment before touching real STK:
+python src\stk_bridge\scripts\check_environment.py --backend mock
+python src\stk_bridge\scripts\check_environment.py --backend com   # once STK is running
+
+# First run -- no STK required:
+ros2 launch stk_bridge stk_bridge_mock.launch.py
 ```
 
-See `docs/01_installation_windows.md` (Phase 6) for the full STK-attached
-setup, and `docs/02_matlab_setup.md` for pointing MATLAB's ROS Toolbox at
-this workspace's custom messages.
-
-## Right now (Phase 1 only)
-
-The message package builds and is introspectable on its own:
+In another terminal:
 
 ```powershell
-colcon build --packages-select stk_msgs
-. install\local_setup.ps1
-ros2 interface show stk_msgs/msg/AttitudeCommand
-ros2 interface show stk_msgs/srv/SetPropagator
+ros2 topic echo /stk/status
+ros2 topic echo /stk/sss_1/state
 ```
 
-`stk_bridge` will build (it's valid, empty Python packages plus
-`exceptions.py`) but its console-script entry points are not yet
-implemented -- `ros2 run stk_bridge bridge_node` will fail with an import
-error until Phase 5.
+Then, against real STK 12.6:
+
+```powershell
+ros2 launch stk_bridge stk_bridge.launch.py
+```
+
+See `docs/01_installation_windows.md` for the full setup (including the
+`agi.stk12` wheel install, which does not come from PyPI) and
+`docs/02_matlab_setup.md` for pointing MATLAB's ROS Toolbox at this
+workspace's custom messages.
+
+## Running the test suite
+
+```bash
+cd src/stk_bridge
+python3 -m pytest test/ --ignore=test/test_flake8.py --ignore=test/test_pep257.py
+```
+
+The full `core/` test suite (conversions, frames, Connect protocol, rate
+groups, time sync/lockstep barrier, mock-backend regression tests,
+actuation guards, and an end-to-end integration test) runs with **no
+ROS 2 installation required** -- `core/` has no ROS import at module
+scope, by design (see `stk_bridge/core/__init__.py`).
+
+## Documentation map
+
+| Doc | Covers |
+|---|---|
+| `00_architecture.md` | Design, package structure, phased plan (this project's starting spec) |
+| `01_installation_windows.md` | Full Windows/STK/ROS 2 setup |
+| `02_matlab_setup.md` | MATLAB ROS Toolbox + `+stkros` setup |
+| `03_message_reference.md` | Topic/service/action index |
+| `04_frames_and_units.md` | SI units, quaternion convention, the CBFQuat/ECF frame trap |
+| `05_time_synchronization.md` | Execution modes, lockstep barrier, the threading model |
+| `06_troubleshooting.md` | Every STK-12.6-specific finding from this project's bring-up |
+| `07_extending_backends.md` | Adding a backend or capability without breaking layering |

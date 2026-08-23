@@ -181,15 +181,39 @@ class SensingPipeline:
     def health(self) -> Dict[str, ChannelHealth]:
         return dict(self._health)
 
+    #: How long a cached "is this object real-time?" answer is trusted
+    #: before being re-checked. A permanent cache is unsafe: the only
+    #: enforced invalidation point today is the SetPropagator service
+    #: handler, and any other path that switches a propagator (direct
+    #: script use of ActuationDispatcher.prepare_object, a future
+    #: service, ScenarioManager called outside the normal startup
+    #: sequence) would leave a stale answer with no invalidation call at
+    #: all. The dangerous direction is caching True when the truth is
+    #: now False: that would silently reclassify a genuine query error
+    #: as mere staleness (returns None) instead of raising -- exactly
+    #: the kind of masked failure this whole module exists to prevent.
+    #: A bounded TTL caps the exposure instead of requiring every write
+    #: path to remember to invalidate.
+    _REALTIME_CACHE_TTL_S = 5.0
+
     def _is_realtime(self, object_path: str) -> bool:
         """Is this object on the RealTime propagator?
 
-        Cached: the answer changes only when the propagator is switched,
-        which goes through ``ScenarioManager``, and asking STK on every
-        read would double the query count on the fast rate group.
+        Cached with a TTL (see ``_REALTIME_CACHE_TTL_S``): re-querying on
+        every read would double the query count on the fast rate group,
+        but caching forever risks a stale answer surviving an
+        out-of-band propagator change. ``invalidate_propagator_cache``
+        remains the fast, immediate path for callers that know a change
+        happened (the SetPropagator service uses it); the TTL is the
+        safety net for callers that don't.
         """
-        if object_path in self._realtime_objects:
-            return self._realtime_objects[object_path]
+        import time as _time
+
+        cached = self._realtime_objects.get(object_path)
+        now = _time.monotonic()
+        if cached is not None and (now - cached[1]) < self._REALTIME_CACHE_TTL_S:
+            return cached[0]
+
         realtime = False
         try:
             for info in self._backend.list_objects():
@@ -201,7 +225,7 @@ class SensingPipeline:
         except Exception:
             LOGGER.debug("could not determine propagator for %s",
                          object_path, exc_info=True)
-        self._realtime_objects[object_path] = realtime
+        self._realtime_objects[object_path] = (realtime, now)
         return realtime
 
     def invalidate_propagator_cache(self, object_path: Optional[str] = None

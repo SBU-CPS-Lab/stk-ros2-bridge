@@ -417,6 +417,13 @@ def execute(backend: StkBackend, spec: ProviderSpec, object_path: str,
             )
         LOGGER.warning("provider %r on %s returned no rows (allowed)",
                        spec.provider_name, object_path)
+        # An allowed-empty result has no columns to resolve against, and
+        # resolve_columns() enforces required fields -- calling it here
+        # would turn "legitimately no data" into a spurious "required
+        # elements missing" error. Callers must check for this case
+        # (data.row_count == 0) before reading any field; first_value()
+        # raises a clear QueryError if they don't.
+        return data, {f.name: None for f in spec.fields}
 
     return data, resolve_columns(spec, data)
 

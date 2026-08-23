@@ -1,0 +1,8 @@
+# Standalone QoS reference, mirroring bridge_params.yaml's `qos:` block.
+# See interfaces/qos.py for why only depth is exposed here.
+
+qos:
+  telemetry_depth: 1    # newest-wins; do not increase for "reliability"
+  command_depth: 10
+  status_depth: 1
+  clock_depth: 10

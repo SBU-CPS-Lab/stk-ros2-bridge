@@ -1,0 +1,154 @@
+# stk_bridge master configuration.
+#
+# Loaded via the `config_file` node parameter:
+#   ros2 run stk_bridge bridge_node --ros-args -p config_file:=$(pwd)/config/bridge_params.yaml
+# or through one of the launch files in launch/, which set this for you.
+#
+# Every section here has a matching *_config.from_config() in core/ --
+# see that module's docstring for the authoritative meaning of each key.
+# This file documents the OPERATIONAL choices for the SSS-1 digital twin;
+# it does not repeat design rationale already in the source.
+
+topic_prefix: stk
+log_level: INFO
+
+# ---------------------------------------------------------------------------
+# STK access. See backends/factory.py.
+# ---------------------------------------------------------------------------
+backend:
+  type: com              # com | engine | connect | mock | auto
+  com:
+    attach_to_existing: true
+    visible: true
+    user_control: true
+  engine:
+    no_graphics: true
+  connect:
+    host: localhost
+    port: 5001
+    timeout_s: 10.0
+    connect_timeout_s: 5.0
+  mock:
+    scenario_epoch: 1717200000.0   # 1 Jun 2024 00:00:00 UTC
+    satellite_name: SSS-1
+
+# ---------------------------------------------------------------------------
+# COM apartment worker. See core/com_thread.py.
+# ---------------------------------------------------------------------------
+worker:
+  queue_size: 256
+  full_policy: drop_oldest   # drop_oldest | drop_newest | block | reject
+  timeout_s: 10.0
+  start_timeout_s: 120.0     # generous: STK Desktop launch can be slow
+
+# ---------------------------------------------------------------------------
+# Scenario lifecycle. See core/scenario_manager.py.
+# ---------------------------------------------------------------------------
+scenario:
+  scenario_path: ""                     # empty = create new
+  scenario_name: SSS1_DigitalTwin
+  ensure_objects:
+    - type: Satellite
+      name: SSS-1
+  realtime_objects:
+    - "*/Satellite/SSS-1"
+  look_ahead_s: 3600.0
+  look_behind_s: 3600.0
+  require_astrogator: false
+  require_coverage: false
+  require_communications: false
+
+# ---------------------------------------------------------------------------
+# Startup convention validation. See core/validation.py.
+# Do not disable in production -- see that module's docstring for why.
+# ---------------------------------------------------------------------------
+validation:
+  enabled: true
+  fatal:
+    ephemeris_present: true
+    data_provider_returns_data: true
+    distance_is_metres: true
+    realtime_attitude_available: true
+    quaternion_ordering: true
+    angular_rate_scale: false     # degrades to an unverified-scale warning
+    monotonicity_enforced: false  # informational on this backend either way
+
+# ---------------------------------------------------------------------------
+# Sensing. See core/sensing.py and config/sensing_pipeline.yaml for rates.
+# ---------------------------------------------------------------------------
+sensing:
+  satellites:
+    - "*/Satellite/SSS-1"
+  position_frame: icrf
+  velocity_frame: icrf
+  lla_frame: fixed
+  enable_lla: true
+  enable_lighting: true
+  enable_access: false
+  enable_link_budget: false
+  access_pairs: []
+  # rate_groups: see sensing_pipeline.yaml (merged at load time by anyone
+  # consuming both files; the bridge node reads rate_groups from here too
+  # if sensing_pipeline.yaml is not separately loaded by your launch file)
+  rate_groups:
+    fast:   { rate_hz: 10.0 }
+    medium: { rate_hz: 1.0 }
+    slow:   { rate_hz: 0.1 }
+
+# ---------------------------------------------------------------------------
+# Actuation. See core/actuation.py.
+# ---------------------------------------------------------------------------
+actuation:
+  # false: AddAttitude CBFQuat (central-body-fixed). Confirmed against a
+  # live STK 12.6 install to round-trip correctly via the
+  # 'ECF Attitude Quaternions' provider. Flip to true to use the inertial
+  # pair (AddAttitude Quat / 'Attitude Quaternions') instead -- both were
+  # confirmed to round-trip at 0.0000 deg error on validation.
+  default_attitude_inertial: false
+  coalesce: true
+
+# ---------------------------------------------------------------------------
+# Time synchronization. See core/time_sync.py.
+# ---------------------------------------------------------------------------
+time:
+  mode: lockstep              # free_run | paced | lockstep | external
+  step_s: 0.1
+  real_time_factor: 1.0
+  barrier_participants:
+    - matlab_twin
+  barrier_timeout_s: 5.0
+  on_barrier_timeout: abort   # continue | wait | abort
+  publish_clock: true
+  auto_step: true             # loop steps continuously rather than
+                                # waiting for StepSimulation calls
+
+# ---------------------------------------------------------------------------
+# Health monitoring. See core/health.py.
+# ---------------------------------------------------------------------------
+health:
+  critical_channels: [orbit_position, attitude]
+  stale_threshold: 5
+  heartbeat_timeout_s: 10.0
+  reconnect_enabled: true
+  reconnect_initial_delay_s: 1.0
+  reconnect_max_delay_s: 60.0
+  reconnect_max_attempts: 0    # 0 = unlimited
+
+# ---------------------------------------------------------------------------
+# QoS. See interfaces/qos.py. Depths only -- reliability/durability are
+# fixed per-category by design; see that module's docstring.
+# ---------------------------------------------------------------------------
+qos:
+  telemetry_depth: 1
+  command_depth: 10
+  status_depth: 1
+  clock_depth: 10
+
+tf:
+  enabled: true
+
+executor:
+  threads: 6
+
+diagnostics:
+  period_s: 5.0

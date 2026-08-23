@@ -200,8 +200,8 @@ class MockBackend(StkBackend):
 
     # -- propagation -------------------------------------------------------
 
-    def _has_ephemeris_at(self, obj: _MockObject, when: float) -> bool:
-        """Does this object have ephemeris covering ``when``?
+    def _has_position_ephemeris_at(self, obj: _MockObject, when: float) -> bool:
+        """Does this object have POSITION ephemeris covering ``when``?
 
         Reproduces the behaviour that broke Phase 3 bring-up on a real
         STK 12.6 install: switching a satellite to the **RealTime orbit
@@ -221,6 +221,34 @@ class MockBackend(StkBackend):
             return False
         earliest = obj.position_samples[0][0] - obj.look_behind_s
         latest = obj.position_samples[-1][0] + obj.look_ahead_s
+        return earliest <= when <= latest
+
+    def _has_attitude_ephemeris_at(self, obj: _MockObject, when: float) -> bool:
+        """Does this object have ATTITUDE data covering ``when``?
+
+        Deliberately INDEPENDENT of :meth:`_has_position_ephemeris_at`.
+        Real-time orbit (``SetPropagator RealTime``) and real-time
+        attitude (``SetAttitude Standard``) are separate STK channels --
+        see stk_msgs/AttitudeCommand.msg's docstring, present since
+        Phase 1. An object can have real-time attitude with the ORBIT
+        still on a normal propagator, or vice versa, and a satellite
+        whose attitude channel is active but has received no position
+        samples must still report attitude, not an empty result borrowed
+        from the wrong channel's coverage.
+
+        This split was added after exactly that cross-contamination
+        produced a failing integration test: an object prepared for
+        real-time control (orbit switched to RealTime, attitude enabled)
+        that received only attitude commands reported NO attitude data,
+        because the single shared coverage check was keyed off position
+        samples that were never sent.
+        """
+        if not obj.realtime_attitude_enabled:
+            return True
+        if not obj.attitude_samples:
+            return False
+        earliest = obj.attitude_samples[0][0] - obj.look_behind_s
+        latest = obj.attitude_samples[-1][0] + obj.look_ahead_s
         return earliest <= when <= latest
 
     def _propagate(self, obj: _MockObject, when: float
@@ -356,20 +384,24 @@ class MockBackend(StkBackend):
         name = query.provider_name.strip().lower()
         if name == "cartesian position":
             self._require_group(query, {"ICRF", "J2000", "Fixed"})
-            return self._columns(query, times, self._position_columns(obj))
+            return self._columns(query, times, self._position_columns(obj),
+                                 coverage=self._has_position_ephemeris_at)
         if name == "cartesian velocity":
             self._require_group(query, {"ICRF", "J2000", "Fixed"})
-            return self._columns(query, times, self._velocity_columns(obj))
+            return self._columns(query, times, self._velocity_columns(obj),
+                                 coverage=self._has_position_ephemeris_at)
         if name in ("attitude quaternions", "attitude quaternion"):
             return self._columns(query, times,
-                                 self._quaternion_columns(obj, inertial=True))
+                                 self._quaternion_columns(obj, inertial=True),
+                                 coverage=self._has_attitude_ephemeris_at)
         if name in ("ecf attitude quaternions",
                     "attitude segment ecf quaternions"):
             return self._columns(query, times,
-                                 self._quaternion_columns(obj, inertial=False))
+                                 self._quaternion_columns(obj, inertial=False),
+                                 coverage=self._has_attitude_ephemeris_at)
         if name == "attitude segment quaternions":
-            return self._columns(query, times,
-                                 self._segment_columns(obj))
+            return self._columns(query, times, self._segment_columns(obj),
+                                 coverage=self._has_attitude_ephemeris_at)
         # NOTE: deliberately absent. A live STK 12.6 inventory has NO
         # "Body Axes Angular Velocity" provider -- body rates come from
         # "Attitude Segment Quaternions" instead. Serving a provider real
@@ -378,9 +410,11 @@ class MockBackend(StkBackend):
         # prevent.
         if name == "lla state":
             self._require_group(query, {"Fixed", "Detic"})
-            return self._columns(query, times, self._lla_columns(obj))
+            return self._columns(query, times, self._lla_columns(obj),
+                                 coverage=self._has_position_ephemeris_at)
         if name in ("lighting times", "eclipse times"):
-            return self._columns(query, times, self._lighting_columns(obj))
+            return self._columns(query, times, self._lighting_columns(obj),
+                                 coverage=self._has_position_ephemeris_at)
 
         raise QueryError(
             query.provider_name, query.object_path,
@@ -409,11 +443,15 @@ class MockBackend(StkBackend):
         return [start + i * step for i in range(count)]
 
     def _columns(self, query: DataProviderQuery, times: List[float],
-                 builder) -> DataProviderData:
+                 builder, coverage=None) -> DataProviderData:
         obj = self._obj(query.object_path)
         # Epochs outside the object's ephemeris coverage produce no rows,
         # exactly as STK does -- not an exception, just nothing.
-        times = [t for t in times if self._has_ephemeris_at(obj, t)]
+        # `coverage` is per-provider-KIND (position vs attitude) because
+        # those are independent real-time channels in STK -- see
+        # _has_position_ephemeris_at / _has_attitude_ephemeris_at.
+        check = coverage or self._has_position_ephemeris_at
+        times = [t for t in times if check(obj, t)]
         columns: Dict[str, List] = {"Time": []}
         if not times:
             return DataProviderData(
