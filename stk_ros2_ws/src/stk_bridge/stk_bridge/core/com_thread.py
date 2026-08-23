@@ -25,6 +25,17 @@ The same class is used for the Connect and Mock backends even though they
 have no apartment requirement. Uniformity is worth more than the saved
 thread: it means there is exactly one concurrency model to reason about,
 and swapping backends never changes the threading behaviour.
+
+A deliberate layering exception
+-------------------------------
+``core/`` is otherwise forbidden from importing COM libraries -- that is
+``backends/``'s job. This module is the one exception: it imports
+``pythoncom`` to call ``CoInitialize``/``CoUninitialize`` on its own
+thread. It cannot be avoided, because apartment initialisation is a
+property of the *thread*, not of the object, and this module is what
+owns the thread. The import is lazy, guarded by platform and backend
+type, and this module never touches an STK object -- it only creates the
+apartment that ``backends/`` will use.
 """
 
 from __future__ import annotations
