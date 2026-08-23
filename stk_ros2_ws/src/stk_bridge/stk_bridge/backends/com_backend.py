@@ -619,11 +619,35 @@ class ComBackend(StkBackend):
         """
         if propagator is PropagatorType.REALTIME:
             self._capabilities.require("realtime_propagator")
-            self._execute(
-                f"SetPropagator {object_path} RealTime "
-                f"LookAheadTime {look_ahead_s!r} "
-                f"LookBehindTime {look_behind_s!r}"
-            )
+            # Confirmed against STK 12.6: the `SetPropagator ... RealTime`
+            # Connect command fails ("Command has failed."), but the typed
+            # Object Model path works. Enum spelling verified on a live
+            # 12.6 install: AgEVePropagatorType.ePropagatorRealtime --
+            # note the lowercase 't' in "Realtime", which differs from the
+            # "RealTime" spelling used elsewhere in STK's own docs.
+            try:
+                stkobjects = self._enums.get("module")
+                enum_type = self._resolve_enum("AgEVePropagatorType",
+                                               "VePropagatorType")
+                satellite = self._root.GetObjectFromPath(object_path)
+                satellite.SetPropagatorType(
+                    getattr(enum_type, "ePropagatorRealtime")
+                )
+            except Exception as exc:
+                raise CommandError("SetPropagator", object_path,
+                                   str(exc)) from exc
+
+            # SetPropagatorType leaves Look-Ahead/Look-Behind at STK's
+            # defaults. Those durations decide how far the real-time
+            # propagator extrapolates past the newest injected sample and
+            # how much history it retains, which directly determines
+            # whether a data provider queried at "now" returns anything at
+            # all. Applying them is therefore not optional, but the
+            # property names are version-sensitive, so failure here is a
+            # warning rather than a hard error -- the propagator still
+            # works, just with defaults.
+            self._configure_realtime_durations(
+                object_path, look_ahead_s, look_behind_s)
         elif propagator is PropagatorType.EXTERNAL:
             if not external_file:
                 raise CommandError("SetPropagator", object_path,
@@ -631,6 +655,70 @@ class ComBackend(StkBackend):
             self.load_external_ephemeris(object_path, external_file)
         else:
             self._execute(f"SetPropagator {object_path} {propagator.value}")
+
+    def _configure_realtime_durations(self, object_path: str,
+                                      look_ahead_s: float,
+                                      look_behind_s: float) -> None:
+        """Set Look-Ahead / Look-Behind on a real-time-propagated object.
+
+        STK applies these durations to real-time orbit propagation,
+        real-time attitude, and model articulations alike -- they are one
+        shared setting, not three. Property spelling has moved across
+        12.x, so several candidates are attempted.
+        """
+        satellite = self._get_object(object_path)
+        try:
+            propagator = satellite.Propagator
+        except Exception as exc:
+            LOGGER.warning("cannot reach Propagator on %s: %s",
+                           object_path, exc)
+            return
+
+        applied = []
+        for attribute, value in (
+            (("LookAheadDuration", "LookAheadTime"), look_ahead_s),
+            (("LookBehindDuration", "LookBehindTime"), look_behind_s),
+        ):
+            for name in attribute:
+                try:
+                    setattr(propagator, name, value)
+                    applied.append(f"{name}={value}")
+                    break
+                except Exception:
+                    continue
+        if applied:
+            LOGGER.info("real-time durations on %s: %s", object_path,
+                        ", ".join(applied))
+        else:
+            LOGGER.warning(
+                "could not set Look-Ahead/Look-Behind on %s; STK defaults "
+                "apply. If data providers return no rows near the newest "
+                "injected sample, this is the first thing to check.",
+                object_path,
+            )
+
+    def propagate(self, object_path: str) -> bool:
+        """Force ephemeris generation for an object.
+
+        A satellite created via ``Children.New`` has a propagator and
+        default elements but *no ephemeris* until propagated, and every
+        data provider on it returns zero rows until then. This is the
+        single most common cause of a silently empty Data Provider
+        result, so it gets a dedicated, explicitly-named method rather
+        than being buried in a query path.
+
+        Returns True if propagation ran, False if the object has no
+        propagator that supports it (e.g. real-time, which generates
+        ephemeris from injected samples instead).
+        """
+        obj = self._get_object(object_path)
+        try:
+            obj.Propagator.Propagate()
+            return True
+        except Exception as exc:
+            LOGGER.debug("Propagate() unavailable on %s: %s",
+                         object_path, exc)
+            return False
 
     def set_position(self, object_path: str, when: StkTime, frame: str,
                      position_m: Tuple[float, float, float],
@@ -644,8 +732,8 @@ class ComBackend(StkBackend):
         socket round-trip that the Connect backend does.
         """
         args = [
-            "SetPosition", object_path, frame,
-            proto.quote(proto.format_utcg(when)),
+            "SetPosition", object_path, proto.quote(proto.format_utcg(when)),
+            frame,
             f"{position_m[0]!r}", f"{position_m[1]!r}", f"{position_m[2]!r}",
         ]
         if velocity_mps is not None:

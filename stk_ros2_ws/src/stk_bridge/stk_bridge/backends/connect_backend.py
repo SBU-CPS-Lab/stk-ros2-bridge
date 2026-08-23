@@ -494,8 +494,8 @@ class ConnectBackend(StkBackend):
                      velocity_mps: Optional[Tuple[float, float, float]] = None
                      ) -> None:
         args = [
-            "SetPosition", object_path, frame,
-            proto.quote(proto.format_utcg(when)),
+            "SetPosition", object_path, proto.quote(proto.format_utcg(when)),
+            frame,
             f"{position_m[0]!r}", f"{position_m[1]!r}", f"{position_m[2]!r}",
         ]
         if velocity_mps is not None:

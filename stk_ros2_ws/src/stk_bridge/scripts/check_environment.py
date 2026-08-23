@@ -221,6 +221,22 @@ def run_live_checks(backend_type: str, host: str, port: int) -> None:
         record("Create satellite", FAIL, str(exc))
 
     if satellite:
+        # A satellite created via Children.New has a propagator and default
+        # elements but NO EPHEMERIS until propagated -- and every data
+        # provider on it then returns zero rows while raising nothing.
+        # Observed on a live STK 12.6 install. Propagate before querying.
+        propagate = getattr(backend, "propagate", None)
+        if propagate is not None:
+            try:
+                ran = propagate(satellite)
+                record("Propagate satellite (generate ephemeris)",
+                       PASS if ran else WARN,
+                       "Propagate() ran" if ran else
+                       "Propagate() unavailable on this propagator type")
+            except Exception as exc:
+                record("Propagate satellite (generate ephemeris)", FAIL,
+                       str(exc))
+
         try:
             epoch = backend.get_scenario_epoch()
             data = backend.query_data_provider(DataProviderQuery(
@@ -232,23 +248,45 @@ def run_live_checks(backend_type: str, host: str, port: int) -> None:
             columns = ", ".join(data.columns)
             sample = {k: (v[0] if v else None)
                       for k, v in list(data.columns.items())[:4]}
-            record("Data provider: Cartesian Position/ICRF", PASS,
-                   f"columns: {columns}\nfirst row: {sample}")
+
+            # An empty result is a FAILURE, not a pass. The query
+            # returning without raising says nothing about whether it
+            # returned data, and empty state data feeds an empty control
+            # loop. This check previously reported 'ok' for zero columns,
+            # which is exactly the kind of false pass a checker must not
+            # produce.
+            if not data.columns or data.row_count == 0:
+                record("Data provider: Cartesian Position/ICRF", FAIL,
+                       f"query succeeded but returned NO DATA "
+                       f"({len(data.columns)} columns, {data.row_count} "
+                       f"rows).\nLikely causes: the object has no ephemeris "
+                       f"(propagate it first), the epoch is outside its "
+                       f"ephemeris interval, or the group element 'ICRF' is "
+                       f"wrong for this provider.\nThe entire sensing path "
+                       f"depends on this returning data.")
+            else:
+                record("Data provider: Cartesian Position/ICRF", PASS,
+                       f"columns: {columns}\nfirst row: {sample}")
+
             magnitude = _magnitude(data)
-            if magnitude is not None:
-                if 6.0e6 < magnitude < 5.0e8:
-                    record("Units are SI (metres)", PASS,
-                           f"|r| = {magnitude:.1f} m -- consistent with metres")
-                elif 6.0e3 < magnitude < 5.0e5:
-                    record("Units are SI (metres)", FAIL,
-                           f"|r| = {magnitude:.1f} -- this looks like "
-                           f"KILOMETRES. configure_units() did not take "
-                           f"effect; every distance downstream will be wrong "
-                           f"by 1000x.")
-                else:
-                    record("Units are SI (metres)", WARN,
-                           f"|r| = {magnitude:.3g}, which matches neither "
-                           f"metres nor kilometres for an Earth orbit")
+            if magnitude is None:
+                record("Units are SI (metres)", FAIL,
+                       "could not extract x/y/z from the result, so units "
+                       "could not be verified. Distance correctness is "
+                       "UNCHECKED.")
+            elif 6.0e6 < magnitude < 5.0e8:
+                record("Units are SI (metres)", PASS,
+                       f"|r| = {magnitude:.1f} m -- consistent with metres")
+            elif 6.0e3 < magnitude < 5.0e5:
+                record("Units are SI (metres)", FAIL,
+                       f"|r| = {magnitude:.1f} -- this looks like "
+                       f"KILOMETRES. configure_units() did not take "
+                       f"effect; every distance downstream will be wrong "
+                       f"by 1000x.")
+            else:
+                record("Units are SI (metres)", WARN,
+                       f"|r| = {magnitude:.3g}, which matches neither "
+                       f"metres nor kilometres for an Earth orbit")
         except Exception as exc:
             record("Data provider: Cartesian Position/ICRF", FAIL, str(exc))
 
@@ -283,6 +321,31 @@ def run_live_checks(backend_type: str, host: str, port: int) -> None:
                    str(exc) + "\nThis is the primary ADCS control path. If it "
                    "fails, re-check the SetAttitude/AddAttitude command "
                    "spellings against your STK 12.6 Connect documentation.")
+
+    # Phase 3: run the full convention self-test suite. This is the same
+    # code path bridge_node uses at startup, so passing here means the
+    # bridge will start; failing here means it would refuse to.
+    if satellite:
+        try:
+            from stk_bridge.core.validation import ConventionValidator
+
+            report = ConventionValidator(backend, satellite).validate()
+            for result in report.results:
+                if result.skipped:
+                    status = WARN
+                elif result.passed:
+                    status = PASS
+                elif result.fatal:
+                    status = FAIL
+                else:
+                    status = WARN
+                record(f"validation: {result.name}", status, result.detail)
+            record("Angular rate scale", PASS if
+                   report.angle_rate_scale.measured else WARN,
+                   report.angle_rate_scale.source)
+        except Exception as exc:
+            record("Convention validation", FAIL,
+                   f"{type(exc).__name__}: {exc}")
 
     try:
         backend.close_scenario()
