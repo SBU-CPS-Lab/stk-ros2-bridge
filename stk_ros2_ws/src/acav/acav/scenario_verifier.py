@@ -1,0 +1,1118 @@
+"""Empirical verification of a built ACAV scenario.
+
+``scenario_builder.py`` issues commands. This module checks what those
+commands actually *did* -- which is a different question, and the one
+that matters. Every STK command in the builder has at least one
+uncertain element (enum spelling, argument order, units, whether the
+feature is licensed for this region), and STK's failure mode is
+overwhelmingly to ACK the command and produce a plausible-looking wrong
+answer rather than to error.
+
+The distinction this module is built around
+-------------------------------------------
+An ACK means STK parsed the command. It does not mean:
+
+* the sensor cone is 2.0 deg (``Define ... SimpleConic`` in the wrong
+  angle unit ACKs and leaves a 115 deg cone);
+* the boresight is +Z (``Point ... Fixed AzEl`` ACKs whatever it is
+  handed, and STK's default satellite attitude decides which body axis
+  faces the ground);
+* the orbit is the 500 km SSO (``SetState Classical`` with the wrong
+  argument order ACKs and leaves STK's default orbit);
+* targets are where they were asked to be (``SetPosition Geodetic``
+  with degrees-vs-radians confusion puts them tens of thousands of km
+  away, on a plausible-looking globe);
+* terrain masking is doing anything (``SetAzElMask ... TerrainData``
+  ACKs whether or not terrain data covers the region).
+
+So nothing here trusts a return code. Each check *measures* the
+quantity it cares about, and where a measurement is impossible it says
+so rather than passing.
+
+Reading the report
+------------------
+``PASS`` measured and correct. ``WARN`` measured, not what was asked
+for, but the study still runs in a degraded form the paper must then
+describe honestly. ``FAIL`` the scenario would silently measure
+something other than what was designed -- do not run experiments
+against it. ``SKIP`` could not be measured on this backend.
+
+Mock backend
+------------
+Most geometric checks are skipped under the mock, because the mock does
+not model sensor cones, terrain, or access geometry -- it synthesises
+plausible access intervals on a timer. A mock run therefore verifies
+the *plumbing* (paths, epochs, target placement arithmetic, the
+report's own logic) and nothing about STK. No number produced under
+``--backend mock`` may appear in the paper; ``verify_acav_scenario.py``
+prints that in a banner rather than leaving it to be remembered.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
+
+from stk_bridge.backends import connect_protocol as proto
+from stk_bridge.backends.base import BackendType, StkBackend, StkTime
+from stk_bridge.core import conversions as conv
+from stk_bridge.core import data_providers as dp
+from stk_bridge.exceptions import StkBridgeError
+
+from acav.ground_track import (
+    GeoPoint,
+    cross_track_offset,
+    great_circle_distance_m,
+    side_of_track,
+)
+from acav.scenario_builder import HEADING_SAMPLE_DT_S, BuildReport
+from acav.slew_model import off_nadir_angle_deg
+from acav.spec import AcavSpec
+
+LOGGER = logging.getLogger(__name__)
+
+PASS, WARN, FAIL, SKIP = "PASS", "WARN", "FAIL", "SKIP"
+
+#: Earth gravitational parameter, m^3/s^2 -- the value STK uses.
+MU_EARTH = 3.986004418e14
+
+#: Semi-major axis tolerance, metres. HPOP reports *osculating*
+#: elements, which differ from the mean elements the YAML specifies by a
+#: few km at 500 km altitude. Anything inside this is "the orbit we
+#: asked for"; anything outside means SetState did not take effect.
+SMA_TOLERANCE_M = 25_000.0
+
+#: Inclination tolerance, degrees. Osculating inclination oscillates by
+#: a few hundredths of a degree under J2; a wrong orbit is wrong by
+#: tens of degrees, so this is a wide gate that still cannot be passed
+#: by STK's default (28.5 deg) orbit.
+INCLINATION_TOLERANCE_DEG = 1.0
+
+#: Below this spread in osculating semi-major axis across the window,
+#: the propagator is not applying perturbations. J2 alone drives several
+#: km of short-period oscillation at this altitude, so a spread of tens
+#: of metres can only be an unperturbed two-body propagation.
+PERTURBATION_SMA_SPREAD_M = 200.0
+
+#: Half-width of the access window used to test whether a probe target
+#: is inside the sensor cone at its design epoch. The 2.0 deg cone gives
+#: a ~17.5 km footprint radius, crossed in ~4.6 s at 7.6 km/s, so +-3 s
+#: brackets the crossing without admitting a neighbouring pass.
+PROBE_ACCESS_HALF_WINDOW_S = 3.0
+
+#: Off-nadir angles at which FOV probe targets are placed, as multiples
+#: of the specified half-angle. The ladder brackets the true half-angle
+#: from both sides rather than testing a single point, so the report can
+#: state a measured interval instead of a yes/no that hides how wrong a
+#: failure is.
+PROBE_LADDER = (0.0, 0.5, 0.9, 1.1, 1.5, 2.2)
+
+#: One probe far outside any plausible intended cone. If this one has
+#: access the sensor is still at STK's default half-angle (45 deg), i.e.
+#: the Define command did nothing at all.
+PROBE_WIDE_DEG = 20.0
+
+_PROBE_PREFIX = "ACAV_FOVProbe"
+
+
+@dataclass
+class CheckResult:
+    """One verification check. ``detail`` carries the measurement."""
+
+    name: str
+    status: str
+    detail: str = ""
+
+    @property
+    def failed(self) -> bool:
+        return self.status == FAIL
+
+
+@dataclass
+class VerificationReport:
+    """Everything the verifier measured, in the order it measured it."""
+
+    backend_type: str = ""
+    scenario_name: str = ""
+    results: List[CheckResult] = field(default_factory=list)
+    #: Free-form measurements downstream phases may want (C6 reports the
+    #: measured sensor half-angle and terrain mode in the methodology).
+    measurements: Dict[str, object] = field(default_factory=dict)
+
+    def add(self, name: str, status: str, detail: str = "") -> CheckResult:
+        result = CheckResult(name=name, status=status, detail=detail)
+        self.results.append(result)
+        return result
+
+    @property
+    def ok(self) -> bool:
+        return not any(r.failed for r in self.results)
+
+    def counts(self) -> Dict[str, int]:
+        counts = {PASS: 0, WARN: 0, FAIL: 0, SKIP: 0}
+        for result in self.results:
+            counts[result.status] = counts.get(result.status, 0) + 1
+        return counts
+
+    def failures(self) -> List[CheckResult]:
+        return [r for r in self.results if r.failed]
+
+    def summary(self) -> str:
+        marker = {PASS: "  ok  ", WARN: " warn ", FAIL: " FAIL ",
+                  SKIP: " skip "}
+        lines: List[str] = []
+        for result in self.results:
+            lines.append(f"[{marker[result.status]}] {result.name}")
+            for line in result.detail.splitlines():
+                lines.append(f"            {line}")
+        counts = self.counts()
+        lines.append("-" * 64)
+        lines.append(
+            f"{len(self.results)} checks: {counts[PASS]} passed, "
+            f"{counts[WARN]} warnings, {counts[FAIL]} failed, "
+            f"{counts[SKIP]} skipped")
+        for result in self.failures():
+            lines.append(f"  FAILED: {result.name}")
+        return "\n".join(lines)
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "backend": self.backend_type,
+            "scenario": self.scenario_name,
+            "ok": self.ok,
+            "counts": self.counts(),
+            "measurements": dict(self.measurements),
+            "checks": [
+                {"name": r.name, "status": r.status, "detail": r.detail}
+                for r in self.results
+            ],
+        }
+
+
+class AcavScenarioVerifier:
+    """Measures whether a built ACAV scenario is the one that was designed.
+
+    Constructed with a connected backend and the loaded spec. If the
+    scenario was built in this same process, pass the
+    :class:`~acav.scenario_builder.BuildReport` so the verifier can
+    compare what was *requested* against what it *measures* -- a
+    disagreement between the two is more informative than either alone.
+    """
+
+    def __init__(self, backend: StkBackend, spec: AcavSpec,
+                 build_report: Optional[BuildReport] = None):
+        self._backend = backend
+        self._spec = spec
+        self._build = build_report
+        self._report = VerificationReport(
+            backend_type=backend.backend_type.value, scenario_name=spec.name)
+        self._epoch: Optional[StkTime] = None
+        self._satellite = ""
+        self._sensor = ""
+        self._ground_station = ""
+
+    @property
+    def report(self) -> VerificationReport:
+        return self._report
+
+    @property
+    def is_mock(self) -> bool:
+        return self._backend.backend_type is BackendType.MOCK
+
+    # -- entry point -------------------------------------------------------
+
+    def verify(self) -> VerificationReport:
+        """Run every check. Never raises: a check that blows up is a
+        FAIL with the traceback text, because the next check may still
+        explain why."""
+        self._run("Scenario epoch and analysis period",
+                  self._check_scenario_epoch)
+        self._run("Satellite object resolves", self._check_satellite_exists)
+
+        if not self._satellite:
+            self._report.add(
+                "Remaining checks", SKIP,
+                "no satellite to check against. Build the scenario first "
+                "(build_acav_scenario.py, or pass --build).")
+            return self._report
+
+        self._run("Satellite has ephemeris", self._check_ephemeris)
+        self._run("Orbit matches the specified 500 km SSO",
+                  self._check_orbit_elements)
+        self._run("Propagator applies perturbations",
+                  self._check_perturbations)
+        self._run("Sensor object resolves", self._check_sensor_exists)
+        self._run("Sensor boresight looks at the ground",
+                  self._check_boresight)
+        self._run("Sensor cone half-angle is 2.0 deg",
+                  self._check_half_angle)
+        self._run("Targets are placed where they were asked to be",
+                  self._check_target_placement)
+        self._run("Targets are geometrically reachable",
+                  self._check_target_reachable)
+        self._run("Ground station object resolves",
+                  self._check_ground_station_exists)
+        self._run("Elevation constraint is in effect",
+                  self._check_elevation_constraint)
+        self._run("Terrain mask is effective", self._check_terrain_mask)
+        return self._report
+
+    def _run(self, name: str, check: Callable[[], Tuple[str, str]]) -> None:
+        try:
+            status, detail = check()
+        except StkBridgeError as exc:
+            status, detail = FAIL, f"{type(exc).__name__}: {exc}"
+        except Exception as exc:                      # noqa: BLE001
+            status, detail = FAIL, (
+                f"the check itself raised {type(exc).__name__}: {exc}")
+        self._report.add(name, status, detail)
+
+    def _skip_on_mock(self, what: str) -> Tuple[str, str]:
+        return SKIP, (
+            f"the mock backend does not model {what}; it synthesises "
+            f"access intervals on a timer. Run against --backend com to "
+            f"measure this.")
+
+    # -- scenario ----------------------------------------------------------
+
+    def _check_scenario_epoch(self) -> Tuple[str, str]:
+        self._epoch = self._backend.get_scenario_epoch()
+        actual = proto.format_utcg(self._epoch)
+        requested = self._spec.window_start_utc
+        self._report.measurements["scenario_epoch_utc"] = actual
+
+        try:
+            wanted = proto.parse_utcg(requested)
+        except Exception:
+            return WARN, (f"scenario epoch is {actual}; could not parse the "
+                          f"configured window_start_utc {requested!r} to "
+                          f"compare")
+
+        offset = self._epoch.epoch_seconds - wanted.epoch_seconds
+        if abs(offset) <= 1.0:
+            return PASS, f"epoch {actual} matches window_start_utc"
+
+        # Not fatal: every offset in this study is measured FROM the
+        # scenario epoch, so the scenario is still internally consistent
+        # -- it is simply not at the epoch the spec names. That matters
+        # for reproducibility across machines and for the paper's
+        # scenario description, so it must be reported.
+        return WARN, (
+            f"scenario epoch is {actual}, {offset:+.1f} s from the "
+            f"configured window_start_utc {requested}. SetAnalysisTimePeriod "
+            f"did not take effect. The scenario is self-consistent (all "
+            f"target epochs are offsets from the scenario epoch) but is not "
+            f"the epoch the spec names, so runs are not reproducible against "
+            f"a differently-initialised STK session.")
+
+    def _check_satellite_exists(self) -> Tuple[str, str]:
+        path, how = self._resolve_object(
+            "Satellite", self._spec.spacecraft_name,
+            self._build.satellite_path if self._build else "")
+        if not path:
+            return FAIL, (
+                f"no Satellite named {self._spec.spacecraft_name!r} in the "
+                f"loaded scenario. Objects present: "
+                f"{self._object_inventory()}")
+        self._satellite = path
+        self._report.measurements["satellite_path"] = path
+        return PASS, f"{path} (resolved via {how})"
+
+    def _check_ephemeris(self) -> Tuple[str, str]:
+        """Both ends of the window, not just one.
+
+        A satellite whose analysis period is shorter than the study
+        window returns data at t=0 and nothing at t=720, which would
+        surface later as targets that mysteriously stop being visible
+        halfway through a run.
+        """
+        rows = []
+        for offset in (0.0, self._spec.window_duration_s):
+            data, _ = dp.execute(self._backend, dp.CARTESIAN_POSITION,
+                                 self._satellite, frame="ICRF",
+                                 start=self._t(offset), stop=self._t(offset),
+                                 allow_empty=True)
+            rows.append((offset, data.row_count))
+
+        empty = [offset for offset, count in rows if count == 0]
+        if empty:
+            return FAIL, (
+                f"Cartesian Position returned no rows at t="
+                f"{', '.join(f'{o:.0f}' for o in empty)} s. The satellite "
+                f"has no ephemeris there: either Propagate() was never "
+                f"called, or the scenario's analysis period does not cover "
+                f"the {self._spec.window_duration_s:.0f} s study window. "
+                f"Every data provider on this object will be silently empty.")
+        return PASS, ("ephemeris present at both ends of the "
+                      f"{self._spec.window_duration_s:.0f} s window")
+
+    def _check_orbit_elements(self) -> Tuple[str, str]:
+        """Measure the orbit rather than trusting that SetState worked.
+
+        This is the check that catches a ``SetState Classical`` argument
+        order or unit error: the command ACKs, STK keeps its default
+        orbit, targets get placed along the *default* ground track, and
+        every subsequent result is self-consistent and wrong.
+        """
+        position, velocity = self._state(0.0)
+        sma_m, ecc, inc_rad = _osculating(position, velocity)
+        inc_deg = math.degrees(inc_rad)
+
+        wanted_sma_m = self._spec.orbit["semi_major_axis_km"] * 1000.0
+        wanted_inc_deg = self._spec.orbit["inclination_deg"]
+        self._report.measurements["osculating_sma_m"] = sma_m
+        self._report.measurements["osculating_inclination_deg"] = inc_deg
+        self._report.measurements["osculating_eccentricity"] = ecc
+
+        detail = (
+            f"measured a = {sma_m / 1000.0:.3f} km "
+            f"(spec {wanted_sma_m / 1000.0:.3f} km), "
+            f"i = {inc_deg:.3f} deg (spec {wanted_inc_deg:.3f} deg), "
+            f"e = {ecc:.6f}")
+
+        problems = []
+        if abs(sma_m - wanted_sma_m) > SMA_TOLERANCE_M:
+            problems.append(
+                f"semi-major axis is off by "
+                f"{(sma_m - wanted_sma_m) / 1000.0:+.1f} km")
+        if abs(inc_deg - wanted_inc_deg) > INCLINATION_TOLERANCE_DEG:
+            problems.append(
+                f"inclination is off by {inc_deg - wanted_inc_deg:+.2f} deg")
+
+        if problems:
+            return FAIL, (
+                detail + "\n" + "; ".join(problems) + ".\n"
+                "SetState Classical did not take effect -- most likely the "
+                "argument order or the angle unit. The satellite is on "
+                "some other orbit, targets have been placed along ITS "
+                "ground track, and the whole scenario is self-consistently "
+                "measuring something other than the specified 500 km SSO.")
+        return PASS, detail
+
+    def _check_perturbations(self) -> Tuple[str, str]:
+        """Is the truth propagator actually perturbed?
+
+        Measured, not read off a propagator name. Osculating semi-major
+        axis is constant under two-body motion and oscillates by several
+        km under J2 at this altitude, so its spread across the window
+        separates HPOP/J4 from TwoBody without needing an independent
+        propagator to compare against.
+        """
+        samples = []
+        count = 13
+        for index in range(count):
+            offset = self._spec.window_duration_s * index / (count - 1)
+            position, velocity = self._state(offset)
+            samples.append(_osculating(position, velocity)[0])
+
+        spread = max(samples) - min(samples)
+        self._report.measurements["osculating_sma_spread_m"] = spread
+        named = self._propagator_name()
+        detail = (f"osculating a varies by {spread:.1f} m over the "
+                  f"{self._spec.window_duration_s:.0f} s window; STK reports "
+                  f"the propagator as {named or 'unknown'}")
+
+        if spread < PERTURBATION_SMA_SPREAD_M:
+            return WARN, (
+                detail + "\nThat is an unperturbed two-body propagation: J2 "
+                "alone would drive several km of short-period variation at "
+                "this altitude. Whatever the propagator is called, HPOP is "
+                "not integrating perturbations. The paper must not claim "
+                "HPOP truth propagation on the strength of this scenario.")
+        return PASS, detail
+
+    # -- sensor ------------------------------------------------------------
+
+    def _check_sensor_exists(self) -> Tuple[str, str]:
+        candidate = (self._build.sensor_path if self._build
+                     else f"{self._satellite}/Sensor/{self._spec.sensor.name}")
+        candidate = conv.canonical_object_path(candidate)
+        if not self._backend.object_exists(candidate):
+            return FAIL, (
+                f"no sensor at {candidate}. The study has no payload; "
+                f"nothing downstream can measure access.")
+        self._sensor = candidate
+        self._report.measurements["sensor_path"] = candidate
+        return PASS, candidate
+
+    def _check_boresight(self) -> Tuple[str, str]:
+        """Does the sensor look at the ground under the default attitude?
+
+        The +Z boresight assumption has two independent halves and
+        neither is safe to assume: that ``Point ... Fixed AzEl 0 90``
+        aims the sensor along body +Z, and that STK's default satellite
+        attitude puts body +Z towards nadir. Only their combination is
+        observable, so that is what is measured -- by placing a target
+        directly beneath the satellite and asking STK whether the sensor
+        can see it.
+
+        If it cannot, the alternative elevation (-90) is tried on a
+        scratch basis and the result reported, because "flip the
+        boresight" is precisely the fix and knowing it now saves a C3
+        debug cycle.
+        """
+        if not self._sensor:
+            return SKIP, "no sensor resolved"
+        if self.is_mock:
+            return self._skip_on_mock("sensor cones or access geometry")
+
+        probe_epoch = self._probe_epoch()
+        with self._probe_targets({"nadir": 0.0}) as probes:
+            visible = self._probe_visible(probes["nadir"], probe_epoch)
+            if visible:
+                return PASS, (
+                    "a target directly at nadir is inside the sensor cone at "
+                    f"t={probe_epoch:.0f} s, so the boresight faces the "
+                    "ground with the scenario's default attitude")
+
+            flipped = self._retry_with_flipped_boresight(
+                probes["nadir"], probe_epoch)
+
+        if flipped:
+            return FAIL, (
+                "the sensor does NOT see a target at nadir as configured, "
+                "but DOES after re-pointing to AzEl(0, -90). The boresight "
+                "is inverted: either STK's default satellite attitude puts "
+                "body -Z towards nadir, or the Point command's elevation "
+                "sign is opposite to what was assumed. Fix "
+                "scenario_builder._create_sensor and make C3's body-frame "
+                "convention match, since the twin commands attitude in the "
+                "same frame.")
+        return FAIL, (
+            "the sensor sees a target at nadir neither as configured nor "
+            "with the boresight flipped. The Point command probably had no "
+            "effect at all (the sensor may still be targeting or "
+            "nadir-locked), or the cone is degenerate. Nothing downstream "
+            "can measure access until this is resolved.")
+
+    def _check_half_angle(self) -> Tuple[str, str]:
+        """Bracket the effective half-angle rather than assert it.
+
+        Probe targets are placed at a ladder of off-nadir angles either
+        side of the specified 2.0 deg. The largest angle that is visible
+        and the smallest that is not bracket the true half-angle. A
+        single yes/no probe would report "wrong" without saying how
+        wrong, and the difference between a 2.2 deg cone and STK's
+        default 45 deg cone is the difference between a tolerance to
+        note and a command that did nothing.
+        """
+        if not self._sensor:
+            return SKIP, "no sensor resolved"
+        if self.is_mock:
+            return self._skip_on_mock("sensor cones or access geometry")
+
+        specified = self._spec.sensor.half_angle_deg
+        ladder = {f"{multiple:g}h": specified * multiple
+                  for multiple in PROBE_LADDER}
+        ladder["wide"] = PROBE_WIDE_DEG
+
+        probe_epoch = self._probe_epoch()
+        with self._probe_targets(ladder) as probes:
+            seen = {name: self._probe_visible(path, probe_epoch)
+                    for name, path in probes.items()}
+
+        visible = sorted(ladder[n] for n, ok in seen.items() if ok)
+        hidden = sorted(ladder[n] for n, ok in seen.items() if not ok)
+        lower = visible[-1] if visible else 0.0
+        upper = hidden[0] if hidden else float("inf")
+        self._report.measurements["measured_half_angle_lower_deg"] = lower
+        self._report.measurements["measured_half_angle_upper_deg"] = upper
+
+        ladder_text = ", ".join(
+            f"{ladder[name]:.2f} deg {'seen' if ok else 'not seen'}"
+            for name, ok in sorted(seen.items(), key=lambda kv: ladder[kv[0]]))
+        detail = (f"probe ladder: {ladder_text}\n"
+                  f"effective half-angle is in ({lower:.2f}, {upper:.2f}] deg")
+
+        if not visible:
+            return FAIL, (
+                detail + "\nNothing is visible, not even at nadir -- see the "
+                "boresight check; the half-angle cannot be measured until "
+                "the sensor looks at the ground.")
+        if upper == float("inf"):
+            return FAIL, (
+                detail + f"\nEven a target {PROBE_WIDE_DEG:.0f} deg off-nadir "
+                f"is inside the cone, so the Define command did nothing and "
+                f"the sensor is still at STK's default half-angle. The whole "
+                f"study depends on a narrow FOV: at this width pointing "
+                f"error stops mattering and the effect under test vanishes.")
+        if lower <= specified <= upper:
+            return PASS, detail
+        return FAIL, (
+            detail + f"\nThe specified {specified:.2f} deg lies outside the "
+            f"measured bracket. The cone angle was set in the wrong unit, or "
+            f"STK's SimpleConic 'cone angle' is a full angle rather than a "
+            f"half-angle on this version. Fix the Define command; do not "
+            f"adjust the spec to match, since the half-angle is the "
+            f"parameter the study's sensitivity rests on.")
+
+    # -- targets -----------------------------------------------------------
+
+    def _check_target_placement(self) -> Tuple[str, str]:
+        """Round-trip every target through STK's own position read-back.
+
+        The builder verified its *arithmetic* before issuing SetPosition.
+        This verifies the *result*: it re-reads the sub-satellite point
+        and the target position from STK and re-derives the cross-track
+        offset and side. That closes the loop over SetPosition's
+        argument order and angle unit, which the builder cannot check
+        by construction -- a lat/lon swap or a degrees-for-radians error
+        ACKs cleanly and puts the target somewhere else entirely.
+        """
+        lines: List[str] = []
+        problems: List[str] = []
+        unreadable: List[str] = []
+
+        for target in sorted(self._spec.targets, key=lambda t: t.t_image_s):
+            path = self._target_path(target.id)
+            if not path:
+                problems.append(f"{target.id}: no such object")
+                continue
+
+            placed = self._object_lla(path)
+            if placed is None:
+                unreadable.append(target.id)
+                continue
+
+            here = self._sub_satellite(target.t_image_s)
+            ahead = self._sub_satellite(target.t_image_s
+                                        + HEADING_SAMPLE_DT_S)
+            actual_km = great_circle_distance_m(here, placed) / 1000.0
+            side = side_of_track(here, ahead, placed)
+            wanted_km = abs(target.cross_track_km)
+            wanted_side = 1 if target.cross_track_km >= 0 else -1
+            distance_ok = abs(actual_km - wanted_km) <= 1.0
+            side_ok = side == wanted_side
+
+            lines.append(
+                f"{target.id:<3} t={target.t_image_s:6.1f}s  "
+                f"requested {target.cross_track_km:+7.1f} km  "
+                f"measured {actual_km:7.1f} km "
+                f"{_side_name(side):<8} "
+                f"{'ok' if distance_ok and side_ok else 'WRONG'}")
+            if not distance_ok:
+                problems.append(
+                    f"{target.id} is {actual_km:.1f} km from the ground "
+                    f"track, not {wanted_km:.1f} km")
+            if not side_ok:
+                problems.append(
+                    f"{target.id} is on the {_side_name(side)} of the track, "
+                    f"not the {_side_name(wanted_side)}")
+
+        detail = "\n".join(lines)
+        if unreadable:
+            detail += (f"\ncould not read a position back for: "
+                       f"{', '.join(unreadable)}")
+        if problems:
+            return FAIL, (
+                detail + "\n" + "\n".join(problems) +
+                "\nSetPosition Geodetic did not place these where the "
+                "builder computed. Check its argument order (lat before "
+                "lon?) and angle unit -- the backend forces radians, and a "
+                "value STK reads as degrees lands the target elsewhere "
+                "without any error.")
+        if unreadable and not lines:
+            return WARN, (
+                detail + "\nNo target position could be read back, so "
+                "placement is UNVERIFIED. The builder's own arithmetic "
+                "check passed, but nothing has confirmed STK agrees.")
+        if unreadable:
+            return WARN, detail
+        return PASS, detail
+
+    def _check_target_reachable(self) -> Tuple[str, str]:
+        """Is each target within the satellite's horizon at its epoch?
+
+        Deliberately satellite-to-target, not sensor-to-target. With the
+        scenario's default attitude the sensor points at nadir, so an
+        off-nadir target is correctly invisible to it -- making that the
+        test would report six failures for a scenario that is fine. What
+        matters here is that the geometry permits access at all; whether
+        the sensor achieves it is what the closed loop measures.
+        """
+        if self.is_mock:
+            return self._skip_on_mock("access geometry")
+
+        missing: List[str] = []
+        lines: List[str] = []
+        for target in sorted(self._spec.targets, key=lambda t: t.t_image_s):
+            path = self._target_path(target.id)
+            if not path:
+                missing.append(target.id)
+                continue
+            intervals = self._backend.compute_access(
+                self._satellite, path,
+                self._t(target.t_image_s - 60.0),
+                self._t(target.t_image_s + 60.0))
+            covered = any(
+                i.start.epoch_seconds
+                <= self._t(target.t_image_s).epoch_seconds
+                <= i.stop.epoch_seconds for i in intervals)
+            lines.append(f"{target.id:<3} "
+                         f"{'in view' if covered else 'NOT IN VIEW'} at "
+                         f"t={target.t_image_s:.0f}s "
+                         f"({len(intervals)} interval(s) nearby)")
+            if not covered:
+                missing.append(target.id)
+
+        detail = "\n".join(lines)
+        if missing:
+            return FAIL, (
+                detail + f"\n{', '.join(missing)} are not within the "
+                f"satellite's horizon at their image epochs. Their placement "
+                f"is wrong, or the ground track used to place them is not "
+                f"the one the satellite now flies -- re-run the builder "
+                f"after any change to the orbit or the epoch.")
+        return PASS, detail
+
+    # -- ground station ----------------------------------------------------
+
+    def _check_ground_station_exists(self) -> Tuple[str, str]:
+        config = self._spec.ground_station
+        if not config:
+            return SKIP, "no ground station in the spec"
+        name = str(config.get("name", "GS1"))
+        path, how = self._resolve_object(
+            "Facility", name,
+            self._build.ground_station_path if self._build else "")
+        if not path:
+            return WARN, (
+                f"no Facility named {name!r}. The ground station supports "
+                f"the terrain-masking argument only; the imaging experiments "
+                f"(E1-E5) do not need it.")
+        self._ground_station = path
+        self._report.measurements["ground_station_path"] = path
+        return PASS, f"{path} (resolved via {how})"
+
+    def _check_elevation_constraint(self) -> Tuple[str, str]:
+        """Compare access under the configured mask against a 0 deg mask.
+
+        A constraint that ACKed but did not apply leaves the two
+        identical. This also establishes that ``SetAzElMask`` changes
+        anything at all on this install, which the terrain check below
+        depends on being able to assume.
+        """
+        if not self._ground_station:
+            return SKIP, "no ground station"
+        if self.is_mock:
+            return self._skip_on_mock("elevation constraints")
+
+        minimum = float(self._spec.ground_station.get("min_elevation_deg",
+                                                      10.0))
+        baseline = self._contact_seconds()
+        with self._temporary_mask(0.0):
+            unmasked = self._contact_seconds()
+
+        detail = (f"contact over the window: {baseline:.1f} s as configured, "
+                  f"{unmasked:.1f} s with a 0 deg mask")
+        if unmasked <= 0.0 and baseline <= 0.0:
+            return WARN, (
+                detail + "\nNo contact at all in either case, so the "
+                "constraint is unverifiable here: the ground station is "
+                "placed on the ground track at t=600 s, and the pass should "
+                "cover it. Check the station's position before trusting any "
+                "contact-derived result.")
+        if abs(baseline - unmasked) < 1e-3:
+            return WARN, (
+                detail + f"\nIdentical, so the {minimum:.0f} deg elevation "
+                f"constraint is not being applied -- contact windows are "
+                f"optimistic by the low-elevation tails.")
+        return PASS, detail
+
+    def _check_terrain_mask(self) -> Tuple[str, str]:
+        """Terrain masking: effective, or merely ACKed?
+
+        Three access computations, because two cannot distinguish the
+        two ways this fails:
+
+        * ``terrain`` as configured;
+        * ``constant at the configured minimum elevation`` -- the
+          spherical-Earth fallback the study degrades to;
+        * ``constant well above it`` -- a control proving that
+          SetAzElMask changes access on this install at all.
+
+        If terrain equals the constant mask but the control differs, the
+        command works and terrain data simply does not cover this
+        region: the study degrades gracefully and the paper must claim
+        an elevation mask, not terrain. If all three agree, SetAzElMask
+        is doing nothing whatsoever, which is a different and worse
+        problem wearing the same symptom.
+        """
+        config = self._spec.ground_station or {}
+        if not config.get("terrain_masking", False):
+            return SKIP, "terrain masking not requested in the spec"
+        if not self._ground_station:
+            return SKIP, "no ground station"
+        if self.is_mock:
+            return self._skip_on_mock("terrain")
+
+        minimum = float(config.get("min_elevation_deg", 10.0))
+        control_deg = minimum + 10.0
+
+        terrain = self._contact_seconds()
+        with self._temporary_mask(minimum):
+            constant = self._contact_seconds()
+        with self._temporary_mask(control_deg):
+            control = self._contact_seconds()
+        restored = self._restore_configured_mask()
+
+        detail = (f"contact over the window: {terrain:.1f} s with terrain, "
+                  f"{constant:.1f} s with a constant {minimum:.0f} deg mask, "
+                  f"{control:.1f} s with a constant {control_deg:.0f} deg "
+                  f"control mask")
+        if not restored:
+            detail += ("\nWARNING: could not restore the configured mask "
+                       "after the comparison; rebuild the scenario before "
+                       "running experiments.")
+        self._report.measurements["contact_s_terrain"] = terrain
+        self._report.measurements["contact_s_constant_mask"] = constant
+
+        if abs(constant - control) < 1e-3:
+            self._report.measurements["mask_mode"] = "none"
+            return FAIL, (
+                detail + "\nEven the control mask changes nothing, so "
+                "SetAzElMask has no effect on this install regardless of "
+                "what it ACKed. No masking of any kind is being applied and "
+                "the contact windows are unconstrained line-of-sight.")
+        if abs(terrain - constant) < 1e-3:
+            self._report.measurements["mask_mode"] = "constant_elevation"
+            return WARN, (
+                detail + "\nTerrain masking produces exactly the same "
+                "contacts as a constant elevation mask, so terrain data is "
+                "not affecting this region -- either it is not loaded, or "
+                "the local horizon never rises above the elevation minimum. "
+                "The study still runs; the paper must describe the mask as a "
+                "spherical-Earth elevation mask and must NOT claim terrain "
+                "masking.")
+        self._report.measurements["mask_mode"] = "terrain"
+        return PASS, (detail + "\nTerrain changes the contact windows, so "
+                      "the mask is genuinely terrain-derived.")
+
+    # -- measurement helpers ----------------------------------------------
+
+    def _t(self, offset_s: float) -> StkTime:
+        if self._epoch is None:
+            self._epoch = self._backend.get_scenario_epoch()
+        return self._epoch + offset_s
+
+    def _state(self, offset_s: float) -> Tuple[Tuple[float, float, float],
+                                               Tuple[float, float, float]]:
+        when = self._t(offset_s)
+        position, mapping = dp.execute(
+            self._backend, dp.CARTESIAN_POSITION, self._satellite,
+            frame="ICRF", start=when, stop=when)
+        velocity, vmapping = dp.execute(
+            self._backend, dp.CARTESIAN_VELOCITY, self._satellite,
+            frame="ICRF", start=when, stop=when)
+        return (
+            tuple(dp.first_value(position, dp.CARTESIAN_POSITION, mapping, k)
+                  for k in ("x", "y", "z")),
+            tuple(dp.first_value(velocity, dp.CARTESIAN_VELOCITY, vmapping, k)
+                  for k in ("vx", "vy", "vz")),
+        )
+
+    def _sub_satellite(self, offset_s: float) -> GeoPoint:
+        point = self._object_lla(self._satellite, offset_s)
+        if point is None:
+            raise StkBridgeError(
+                f"no sub-satellite point at t={offset_s:.1f} s; the "
+                f"satellite has no ephemeris there")
+        return point
+
+    def _object_lla(self, path: str,
+                    offset_s: float = 0.0) -> Optional[GeoPoint]:
+        """Geodetic position of any object, or None if unreadable.
+
+        Facilities and targets are static, so the epoch is irrelevant for
+        them; it matters only for the satellite.
+        """
+        when = self._t(offset_s)
+        try:
+            data, mapping = dp.execute(
+                self._backend, dp.LLA_STATE, path, frame="Fixed",
+                start=when, stop=when, allow_empty=True)
+        except StkBridgeError as exc:
+            LOGGER.debug("LLA State failed on %s: %s", path, exc)
+            return None
+        if data.row_count == 0:
+            return None
+        return GeoPoint(
+            latitude_rad=dp.first_value(data, dp.LLA_STATE, mapping,
+                                        "latitude"),
+            longitude_rad=dp.first_value(data, dp.LLA_STATE, mapping,
+                                         "longitude"),
+            altitude_m=0.0,
+        )
+
+    def _probe_epoch(self) -> float:
+        """A window epoch with no scheduled imaging near it.
+
+        Probe targets are created and destroyed inside a check, but they
+        are real objects in the scenario while they exist; putting them
+        where a real target is imaged would risk a name or geometry
+        collision in a scenario a user may then keep.
+        """
+        duration = self._spec.window_duration_s
+        busy = [t.t_image_s for t in self._spec.targets]
+        for fraction in (0.75, 0.9, 0.6, 0.45, 0.3):
+            candidate = duration * fraction
+            if all(abs(candidate - t) > 30.0 for t in busy):
+                return candidate
+        return duration * 0.5
+
+    def _probe_visible(self, target_path: str, probe_epoch: float) -> bool:
+        intervals = self._backend.compute_access(
+            self._sensor, target_path,
+            self._t(probe_epoch - PROBE_ACCESS_HALF_WINDOW_S),
+            self._t(probe_epoch + PROBE_ACCESS_HALF_WINDOW_S))
+        return bool(intervals)
+
+    def _retry_with_flipped_boresight(self, target_path: str,
+                                      probe_epoch: float) -> bool:
+        """Try the opposite elevation, then put the sensor back."""
+        original = (self._build.sensor_pointing_method if self._build
+                    else "Point Fixed AzEl (radians)")
+        flipped = (f"Point {self._sensor} Fixed AzEl 0.0 "
+                   f"{-math.pi / 2.0!r} Rotate")
+        if not self._connect_ok(flipped):
+            return False
+        visible = self._probe_visible(target_path, probe_epoch)
+        restore = (f"Point {self._sensor} Fixed AzEl 0.0 "
+                   f"{math.pi / 2.0!r} Rotate")
+        if not self._connect_ok(restore):
+            LOGGER.warning("could not restore the sensor pointing after the "
+                           "boresight probe (%s)", original)
+        return visible
+
+    def _contact_seconds(self) -> float:
+        intervals = self._backend.compute_access(
+            self._ground_station, self._satellite,
+            self._t(0.0), self._t(self._spec.window_duration_s))
+        return sum(i.duration_s for i in intervals)
+
+    def _propagator_name(self) -> str:
+        try:
+            for info in self._backend.list_objects():
+                if conv.canonical_object_path(info.object_path) \
+                        == self._satellite:
+                    return info.propagator_type
+        except StkBridgeError:
+            pass
+        return ""
+
+    # -- scenario manipulation --------------------------------------------
+
+    def _connect_ok(self, command: str) -> bool:
+        try:
+            return bool(self._backend.execute_connect(command).ack)
+        except StkBridgeError as exc:
+            LOGGER.debug("connect command failed: %s (%s)", command, exc)
+            return False
+
+    class _MaskContext:
+        """Applies a constant az-el mask, then restores what was there."""
+
+        def __init__(self, verifier: "AcavScenarioVerifier",
+                     elevation_deg: float):
+            self._verifier = verifier
+            self._elevation_deg = elevation_deg
+
+        def __enter__(self) -> None:
+            path = self._verifier._ground_station
+            for command in (
+                f"SetAzElMask {path} Constant "
+                f"{math.radians(self._elevation_deg)!r}",
+                f"SetAzElMask {path} Constant {self._elevation_deg!r}",
+            ):
+                if self._verifier._connect_ok(command):
+                    return
+            LOGGER.warning("could not apply a constant %.1f deg mask",
+                           self._elevation_deg)
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            self._verifier._restore_configured_mask()
+
+    def _temporary_mask(self, elevation_deg: float) -> "_MaskContext":
+        return AcavScenarioVerifier._MaskContext(self, elevation_deg)
+
+    def _restore_configured_mask(self) -> bool:
+        """Put the mask back to what the spec asks for.
+
+        Restoring terrain unconditionally would be wrong for a spec that
+        never asked for it: the verifier would leave the scenario in a
+        state the builder never produced, and a later run would measure
+        that instead.
+        """
+        path = self._ground_station
+        if not path:
+            return True
+        config = self._spec.ground_station or {}
+        if config.get("terrain_masking", False):
+            candidates = (f"SetAzElMask {path} TerrainData 1 0.0",
+                          f"SetAzElMask {path} TerrainData")
+        else:
+            minimum = float(config.get("min_elevation_deg", 0.0))
+            candidates = (
+                f"SetAzElMask {path} Constant {math.radians(minimum)!r}",
+                f"SetAzElMask {path} Constant {minimum!r}")
+        for command in candidates:
+            if self._connect_ok(command):
+                return True
+        return False
+
+    class _ProbeTargets:
+        """Creates FOV probe targets and always removes them again.
+
+        The probes exist only for the duration of a measurement. Leaving
+        them behind would put objects in a scenario the user may save
+        and later mistake for part of the study.
+        """
+
+        def __init__(self, verifier: "AcavScenarioVerifier",
+                     angles_deg: Dict[str, float]):
+            self._verifier = verifier
+            self._angles = angles_deg
+            self._paths: Dict[str, str] = {}
+
+        def __enter__(self) -> Dict[str, str]:
+            verifier = self._verifier
+            epoch = verifier._probe_epoch()
+            here = verifier._sub_satellite(epoch)
+            ahead = verifier._sub_satellite(epoch + HEADING_SAMPLE_DT_S)
+            for name, angle_deg in self._angles.items():
+                cross_km = _cross_track_km_for_off_nadir(
+                    angle_deg, verifier._spec.altitude_km)
+                point = cross_track_offset(here, ahead, cross_km)
+                object_name = f"{_PROBE_PREFIX}_{name}".replace(".", "p")
+                path = conv.canonical_object_path(
+                    verifier._backend.create_object("Target", object_name))
+                verifier._connect_ok(
+                    f"SetPosition {path} Geodetic "
+                    f"{point.latitude_rad!r} {point.longitude_rad!r} 0.0")
+                self._paths[name] = path
+            return self._paths
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            for path in self._paths.values():
+                try:
+                    self._verifier._backend.delete_object(path)
+                except StkBridgeError:
+                    LOGGER.warning("could not delete probe target %s", path)
+
+    def _probe_targets(self, angles_deg: Dict[str, float]) -> "_ProbeTargets":
+        return AcavScenarioVerifier._ProbeTargets(self, angles_deg)
+
+    # -- object resolution -------------------------------------------------
+
+    def _resolve_object(self, object_class: str, name: str,
+                        hint: str = "") -> Tuple[str, str]:
+        """Find an object, preferring what the builder reported.
+
+        Returns ``(path, how)``; ``path`` is empty if nothing matched.
+        The path *form* matters: STK reports absolute paths but accepts
+        the ``*/`` relative form, and mixing them silently breaks
+        dictionary lookups. Everything here is canonicalised, and which
+        route succeeded is reported so a path-form problem is visible
+        rather than inferred.
+        """
+        wanted = conv.canonical_object_path(f"*/{object_class}/{name}")
+        if hint:
+            hint = conv.canonical_object_path(hint)
+            if self._backend.object_exists(hint):
+                return hint, "build report"
+        if self._backend.object_exists(wanted):
+            return wanted, "canonical path"
+        try:
+            for info in self._backend.list_objects():
+                path = conv.canonical_object_path(info.object_path)
+                if path == wanted:
+                    return path, "scenario inventory"
+        except StkBridgeError:
+            pass
+        return "", ""
+
+    def _target_path(self, target_id: str) -> str:
+        if self._build:
+            for placement in self._build.targets:
+                if placement.target_id == target_id:
+                    return placement.object_path
+        path, _ = self._resolve_object("Target", target_id)
+        return path
+
+    def _object_inventory(self) -> str:
+        try:
+            objects = self._backend.list_objects()
+        except StkBridgeError as exc:
+            return f"(could not enumerate: {exc})"
+        if not objects:
+            return "(none -- is a scenario loaded?)"
+        return ", ".join(sorted(
+            conv.canonical_object_path(o.object_path) for o in objects))
+
+
+# ---------------------------------------------------------------------------
+# Geometry helpers
+# ---------------------------------------------------------------------------
+
+def _osculating(position: Sequence[float], velocity: Sequence[float]
+                ) -> Tuple[float, float, float]:
+    """Osculating (a, e, i) from an inertial state. SI units, radians.
+
+    Vis-viva and the angular momentum vector only -- no argument of
+    perigee or true anomaly, both of which are singular for the
+    near-circular orbit this study uses and neither of which any check
+    here needs.
+    """
+    r = math.sqrt(sum(c * c for c in position))
+    v2 = sum(c * c for c in velocity)
+    if r <= 0.0:
+        raise ValueError("degenerate position vector")
+
+    energy = v2 / 2.0 - MU_EARTH / r
+    if energy >= 0.0:
+        raise ValueError(
+            f"the state is not bound (specific energy {energy:.3e} J/kg); "
+            f"|r| = {r:.1f} m, |v| = {math.sqrt(v2):.1f} m/s. If |r| looks "
+            f"like kilometres, configure_units() did not take effect.")
+    sma = -MU_EARTH / (2.0 * energy)
+
+    hx = position[1] * velocity[2] - position[2] * velocity[1]
+    hy = position[2] * velocity[0] - position[0] * velocity[2]
+    hz = position[0] * velocity[1] - position[1] * velocity[0]
+    h = math.sqrt(hx * hx + hy * hy + hz * hz)
+    inclination = math.acos(max(-1.0, min(1.0, hz / h))) if h > 0.0 else 0.0
+
+    rv = sum(p * v for p, v in zip(position, velocity))
+    ex = ((v2 - MU_EARTH / r) * position[0] - rv * velocity[0]) / MU_EARTH
+    ey = ((v2 - MU_EARTH / r) * position[1] - rv * velocity[1]) / MU_EARTH
+    ez = ((v2 - MU_EARTH / r) * position[2] - rv * velocity[2]) / MU_EARTH
+    eccentricity = math.sqrt(ex * ex + ey * ey + ez * ez)
+
+    return sma, eccentricity, inclination
+
+
+def _cross_track_km_for_off_nadir(off_nadir_deg: float,
+                                  altitude_km: float) -> float:
+    """Inverse of :func:`acav.slew_model.off_nadir_angle_deg`.
+
+    Solved by bisection rather than algebraically: the forward function
+    is the study's contract for this geometry, and inverting it
+    numerically guarantees the two agree exactly, where a hand-derived
+    closed form could drift from it after an edit.
+    """
+    if off_nadir_deg <= 0.0:
+        return 0.0
+    low, high = 0.0, 3000.0
+    for _ in range(80):
+        middle = 0.5 * (low + high)
+        if off_nadir_angle_deg(middle, altitude_km) < off_nadir_deg:
+            low = middle
+        else:
+            high = middle
+    return 0.5 * (low + high)
+
+
+def _side_name(side: int) -> str:
+    return {1: "right", -1: "left", 0: "on-track"}.get(side, "?")

@@ -97,6 +97,12 @@ class _MockObject:
     rate_samples: List[Tuple[float, Tuple[float, float, float]]] = \
         field(default_factory=list)
 
+    #: (latitude_rad, longitude_rad, altitude_m) if the object was
+    #: placed with `SetPosition ... Geodetic`. Static objects -- targets
+    #: and facilities -- have no propagator, so this is the only thing
+    #: that gives them a position at all.
+    geodetic: Optional[Tuple[float, float, float]] = None
+
     dropped_positions: int = 0
     dropped_attitudes: int = 0
 
@@ -507,6 +513,21 @@ class MockBackend(StkBackend):
 
     def _lla_columns(self, obj: _MockObject):
         def build(when: float) -> Dict[str, float]:
+            if obj.geodetic is not None:
+                latitude, longitude, altitude = obj.geodetic
+                return {"Lat": latitude, "Lon": longitude, "Alt": altitude}
+            if obj.object_type != "Satellite":
+                # Do NOT fall through to the orbit propagator. An
+                # unplaced target would otherwise report the SATELLITE's
+                # sub-point -- a plausible position for the wrong object,
+                # which is the exact class of silent wrongness this mock
+                # exists to expose rather than imitate.
+                raise QueryError(
+                    "LLA State", obj.path,
+                    f"{obj.object_type} {obj.path} has no position; the "
+                    f"mock only propagates satellites and objects placed "
+                    f"with SetPosition ... Geodetic",
+                )
             position, _ = self._propagate(obj, when)
             x, y, z = position
             r = math.sqrt(x * x + y * y + z * z)
@@ -678,15 +699,48 @@ class MockBackend(StkBackend):
 
     def execute_connect(self, command: str,
                         timeout_s: Optional[float] = None) -> ConnectResponse:
-        """Accept anything, echo it back, change nothing.
+        """Accept anything, echo it back, change almost nothing.
 
-        Returning ACK for arbitrary commands is intentional: tests that
-        exercise the ``ExecuteConnect`` service should verify plumbing,
-        not that the mock reimplements the Connect command set.
+        Returning ACK for arbitrary commands is intentional, and is
+        itself one of STK's behaviours worth reproducing: an ACK means
+        the command parsed, never that it had an effect. Anything that
+        checks whether a Connect command *worked* must measure the
+        result, not read the return value.
+
+        The single exception is ``SetPosition ... Geodetic``, which is
+        interpreted rather than merely acknowledged. Static objects have
+        no other way to acquire a position, so without this a target's
+        placement could not be read back and verified offline at all --
+        and the round-trip through a stored position is what catches an
+        argument-order or angle-unit error in the caller.
         """
+        self._maybe_set_geodetic(command)
         return ConnectResponse(command=command, ack=True,
                                messages=[f"MOCK ACK: {command}"],
                                raw=f"MOCK ACK: {command}")
+
+    def _maybe_set_geodetic(self, command: str) -> None:
+        """Interpret `SetPosition <path> Geodetic <lat> <lon> <alt>`.
+
+        Values are taken as radians and metres, matching the SI unit
+        contract the backends declare. A caller passing degrees is
+        therefore stored as degrees-interpreted-as-radians and reads
+        back somewhere absurd -- which is what real STK does too, and
+        what the verifier's placement check is looking for.
+        """
+        tokens = command.split()
+        if len(tokens) < 6 or tokens[0].lower() != "setposition":
+            return
+        if tokens[2].lower() != "geodetic":
+            return
+        obj = self._objects.get(tokens[1])
+        if obj is None:
+            return
+        try:
+            values = tuple(float(token) for token in tokens[3:6])
+        except ValueError:
+            return
+        obj.geodetic = values
 
     # -- test introspection ------------------------------------------------
 

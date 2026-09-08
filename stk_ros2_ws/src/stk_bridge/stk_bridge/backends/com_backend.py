@@ -691,7 +691,36 @@ class ComBackend(StkBackend):
                                    "EXTERNAL propagator requires external_file")
             self.load_external_ephemeris(object_path, external_file)
         else:
-            self._execute(f"SetPropagator {object_path} {propagator.value}")
+            # Confirmed on a live STK 12.6 install for RealTime: the
+            # Connect form of SetPropagator fails ("Command has failed.")
+            # while SetPropagatorType on the Object Model succeeds. The
+            # same is assumed to apply to the analytic propagators, so
+            # the typed path is tried FIRST and Connect is the fallback
+            # -- the reverse of the original ordering, which would have
+            # spent a failed round trip on every call.
+            enum_member = {
+                PropagatorType.TWO_BODY: "ePropagatorTwoBody",
+                PropagatorType.J4_PERTURBATION: "ePropagatorJ4Perturbation",
+                PropagatorType.HPOP: "ePropagatorHPOP",
+            }.get(propagator)
+
+            applied = False
+            if enum_member is not None:
+                try:
+                    enum_type = self._resolve_enum("AgEVePropagatorType",
+                                                   "VePropagatorType")
+                    satellite = self._get_object(object_path)
+                    satellite.SetPropagatorType(getattr(enum_type,
+                                                        enum_member))
+                    applied = True
+                except Exception as exc:
+                    LOGGER.debug("SetPropagatorType(%s) failed on %s: %s; "
+                                 "falling back to Connect",
+                                 enum_member, object_path, exc)
+
+            if not applied:
+                self._execute(
+                    f"SetPropagator {object_path} {propagator.value}")
 
     def _configure_realtime_durations(self, object_path: str,
                                       look_ahead_s: float,
