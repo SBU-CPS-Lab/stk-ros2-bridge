@@ -46,9 +46,9 @@ pip install -r src\stk_bridge\requirements.txt
 ## 4. Build the workspace
 
 ```powershell
-cd stk_ros2_ws
+cd path\stk_ros2_ws
+call path\ros2-windows\local_setup.bat
 colcon build --symlink-install
-. install\local_setup.ps1
 ```
 
 ## 5. Verify the environment
