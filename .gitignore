@@ -7,7 +7,9 @@ slprj/
 
 # STK-ROS2
 build/
+build_windows/
 install/
+install_windows/
 log/
 __pycache__/
 *.pyc
