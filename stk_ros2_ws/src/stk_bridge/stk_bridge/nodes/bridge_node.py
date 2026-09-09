@@ -467,7 +467,7 @@ def main(args=None) -> None:
     node = Node("stk_bridge")
 
     node.declare_parameter("config_file", "")
-    node.declare_parameter("use_sim_time", True)
+    # node.declare_parameter("use_sim_time", True)
 
     config_path = node.get_parameter("config_file").value
     config = load_config(config_path)
