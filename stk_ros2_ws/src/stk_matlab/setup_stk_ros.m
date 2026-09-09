@@ -54,33 +54,28 @@ function setup_stk_ros(varargin)
             msgPkgDir);
     end
 
-    % ros2genmsg scans a *folder tree containing msg/srv/action
-    % directories*, and (per MathWorks documentation) that folder must
-    % NOT be named exactly like an existing ROS 2 package it will
-    % generate a class for confusion with. Point it at the stk_msgs
-    % package folder directly, matching the source-of-truth files
-    % declared in stk_msgs/CMakeLists.txt -- see that file's note on
-    % why .msg/.srv/.action stay the single source of truth for BOTH
-    % the colcon build and this MATLAB build.
-    genFolder = fullfile(matlabDir, 'generated_msgs');
-    alreadyBuilt = isfolder(genFolder) && ...
-        ~isempty(dir(fullfile(genFolder, 'matlab_msg_gen*')));
+    % R2023b expects the parent directory containing the ROS packages.
+    % It writes matlab_msg_gen/<architecture> beneath that directory;
+    % there is no 'FolderPath' name-value option for an output folder.
+    msgRoot = fileparts(msgPkgDir);
+    genFolder = fullfile(msgRoot, 'matlab_msg_gen', computer('arch'));
+    installFolder = fullfile(genFolder, 'install');
+    % VersionInfo.mat is written after a successful build/registration.
+    alreadyBuilt = isfolder(installFolder) && ...
+        isfile(fullfile(genFolder, 'src', 'VersionInfo.mat'));
 
     if alreadyBuilt && ~p.Results.Rebuild
-        fprintf(['  generated_msgs already exists; skipping ros2genmsg ' ...
+        fprintf(['  generated messages already built; skipping ros2genmsg ' ...
                  '(pass ''Rebuild'', true to force).\n']);
     else
-        fprintf('  running ros2genmsg on %s ...\n', msgPkgDir);
+        fprintf('  running ros2genmsg on %s ...\n', msgRoot);
         fprintf(['  (this compiles C++ against your MATLAB-bundled ROS 2 ' ...
                  'client libraries; on Windows it requires MSVC -- see ' ...
                  'this function''s help text if it fails here)\n']);
-        if ~isfolder(genFolder)
-            mkdir(genFolder);
-        end
-        ros2genmsg(fileparts(msgPkgDir), 'FolderPath', genFolder); %#ok<*NASGU>
+        ros2genmsg(msgRoot);
     end
 
-    addpath(genpath(genFolder));
+    addpath(genpath(installFolder));
     fprintf('  added generated message path\n');
 
     fprintf('  checking ROS 2 network...\n');
