@@ -59,6 +59,22 @@ function setup_stk_ros(varargin)
     % there is no 'FolderPath' name-value option for an output folder.
     msgRoot = fileparts(msgPkgDir);
     genFolder = fullfile(msgRoot, 'matlab_msg_gen', computer('arch'));
+
+    % ros2genmsg writes its output under src/, and part of that output is
+    % matlab_msg_gen/<arch>/src/stk_msgs -- a copy of the very package it
+    % was pointed at. colcon skips build/ and install/ by name but not
+    % that one, so it then discovers stk_msgs twice and the workspace
+    % build fails on a duplicate package name. A COLCON_IGNORE marker at
+    % the top of the generated tree is the standard remedy; verified
+    % against colcon on Humble.
+    msgGenRoot = fullfile(msgRoot, 'matlab_msg_gen');
+    if ~isfolder(msgGenRoot)
+        mkdir(msgGenRoot);
+    end
+    markerFile = fullfile(msgGenRoot, 'COLCON_IGNORE');
+    if ~isfile(markerFile)
+        fclose(fopen(markerFile, 'w'));
+    end
     installFolder = fullfile(genFolder, 'install');
     % VersionInfo.mat is written after a successful build/registration.
     alreadyBuilt = isfolder(installFolder) && ...

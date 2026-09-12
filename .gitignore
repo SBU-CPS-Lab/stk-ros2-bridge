@@ -4,6 +4,15 @@
 *.asv
 slprj/
 *.slx.*
+Physical Models/**/*.mat
+
+# STK
+# Scenario directories STK writes next to the repo. Never ignore *.xml
+# globally: ROS 2 package manifests are package.xml, and a global rule
+# silently excluded all three of them, so a fresh clone could not be
+# built at all.
+AGI STK/
+!package.xml
 
 # STK-ROS2
 build/

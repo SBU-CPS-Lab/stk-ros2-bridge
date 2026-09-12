@@ -467,7 +467,13 @@ def main(args=None) -> None:
     node = Node("stk_bridge")
 
     node.declare_parameter("config_file", "")
-    # node.declare_parameter("use_sim_time", True)
+    # Do NOT declare use_sim_time here. rclpy pre-declares it for every
+    # node (confirmed on Humble: declaring it raises
+    # ParameterAlreadyDeclaredException and the node never starts), and
+    # the bridge has no use for it anyway -- it is the clock *source*,
+    # stamping every message from STK time rather than from
+    # node.get_clock(). It is the downstream consumers that need
+    # use_sim_time, and the launch files set it for them.
 
     config_path = node.get_parameter("config_file").value
     config = load_config(config_path)

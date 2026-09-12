@@ -53,7 +53,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from stk_bridge.backends import connect_protocol as proto
 from stk_bridge.backends.base import BackendType, StkBackend, StkTime
@@ -70,13 +70,18 @@ from acav.ground_track import (
 from acav.scenario_builder import HEADING_SAMPLE_DT_S, BuildReport
 from acav.slew_model import off_nadir_angle_deg
 from acav.spec import AcavSpec
+from acav.stk_queries import (
+    AngleScale,
+    measure_angle_scale,
+    osculating_elements,
+    read_geodetic,
+    read_state,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 PASS, WARN, FAIL, SKIP = "PASS", "WARN", "FAIL", "SKIP"
 
-#: Earth gravitational parameter, m^3/s^2 -- the value STK uses.
-MU_EARTH = 3.986004418e14
 
 #: Semi-major axis tolerance, metres. HPOP reports *osculating*
 #: elements, which differ from the mean elements the YAML specifies by a
@@ -95,6 +100,13 @@ INCLINATION_TOLERANCE_DEG = 1.0
 #: km of short-period oscillation at this altitude, so a spread of tens
 #: of metres can only be an unperturbed two-body propagation.
 PERTURBATION_SMA_SPREAD_M = 200.0
+
+#: Placement tolerance, km. Wider than the builder's own 1 km check on
+#: purpose: the builder compares two points it computed on a sphere,
+#: while this compares a spherical placement against the geodetic
+#: position STK reports for it. Those disagree by a few hundred metres
+#: over these offsets, which is real and expected rather than a fault.
+PLACEMENT_TOLERANCE_KM = 2.0
 
 #: Half-width of the access window used to test whether a probe target
 #: is inside the sensor cone at its design epoch. The 2.0 deg cone gives
@@ -209,6 +221,15 @@ class AcavScenarioVerifier:
         self._report = VerificationReport(
             backend_type=backend.backend_type.value, scenario_name=spec.name)
         self._epoch: Optional[StkTime] = None
+        self._angle_scale = AngleScale()
+        self._last_read_diagnostic = ""
+        #: Probe-ladder measurement, taken once and read by both the
+        #: boresight and the half-angle check. They are two conclusions
+        #: from one experiment, and running the probes twice would both
+        #: cost a second set of access computations and let the two
+        #: conclusions be drawn from different measurements.
+        self._fov: Optional[Dict[str, object]] = None
+        self._orbit_ok = False
         self._satellite = ""
         self._sensor = ""
         self._ground_station = ""
@@ -239,6 +260,7 @@ class AcavScenarioVerifier:
             return self._report
 
         self._run("Satellite has ephemeris", self._check_ephemeris)
+        self._run("Angles are reported in radians", self._check_angle_unit)
         self._run("Orbit matches the specified 500 km SSO",
                   self._check_orbit_elements)
         self._run("Propagator applies perturbations",
@@ -348,6 +370,32 @@ class AcavScenarioVerifier:
         return PASS, ("ephemeris present at both ends of the "
                       f"{self._spec.window_duration_s:.0f} s window")
 
+    def _check_angle_unit(self) -> Tuple[str, str]:
+        """Does STK report angles in the radians the SI contract promises?
+
+        Measured against the Fixed-frame Cartesian position, whose unit
+        is not in doubt. This is a bridge-level contract, not a
+        case-study one: if angles come back in degrees then
+        core/sensing.py hands the twin attitudes and positions 57x too
+        large, and no amount of correction inside the case study fixes
+        the closed loop.
+        """
+        self._angle_scale = measure_angle_scale(
+            self._backend, self._satellite,
+            [self._t(self._spec.window_duration_s * fraction)
+             for fraction in (0.25, 0.5, 0.75, 0.1, 0.9, 0.0)])
+        self._report.measurements["angle_read_unit"] = self._angle_scale.name
+        if not self._angle_scale.measured:
+            return WARN, self._angle_scale.detail
+        if self._angle_scale.factor == 1.0:
+            return PASS, self._angle_scale.detail
+        return FAIL, (
+            self._angle_scale.detail + "\nThe backend's SI unit contract "
+            "(backends/base.py) is not holding on this install. The case "
+            "study compensates locally for its own reads, but the bridge's "
+            "sensing path does not -- fix configure_units() before running "
+            "any experiment.")
+
     def _check_orbit_elements(self) -> Tuple[str, str]:
         """Measure the orbit rather than trusting that SetState worked.
 
@@ -356,8 +404,9 @@ class AcavScenarioVerifier:
         orbit, targets get placed along the *default* ground track, and
         every subsequent result is self-consistent and wrong.
         """
+        self._orbit_ok = False
         position, velocity = self._state(0.0)
-        sma_m, ecc, inc_rad = _osculating(position, velocity)
+        sma_m, ecc, inc_rad = osculating_elements(position, velocity)
         inc_deg = math.degrees(inc_rad)
 
         wanted_sma_m = self._spec.orbit["semi_major_axis_km"] * 1000.0
@@ -389,6 +438,7 @@ class AcavScenarioVerifier:
                 "some other orbit, targets have been placed along ITS "
                 "ground track, and the whole scenario is self-consistently "
                 "measuring something other than the specified 500 km SSO.")
+        self._orbit_ok = True
         return PASS, detail
 
     def _check_perturbations(self) -> Tuple[str, str]:
@@ -400,12 +450,22 @@ class AcavScenarioVerifier:
         separates HPOP/J4 from TwoBody without needing an independent
         propagator to compare against.
         """
+        if not self._orbit_ok:
+            return SKIP, (
+                "the satellite is not on the specified orbit, and the "
+                "threshold this check uses is calibrated for the near-polar "
+                "500 km SSO. On the first live run it reported an 82.6 m "
+                "spread as 'unperturbed' while the satellite was actually "
+                "at 1.7 deg inclination, where J2's short-period signature "
+                "is far smaller -- a conclusion the measurement did not "
+                "support. Fix the orbit and re-run.")
+
         samples = []
         count = 13
         for index in range(count):
             offset = self._spec.window_duration_s * index / (count - 1)
             position, velocity = self._state(offset)
-            samples.append(_osculating(position, velocity)[0])
+            samples.append(osculating_elements(position, velocity)[0])
 
         spread = max(samples) - min(samples)
         self._report.measurements["osculating_sma_spread_m"] = spread
@@ -437,6 +497,57 @@ class AcavScenarioVerifier:
         self._report.measurements["sensor_path"] = candidate
         return PASS, candidate
 
+    def _measure_fov(self) -> Dict[str, object]:
+        """Run the probe ladder once; both sensor checks read this.
+
+        Returns a dict with the visibility of each probe angle, the
+        bracket they imply, and -- where the backend can reach the
+        Object Model -- the cone half-angle STK actually holds for the
+        sensor. The direct read is worth having even alongside the
+        probes: it separates "the Define command did not apply" from
+        "it applied in the wrong unit" without inferring anything from
+        access geometry.
+        """
+        if self._fov is not None:
+            return self._fov
+
+        specified = self._spec.sensor.half_angle_deg
+        ladder = {f"{multiple:g}h": specified * multiple
+                  for multiple in PROBE_LADDER}
+        ladder["wide"] = PROBE_WIDE_DEG
+
+        probe_epoch = self._probe_epoch()
+        with self._probe_targets(ladder) as probes:
+            seen = {name: self._probe_visible(path, probe_epoch)
+                    for name, path in probes.items()}
+            nadir_visible = seen.get("0h", False)
+            flipped_visible = False
+            if not nadir_visible:
+                flipped_visible = self._retry_with_flipped_boresight(
+                    probes["0h"], probe_epoch)
+
+        visible = sorted(ladder[n] for n, ok in seen.items() if ok)
+        hidden = sorted(ladder[n] for n, ok in seen.items() if not ok)
+
+        self._fov = {
+            "ladder": ladder,
+            "seen": seen,
+            "lower": visible[-1] if visible else 0.0,
+            "upper": hidden[0] if hidden else float("inf"),
+            "nadir_visible": nadir_visible,
+            "flipped_visible": flipped_visible,
+            "probe_epoch": probe_epoch,
+            "reported_half_angle_deg": self._reported_half_angle_deg(),
+        }
+        return self._fov
+
+    def _reported_half_angle_deg(self) -> Optional[float]:
+        try:
+            value = self._backend.get_sensor_cone_half_angle_rad(self._sensor)
+        except StkBridgeError:
+            return None
+        return None if value is None else math.degrees(value)
+
     def _check_boresight(self) -> Tuple[str, str]:
         """Does the sensor look at the ground under the default attitude?
 
@@ -444,33 +555,38 @@ class AcavScenarioVerifier:
         neither is safe to assume: that ``Point ... Fixed AzEl 0 90``
         aims the sensor along body +Z, and that STK's default satellite
         attitude puts body +Z towards nadir. Only their combination is
-        observable, so that is what is measured -- by placing a target
-        directly beneath the satellite and asking STK whether the sensor
-        can see it.
+        observable, so that is what is measured.
 
-        If it cannot, the alternative elevation (-90) is tried on a
-        scratch basis and the result reported, because "flip the
-        boresight" is precisely the fix and knowing it now saves a C3
-        debug cycle.
+        **The conclusion is gated on the cone being narrow.** On the
+        first live run this check reported PASS while the sensor was at
+        STK's 45 deg default -- a cone that wide sees a nadir target
+        whatever the boresight is doing, so the test proved nothing and
+        said it had proved something. A pass is only meaningful when the
+        cone is tight enough for the nadir probe to discriminate.
         """
         if not self._sensor:
             return SKIP, "no sensor resolved"
         if self.is_mock:
             return self._skip_on_mock("sensor cones or access geometry")
 
-        probe_epoch = self._probe_epoch()
-        with self._probe_targets({"nadir": 0.0}) as probes:
-            visible = self._probe_visible(probes["nadir"], probe_epoch)
-            if visible:
-                return PASS, (
-                    "a target directly at nadir is inside the sensor cone at "
-                    f"t={probe_epoch:.0f} s, so the boresight faces the "
-                    "ground with the scenario's default attitude")
+        fov = self._measure_fov()
+        specified = self._spec.sensor.half_angle_deg
+        wide = fov["upper"] == float("inf") or fov["lower"] > 3.0 * specified
 
-            flipped = self._retry_with_flipped_boresight(
-                probes["nadir"], probe_epoch)
-
-        if flipped:
+        if fov["nadir_visible"] and wide:
+            return WARN, (
+                f"a target at nadir is inside the cone, but the cone is "
+                f"wider than {fov['lower']:.1f} deg -- at that width it "
+                f"would see nadir whatever the boresight is doing, so this "
+                f"says nothing about the boresight. Fix the cone half-angle "
+                f"and re-run; this check cannot discriminate until then.")
+        if fov["nadir_visible"]:
+            return PASS, (
+                f"a target directly at nadir is inside the "
+                f"{fov['upper']:.2f} deg cone at "
+                f"t={fov['probe_epoch']:.0f} s, so the boresight faces the "
+                f"ground with the scenario's default attitude")
+        if fov["flipped_visible"]:
             return FAIL, (
                 "the sensor does NOT see a target at nadir as configured, "
                 "but DOES after re-pointing to AzEl(0, -90). The boresight "
@@ -490,13 +606,13 @@ class AcavScenarioVerifier:
     def _check_half_angle(self) -> Tuple[str, str]:
         """Bracket the effective half-angle rather than assert it.
 
-        Probe targets are placed at a ladder of off-nadir angles either
-        side of the specified 2.0 deg. The largest angle that is visible
-        and the smallest that is not bracket the true half-angle. A
-        single yes/no probe would report "wrong" without saying how
-        wrong, and the difference between a 2.2 deg cone and STK's
-        default 45 deg cone is the difference between a tolerance to
-        note and a command that did nothing.
+        Probe targets sit at a ladder of off-nadir angles either side of
+        the specified 2.0 deg. The largest visible angle and the
+        smallest hidden one bracket the truth. A single yes/no probe
+        would report "wrong" without saying how wrong, and the
+        difference between a 2.2 deg cone and STK's untouched 45 deg
+        default is the difference between a tolerance to note and a
+        command that did nothing.
         """
         if not self._sensor:
             return SKIP, "no sensor resolved"
@@ -504,19 +620,9 @@ class AcavScenarioVerifier:
             return self._skip_on_mock("sensor cones or access geometry")
 
         specified = self._spec.sensor.half_angle_deg
-        ladder = {f"{multiple:g}h": specified * multiple
-                  for multiple in PROBE_LADDER}
-        ladder["wide"] = PROBE_WIDE_DEG
-
-        probe_epoch = self._probe_epoch()
-        with self._probe_targets(ladder) as probes:
-            seen = {name: self._probe_visible(path, probe_epoch)
-                    for name, path in probes.items()}
-
-        visible = sorted(ladder[n] for n, ok in seen.items() if ok)
-        hidden = sorted(ladder[n] for n, ok in seen.items() if not ok)
-        lower = visible[-1] if visible else 0.0
-        upper = hidden[0] if hidden else float("inf")
+        fov = self._measure_fov()
+        ladder, seen = fov["ladder"], fov["seen"]
+        lower, upper = fov["lower"], fov["upper"]
         self._report.measurements["measured_half_angle_lower_deg"] = lower
         self._report.measurements["measured_half_angle_upper_deg"] = upper
 
@@ -526,25 +632,31 @@ class AcavScenarioVerifier:
         detail = (f"probe ladder: {ladder_text}\n"
                   f"effective half-angle is in ({lower:.2f}, {upper:.2f}] deg")
 
-        if not visible:
+        reported = fov["reported_half_angle_deg"]
+        if reported is not None:
+            self._report.measurements["reported_half_angle_deg"] = reported
+            detail += f"\nSTK reports the cone angle as {reported:.4f} deg"
+
+        if not fov["nadir_visible"]:
             return FAIL, (
                 detail + "\nNothing is visible, not even at nadir -- see the "
                 "boresight check; the half-angle cannot be measured until "
                 "the sensor looks at the ground.")
         if upper == float("inf"):
             return FAIL, (
-                detail + f"\nEven a target {PROBE_WIDE_DEG:.0f} deg off-nadir "
-                f"is inside the cone, so the Define command did nothing and "
-                f"the sensor is still at STK's default half-angle. The whole "
-                f"study depends on a narrow FOV: at this width pointing "
-                f"error stops mattering and the effect under test vanishes.")
+                detail + f"\nEven a target {PROBE_WIDE_DEG:.0f} deg "
+                f"off-nadir is inside the cone, so the pattern command did "
+                f"nothing and the sensor is still at STK's default "
+                f"half-angle. The whole study depends on a narrow FOV: at "
+                f"this width pointing error stops mattering and the effect "
+                f"under test vanishes.")
         if lower <= specified <= upper:
             return PASS, detail
         return FAIL, (
             detail + f"\nThe specified {specified:.2f} deg lies outside the "
             f"measured bracket. The cone angle was set in the wrong unit, or "
             f"STK's SimpleConic 'cone angle' is a full angle rather than a "
-            f"half-angle on this version. Fix the Define command; do not "
+            f"half-angle on this version. Fix the pattern command; do not "
             f"adjust the spec to match, since the half-angle is the "
             f"parameter the study's sensitivity rests on.")
 
@@ -564,6 +676,7 @@ class AcavScenarioVerifier:
         lines: List[str] = []
         problems: List[str] = []
         unreadable: List[str] = []
+        diagnostic = ""
 
         for target in sorted(self._spec.targets, key=lambda t: t.t_image_s):
             path = self._target_path(target.id)
@@ -574,6 +687,8 @@ class AcavScenarioVerifier:
             placed = self._object_lla(path)
             if placed is None:
                 unreadable.append(target.id)
+                if not diagnostic:
+                    diagnostic = self._last_read_diagnostic
                 continue
 
             here = self._sub_satellite(target.t_image_s)
@@ -583,7 +698,7 @@ class AcavScenarioVerifier:
             side = side_of_track(here, ahead, placed)
             wanted_km = abs(target.cross_track_km)
             wanted_side = 1 if target.cross_track_km >= 0 else -1
-            distance_ok = abs(actual_km - wanted_km) <= 1.0
+            distance_ok = abs(actual_km - wanted_km) <= PLACEMENT_TOLERANCE_KM
             side_ok = side == wanted_side
 
             lines.append(
@@ -605,6 +720,8 @@ class AcavScenarioVerifier:
         if unreadable:
             detail += (f"\ncould not read a position back for: "
                        f"{', '.join(unreadable)}")
+            if diagnostic:
+                detail += "\n" + diagnostic
         if problems:
             return FAIL, (
                 detail + "\n" + "\n".join(problems) +
@@ -702,8 +819,17 @@ class AcavScenarioVerifier:
         minimum = float(self._spec.ground_station.get("min_elevation_deg",
                                                       10.0))
         baseline = self._contact_seconds()
-        with self._temporary_mask(0.0):
-            unmasked = self._contact_seconds()
+        with self._temporary_mask(0.0) as applied:
+            unmasked = self._contact_seconds() if applied else None
+
+        if unmasked is None:
+            return SKIP, (
+                f"contact over the window is {baseline:.1f} s, but no "
+                f"SetAzElMask form was accepted, so the 0 deg control could "
+                f"not be applied and nothing was measured. This is NOT "
+                f"evidence that the {minimum:.0f} deg constraint is missing "
+                f"-- it is evidence that the mask command does not work "
+                f"here. See the builder's rejected-command list for why.")
 
         detail = (f"contact over the window: {baseline:.1f} s as configured, "
                   f"{unmasked:.1f} s with a 0 deg mask")
@@ -752,11 +878,23 @@ class AcavScenarioVerifier:
         control_deg = minimum + 10.0
 
         terrain = self._contact_seconds()
-        with self._temporary_mask(minimum):
-            constant = self._contact_seconds()
-        with self._temporary_mask(control_deg):
-            control = self._contact_seconds()
+        with self._temporary_mask(minimum) as applied_constant:
+            constant = self._contact_seconds() if applied_constant else None
+        with self._temporary_mask(control_deg) as applied_control:
+            control = self._contact_seconds() if applied_control else None
         restored = self._restore_configured_mask()
+
+        if constant is None or control is None:
+            self._report.measurements["mask_mode"] = "unmeasurable"
+            return SKIP, (
+                f"contact over the window is {terrain:.1f} s, but no "
+                f"SetAzElMask form was accepted, so neither the constant "
+                f"comparison nor the control could be applied. Nothing here "
+                f"distinguishes terrain masking from no masking, and "
+                f"reporting a verdict from three identical numbers -- which "
+                f"is what the first live run did -- would be an inference "
+                f"from an experiment that never ran. The builder's "
+                f"rejected-command list has the reason SetAzElMask failed.")
 
         detail = (f"contact over the window: {terrain:.1f} s with terrain, "
                   f"{constant:.1f} s with a constant {minimum:.0f} deg mask, "
@@ -799,19 +937,7 @@ class AcavScenarioVerifier:
 
     def _state(self, offset_s: float) -> Tuple[Tuple[float, float, float],
                                                Tuple[float, float, float]]:
-        when = self._t(offset_s)
-        position, mapping = dp.execute(
-            self._backend, dp.CARTESIAN_POSITION, self._satellite,
-            frame="ICRF", start=when, stop=when)
-        velocity, vmapping = dp.execute(
-            self._backend, dp.CARTESIAN_VELOCITY, self._satellite,
-            frame="ICRF", start=when, stop=when)
-        return (
-            tuple(dp.first_value(position, dp.CARTESIAN_POSITION, mapping, k)
-                  for k in ("x", "y", "z")),
-            tuple(dp.first_value(velocity, dp.CARTESIAN_VELOCITY, vmapping, k)
-                  for k in ("vx", "vy", "vz")),
-        )
+        return read_state(self._backend, self._satellite, self._t(offset_s))
 
     def _sub_satellite(self, offset_s: float) -> GeoPoint:
         point = self._object_lla(self._satellite, offset_s)
@@ -825,26 +951,18 @@ class AcavScenarioVerifier:
                     offset_s: float = 0.0) -> Optional[GeoPoint]:
         """Geodetic position of any object, or None if unreadable.
 
-        Facilities and targets are static, so the epoch is irrelevant for
-        them; it matters only for the satellite.
+        Facilities and targets are static, so the epoch is irrelevant
+        for them; it matters only for the satellite. The last failed
+        read's diagnostic -- including the object's provider inventory
+        -- is kept so the caller can report *why* rather than just that
+        nothing came back.
         """
-        when = self._t(offset_s)
-        try:
-            data, mapping = dp.execute(
-                self._backend, dp.LLA_STATE, path, frame="Fixed",
-                start=when, stop=when, allow_empty=True)
-        except StkBridgeError as exc:
-            LOGGER.debug("LLA State failed on %s: %s", path, exc)
+        read = read_geodetic(self._backend, path, self._t(offset_s),
+                             self._angle_scale)
+        if not read.ok:
+            self._last_read_diagnostic = read.diagnostic
             return None
-        if data.row_count == 0:
-            return None
-        return GeoPoint(
-            latitude_rad=dp.first_value(data, dp.LLA_STATE, mapping,
-                                        "latitude"),
-            longitude_rad=dp.first_value(data, dp.LLA_STATE, mapping,
-                                         "longitude"),
-            altitude_m=0.0,
-        )
+        return read.point
 
     def _probe_epoch(self) -> float:
         """A window epoch with no scheduled imaging near it.
@@ -918,18 +1036,31 @@ class AcavScenarioVerifier:
                      elevation_deg: float):
             self._verifier = verifier
             self._elevation_deg = elevation_deg
+            self.applied = False
 
-        def __enter__(self) -> None:
+        def __enter__(self) -> bool:
+            """Returns whether the mask was actually applied.
+
+            Callers must branch on this. On the first live run every
+            SetAzElMask form was rejected, and the checks below went on
+            to compare the unmasked baseline against itself and report
+            the result as evidence about masking -- a conclusion drawn
+            from an experiment whose treatment never ran.
+            """
             path = self._verifier._ground_station
+            # Degrees first, matching every other angle-bearing Connect
+            # command measured on this install.
             for command in (
+                f"SetAzElMask {path} Constant {self._elevation_deg!r}",
                 f"SetAzElMask {path} Constant "
                 f"{math.radians(self._elevation_deg)!r}",
-                f"SetAzElMask {path} Constant {self._elevation_deg!r}",
             ):
                 if self._verifier._connect_ok(command):
-                    return
+                    self.applied = True
+                    return True
             LOGGER.warning("could not apply a constant %.1f deg mask",
                            self._elevation_deg)
+            return False
 
         def __exit__(self, exc_type, exc, tb) -> None:
             self._verifier._restore_configured_mask()
@@ -1055,43 +1186,6 @@ class AcavScenarioVerifier:
 # ---------------------------------------------------------------------------
 # Geometry helpers
 # ---------------------------------------------------------------------------
-
-def _osculating(position: Sequence[float], velocity: Sequence[float]
-                ) -> Tuple[float, float, float]:
-    """Osculating (a, e, i) from an inertial state. SI units, radians.
-
-    Vis-viva and the angular momentum vector only -- no argument of
-    perigee or true anomaly, both of which are singular for the
-    near-circular orbit this study uses and neither of which any check
-    here needs.
-    """
-    r = math.sqrt(sum(c * c for c in position))
-    v2 = sum(c * c for c in velocity)
-    if r <= 0.0:
-        raise ValueError("degenerate position vector")
-
-    energy = v2 / 2.0 - MU_EARTH / r
-    if energy >= 0.0:
-        raise ValueError(
-            f"the state is not bound (specific energy {energy:.3e} J/kg); "
-            f"|r| = {r:.1f} m, |v| = {math.sqrt(v2):.1f} m/s. If |r| looks "
-            f"like kilometres, configure_units() did not take effect.")
-    sma = -MU_EARTH / (2.0 * energy)
-
-    hx = position[1] * velocity[2] - position[2] * velocity[1]
-    hy = position[2] * velocity[0] - position[0] * velocity[2]
-    hz = position[0] * velocity[1] - position[1] * velocity[0]
-    h = math.sqrt(hx * hx + hy * hy + hz * hz)
-    inclination = math.acos(max(-1.0, min(1.0, hz / h))) if h > 0.0 else 0.0
-
-    rv = sum(p * v for p, v in zip(position, velocity))
-    ex = ((v2 - MU_EARTH / r) * position[0] - rv * velocity[0]) / MU_EARTH
-    ey = ((v2 - MU_EARTH / r) * position[1] - rv * velocity[1]) / MU_EARTH
-    ez = ((v2 - MU_EARTH / r) * position[2] - rv * velocity[2]) / MU_EARTH
-    eccentricity = math.sqrt(ex * ex + ey * ey + ez * ez)
-
-    return sma, eccentricity, inclination
-
 
 def _cross_track_km_for_off_nadir(off_nadir_deg: float,
                                   altitude_km: float) -> float:

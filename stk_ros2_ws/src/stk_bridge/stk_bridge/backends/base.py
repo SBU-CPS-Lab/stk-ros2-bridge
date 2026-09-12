@@ -53,9 +53,12 @@ propagate into control output.
 from __future__ import annotations
 
 import abc
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Sequence, Tuple
+
+from stk_bridge.exceptions import CommandError
 
 
 # ---------------------------------------------------------------------------
@@ -519,6 +522,54 @@ class StkBackend(abc.ABC):
         Must be called before :meth:`add_attitude_quaternion` for a given
         object; ``core/actuation.py`` does this lazily on first command.
         """
+
+    # -- sensors -----------------------------------------------------------
+    #
+    # Concrete, not abstract: every backend can at least issue the
+    # Connect form, and a backend with the Object Model available
+    # overrides with the typed path. Sensor geometry lives here rather
+    # than in a caller because reading a cone angle back requires the
+    # Object Model, which only backends/ may touch.
+
+    def set_sensor_cone(self, object_path: str, half_angle_rad: float,
+                        angular_resolution_rad: float = 0.017453) -> str:
+        """Make a sensor a simple cone of the given half-angle.
+
+        Returns a label describing how it was applied, for the caller's
+        report. Raises :class:`CommandError` if nothing worked, with
+        every attempt's reason in the message -- a bare failure here
+        leaves the sensor at STK's default half-angle, which is wide
+        enough that pointing error stops mattering.
+        """
+        reasons = []
+        for label, command in (
+            ("Connect Define SimpleConic (degrees)",
+             f"Define {object_path} SimpleConic "
+             f"{math.degrees(half_angle_rad)!r} "
+             f"{math.degrees(angular_resolution_rad)!r}"),
+            ("Connect Define SimpleConic (radians)",
+             f"Define {object_path} SimpleConic {half_angle_rad!r} "
+             f"{angular_resolution_rad!r}"),
+        ):
+            try:
+                if self.execute_connect(command).ack:
+                    return label
+                reasons.append(f"{label}: NACK")
+            except Exception as exc:                      # noqa: BLE001
+                reasons.append(f"{label}: {type(exc).__name__}: {exc}")
+        raise CommandError("Define SimpleConic", object_path,
+                           "; ".join(reasons))
+
+    def get_sensor_cone_half_angle_rad(self, object_path: str
+                                       ) -> Optional[float]:
+        """The sensor's configured cone half-angle, or None if unreadable.
+
+        Only backends with the Object Model can answer this. It matters
+        because it separates "the command did not apply" from "the
+        command applied in the wrong unit" without needing to infer the
+        cone from access geometry.
+        """
+        return None
 
     @abc.abstractmethod
     def clear_attitude_data(self, object_path: str) -> None:

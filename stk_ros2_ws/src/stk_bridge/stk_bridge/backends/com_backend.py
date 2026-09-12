@@ -814,6 +814,79 @@ class ComBackend(StkBackend):
                          object_path, exc)
             return False
 
+    def set_sensor_cone(self, object_path: str, half_angle_rad: float,
+                        angular_resolution_rad: float = 0.017453) -> str:
+        """Set a simple-conic pattern, Object Model first.
+
+        The Connect ``Define ... SimpleConic`` form was rejected on a
+        live STK 12.6 install in both angle units, leaving the sensor at
+        STK's default half-angle. That is the same shape of failure as
+        ``SetPropagator ... RealTime``, whose typed equivalent worked,
+        so the typed path is tried first here too.
+
+        Each candidate is confirmed by reading the cone angle back
+        rather than by its return value: the units these accept follow
+        STK's Angle preference, and that preference was observed being
+        honoured for data providers while Connect commands ignored it.
+        """
+        try:
+            sensor = self._get_object(object_path)
+        except Exception as exc:                          # noqa: BLE001
+            raise CommandError("SetSensorCone", object_path, str(exc))
+
+        wanted_deg = math.degrees(half_angle_rad)
+        reasons: List[str] = []
+
+        for label, value, resolution in (
+            ("CommonTasks.SetPatternSimpleConic (radians)",
+             half_angle_rad, angular_resolution_rad),
+            ("CommonTasks.SetPatternSimpleConic (degrees)",
+             wanted_deg, math.degrees(angular_resolution_rad)),
+        ):
+            try:
+                sensor.CommonTasks.SetPatternSimpleConic(value, resolution)
+            except Exception as exc:                      # noqa: BLE001
+                reasons.append(f"{label}: {type(exc).__name__}: {exc}")
+                continue
+            applied = self.get_sensor_cone_half_angle_rad(object_path)
+            if applied is None:
+                # Cannot confirm, but the call did not raise. Accept it
+                # and let the caller's own measurement arbitrate.
+                return label + " (unconfirmed)"
+            if abs(math.degrees(applied) - wanted_deg) < 0.01:
+                return label
+            reasons.append(
+                f"{label}: applied but reads back as "
+                f"{math.degrees(applied):.4f} deg, not {wanted_deg:.4f}")
+
+        try:
+            return super().set_sensor_cone(object_path, half_angle_rad,
+                                           angular_resolution_rad)
+        except CommandError as exc:
+            reasons.append(str(exc))
+        raise CommandError("SetSensorCone", object_path, "; ".join(reasons))
+
+    def get_sensor_cone_half_angle_rad(self, object_path: str
+                                       ) -> Optional[float]:
+        """Read the configured cone half-angle back through the Object Model.
+
+        Returns radians. The property is reported in STK's current Angle
+        unit, which configure_units() sets to radians -- but that is
+        exactly the assumption that has already been wrong once, so a
+        value too large to be a plausible radian half-angle is treated
+        as degrees rather than believed.
+        """
+        try:
+            sensor = self._get_object(object_path)
+            value = float(sensor.Pattern.ConeAngle)
+        except Exception as exc:                          # noqa: BLE001
+            LOGGER.debug("could not read ConeAngle on %s: %s",
+                         object_path, exc)
+            return None
+        # A conic sensor half-angle cannot exceed 90 deg = 1.5708 rad, so
+        # anything above pi/2 is being reported in degrees.
+        return math.radians(value) if value > math.pi / 2.0 else value
+
     def set_position(self, object_path: str, when: StkTime, frame: str,
                      position_m: Tuple[float, float, float],
                      velocity_mps: Optional[Tuple[float, float, float]] = None

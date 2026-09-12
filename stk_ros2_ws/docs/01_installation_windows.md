@@ -45,11 +45,24 @@ pip install -r src\stk_bridge\requirements.txt
 
 ## 4. Build the workspace
 
+Source the ROS 2 installation **before** building -- `colcon` is not on
+the path otherwise, and the failure message does not say so:
+
 ```powershell
-cd path\stk_ros2_ws
-call path\ros2-windows\local_setup.bat
+cd <path-to>\stk_ros2_ws
+C:\dev\ros2_humble\local_setup.ps1      # your ROS 2 install, not the workspace
 colcon build --symlink-install
+. install\local_setup.ps1                # the workspace, after building
 ```
+
+From `cmd.exe` rather than PowerShell the two sourcing lines become
+`call C:\dev\ros2_humble\local_setup.bat` and
+`call install\local_setup.bat`.
+
+Both lines are needed and they are not interchangeable: the first puts
+`colcon` and the ROS 2 libraries on the path so the build can run, the
+second puts the packages this workspace just built on the path so
+`ros2 run stk_bridge ...` can find them.
 
 ## 5. Verify the environment
 

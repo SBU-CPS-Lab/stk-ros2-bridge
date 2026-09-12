@@ -1,0 +1,255 @@
+"""Regression tests for the STK 12.6 behaviours the first live run found.
+
+Every test here corresponds to a specific way the 2026-09-09 live run
+produced a scenario that built cleanly and measured the wrong thing.
+They run against ``Stk126Double``, which reproduces those behaviours
+exactly, so the compensations cannot silently rot.
+
+The bar these set is deliberately end-to-end: not "the builder sends
+degrees" but "the scenario that comes out is the one the spec asked
+for, on a backend that behaves the way the real install behaved".
+"""
+
+import math
+
+import pytest
+
+from acav.ground_track import great_circle_distance_m
+from acav.scenario_builder import AcavScenarioBuilder
+from acav.scenario_verifier import (
+    FAIL,
+    PASS,
+    SKIP,
+    AcavScenarioVerifier,
+)
+from acav.spec import AcavSpec
+from acav.stk_queries import (
+    measure_angle_scale,
+    osculating_elements,
+    read_geodetic,
+)
+from stk126_double import Stk126Double
+
+
+@pytest.fixture(scope="module")
+def spec():
+    return AcavSpec.load()
+
+
+def build(spec, **quirks):
+    backend = Stk126Double(**quirks)
+    backend.connect()
+    report = AcavScenarioBuilder(backend, spec).build()
+    return backend, report
+
+
+def treat_as_live(monkeypatch):
+    """Make the verifier run its geometry checks against the double.
+
+    The double subclasses MockBackend, so the verifier rightly skips
+    geometry against it. Two tests below are *about* that geometry
+    logic, and letting them pass on a SKIP would repeat the very error
+    they exist to guard: a check reporting success without measuring
+    anything.
+    """
+    monkeypatch.setattr(AcavScenarioVerifier, "is_mock",
+                        property(lambda self: False))
+
+
+def check(report, fragment):
+    matches = [r for r in report.results if fragment in r.name]
+    assert len(matches) == 1, (
+        f"{fragment!r} matched {[r.name for r in matches]}")
+    return matches[0]
+
+
+class TestOrbitIsMeasuredNotAssumed:
+    """`SetState Classical` ACKed and left i = 1.700 deg instead of 97.4."""
+
+    def test_builder_reaches_the_specified_orbit(self, spec):
+        backend, report = build(spec)
+        assert report.ok, report.summary()
+
+        position, velocity = _state(backend, report.satellite_path)
+        sma_m, _, inclination_rad = osculating_elements(position, velocity)
+        assert math.degrees(inclination_rad) == pytest.approx(97.4, abs=0.01)
+        assert sma_m == pytest.approx(6_878_137.0, abs=1000.0)
+
+    def test_the_degrees_form_is_the_one_accepted(self, spec):
+        _, report = build(spec)
+        assert "degrees" in report.orbit_method
+        assert "start/stop/step" in report.orbit_method
+
+    def test_a_command_that_acks_without_effect_is_rejected(self, spec):
+        """The whole point of the post-condition.
+
+        Here STK accepts the radians form's *syntax* but stores the
+        wrong angle. Without the verify predicate the builder would take
+        the ACK, stop, and hand back a 1.7 deg orbit -- which is exactly
+        what happened live.
+        """
+        backend, report = build(spec, setstate_unit="radians")
+        # With the backend now consuming radians, the degrees candidate
+        # ACKs first and produces a nonsense orbit; the builder must
+        # keep going rather than accept it.
+        position, velocity = _state(backend, report.satellite_path)
+        _, _, inclination_rad = osculating_elements(position, velocity)
+        assert math.degrees(inclination_rad) == pytest.approx(97.4, abs=0.01)
+        assert "radians" in report.orbit_method
+
+    def test_an_unreachable_orbit_is_an_error_not_a_shrug(self, spec):
+        backend, report = build(spec, setstate_order="never_matches")
+        assert report.orbit_method == "none"
+        assert any("500 km SSO" in w for w in report.warnings)
+        # And the satellite is still on STK's default, which the
+        # verifier must catch rather than the builder papering over.
+        verification = AcavScenarioVerifier(backend, spec, report).verify()
+        assert check(verification, "Orbit matches").status == FAIL
+
+
+class TestGeodeticWriteUnitIsMeasured:
+    """All seven targets landed on the wrong part of the planet."""
+
+    @pytest.mark.parametrize("unit", ["degrees", "radians"])
+    def test_targets_land_where_intended_in_either_unit(self, spec, unit):
+        backend, report = build(spec, geodetic_unit=unit)
+        assert report.ok, report.summary()
+        assert report.geodetic_write_unit == unit
+
+        for placement in report.targets:
+            read = read_geodetic(backend, placement.object_path,
+                                 backend.get_scenario_epoch())
+            assert read.ok, read.diagnostic
+            drift = great_circle_distance_m(read.point, placement.point)
+            assert drift < 1000.0, (
+                f"{placement.target_id} read back {drift:.0f} m from where "
+                f"the builder computed it")
+
+    def test_the_probe_is_cleaned_up(self, spec):
+        """A throwaway object left behind would show up in the scenario
+        the user saves and be mistaken for part of the study."""
+        backend, _ = build(spec)
+        assert not [p for p in backend._objects if "UnitProbe" in p]
+
+    def test_placement_round_trip_passes_end_to_end(self, spec):
+        backend, report = build(spec)
+        verification = AcavScenarioVerifier(backend, spec, report).verify()
+        assert check(verification, "Targets are placed").status == PASS
+
+
+class TestRejectedCommandsAreDiagnosable:
+    """The live run reported three commands as 'none' with no reason."""
+
+    def test_the_reason_for_each_rejection_is_recorded(self, spec):
+        _, report = build(spec)
+        assert report.attempts, "no rejection reasons captured at all"
+        joined = report.summary()
+        assert "Command has failed." in joined or "NACK" in joined
+
+    def test_a_wide_cone_is_reported_not_assumed_away(self, spec):
+        """`Define ... SimpleConic` failing leaves STK's 45 deg default.
+
+        The builder must report the half-angle actually in force, not
+        the one the spec asked for -- reporting 2.0 deg here is how the
+        paper ends up describing a scenario that never existed.
+        """
+        _, report = build(spec)
+        assert report.sensor_pattern_method == "none"
+        assert report.sensor_cone_half_angle_deg == pytest.approx(45.0)
+        assert any("default half-angle" in w for w in report.warnings)
+
+    def test_a_working_cone_command_is_reported_as_applied(self, spec):
+        _, report = build(spec, reject_define=False)
+        assert report.sensor_pattern_method != "none"
+        assert report.sensor_cone_half_angle_deg == pytest.approx(2.0)
+
+
+class TestVerifierDoesNotOverclaim:
+    """Conclusions must not outrun the measurement that supports them."""
+
+    def test_mask_checks_skip_when_the_mask_cannot_be_applied(self, spec,
+                                                              monkeypatch):
+        """The live run compared the unmasked baseline against itself
+        three times and reported a verdict about terrain masking."""
+        backend, report = build(spec)
+        treat_as_live(monkeypatch)
+        verification = AcavScenarioVerifier(backend, spec, report).verify()
+
+        for fragment in ("Elevation constraint", "Terrain mask"):
+            result = check(verification, fragment)
+            assert result.status == SKIP, result.detail
+            assert "SetAzElMask form was accepted" in result.detail
+
+    def test_mask_checks_measure_when_the_mask_does_work(self, spec,
+                                                         monkeypatch):
+        """The positive control: with a mask that applies, the same
+        checks must produce a verdict rather than skipping forever."""
+        backend, report = build(spec, reject_azelmask=False)
+        treat_as_live(monkeypatch)
+        verification = AcavScenarioVerifier(backend, spec, report).verify()
+
+        elevation = check(verification, "Elevation constraint")
+        assert elevation.status == PASS, elevation.detail
+        terrain = check(verification, "Terrain mask")
+        assert terrain.status == PASS, terrain.detail
+        assert verification.measurements["mask_mode"] == "terrain"
+
+    def test_perturbation_check_skips_when_the_orbit_is_wrong(self, spec):
+        # Not gated on treat_as_live: the perturbation check reads state
+        # rather than access geometry, so it runs against the mock too.
+        """It reported 'unperturbed two-body' from an 82.6 m spread
+        measured on a 1.7 deg orbit, where its threshold does not
+        apply."""
+        backend, report = build(spec, setstate_order="never_matches")
+        verification = AcavScenarioVerifier(backend, spec, report).verify()
+        assert check(verification, "Orbit matches").status == FAIL
+        assert check(verification, "perturbations").status == SKIP
+
+
+class TestAngleReadUnit:
+    def test_radians_are_confirmed_against_cartesian(self, spec):
+        backend, report = build(spec)
+        scale = measure_angle_scale(backend, report.satellite_path,
+                                     _spread(backend, spec))
+        assert scale.measured
+        assert scale.factor == 1.0
+        verification = AcavScenarioVerifier(backend, spec, report).verify()
+        assert check(verification, "Angles are reported").status == PASS
+
+    def test_degrees_are_caught_as_a_contract_violation(self, spec):
+        """If LLA State ever reports degrees, the bridge's sensing path
+        is wrong by 57x and no local compensation saves the loop."""
+        backend, report = build(spec, lla_unit="degrees")
+        scale = measure_angle_scale(backend, report.satellite_path,
+                                     _spread(backend, spec))
+        assert scale.measured
+        assert scale.factor == pytest.approx(math.pi / 180.0)
+
+        verification = AcavScenarioVerifier(backend, spec, report).verify()
+        result = check(verification, "Angles are reported")
+        assert result.status == FAIL
+        assert "DEGREES" in result.detail
+
+    def test_the_builder_still_places_targets_correctly_in_degrees(self,
+                                                                   spec):
+        """Compensating locally must actually work -- a warning that the
+        contract is broken is not a substitute for a correct scenario,
+        because the rest of the run's diagnosis depends on it."""
+        backend, report = build(spec, lla_unit="degrees")
+        assert report.ok, report.summary()
+        assert "DEGREES" in report.angle_read_unit
+        for placement in report.targets:
+            assert placement.placement_ok
+
+
+def _spread(backend, spec):
+    """Epochs across the window, so the unit measurement is not taken at
+    the equator where the two interpretations coincide."""
+    epoch = backend.get_scenario_epoch()
+    return [epoch + spec.window_duration_s * fraction
+            for fraction in (0.25, 0.5, 0.75, 0.0)]
+
+
+def _state(backend, path):
+    from acav.stk_queries import read_state
+    return read_state(backend, path, backend.get_scenario_epoch())

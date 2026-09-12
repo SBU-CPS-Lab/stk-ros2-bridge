@@ -18,6 +18,11 @@ import sys
 _PACKAGE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _WORKSPACE_SRC = os.path.dirname(_PACKAGE_ROOT)
 
-for _path in (_PACKAGE_ROOT, os.path.join(_WORKSPACE_SRC, "stk_bridge")):
+# The test directory itself, so test modules can share helpers such as
+# stk126_double.py without turning test/ into an installed package.
+_TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+
+for _path in (_TEST_DIR, _PACKAGE_ROOT,
+              os.path.join(_WORKSPACE_SRC, "stk_bridge")):
     if os.path.isdir(_path) and _path not in sys.path:
         sys.path.insert(0, _path)

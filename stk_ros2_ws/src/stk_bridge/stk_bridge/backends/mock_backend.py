@@ -102,6 +102,10 @@ class _MockObject:
     #: and facilities -- have no propagator, so this is the only thing
     #: that gives them a position at all.
     geodetic: Optional[Tuple[float, float, float]] = None
+    #: Conic half-angle in radians once set. None means the sensor is
+    #: still at STK's wide default -- which is a real state, not an
+    #: error, and one the verifier has to be able to detect.
+    cone_half_angle_rad: Optional[float] = None
 
     dropped_positions: int = 0
     dropped_attitudes: int = 0
@@ -480,12 +484,19 @@ class MockBackend(StkBackend):
 
     def _position_columns(self, obj: _MockObject):
         def build(when: float) -> Dict[str, float]:
+            self._require_positionable(obj, "Cartesian Position")
+            if obj.geodetic is not None:
+                return dict(zip(("x", "y", "z"), _geodetic_to_ecef(
+                    *obj.geodetic)))
             position, _ = self._propagate(obj, when)
             return {"x": position[0], "y": position[1], "z": position[2]}
         return build
 
     def _velocity_columns(self, obj: _MockObject):
         def build(when: float) -> Dict[str, float]:
+            self._require_positionable(obj, "Cartesian Velocity")
+            if obj.geodetic is not None:
+                return {"x": 0.0, "y": 0.0, "z": 0.0}
             _, velocity = self._propagate(obj, when)
             return {"x": velocity[0], "y": velocity[1], "z": velocity[2]}
         return build
@@ -511,23 +522,34 @@ class MockBackend(StkBackend):
             return {"wx": wx, "wy": wy, "wz": wz}
         return build
 
+    @staticmethod
+    def _require_positionable(obj: _MockObject, provider: str) -> None:
+        """Refuse to invent a position for an unplaced static object.
+
+        Without this the orbit propagator answers for anything, so an
+        unplaced target reports the SATELLITE's position -- a plausible
+        answer for the wrong object, which is the exact class of silent
+        wrongness this mock exists to expose rather than imitate.
+
+        Applies to every position provider, not just LLA State: a caller
+        that falls back from one provider to another must not find the
+        second one more accommodating than the first.
+        """
+        if obj.object_type == "Satellite" or obj.geodetic is not None:
+            return
+        raise QueryError(
+            provider, obj.path,
+            f"{obj.object_type} {obj.path} has no position; the mock only "
+            f"propagates satellites and objects placed with "
+            f"SetPosition ... Geodetic",
+        )
+
     def _lla_columns(self, obj: _MockObject):
         def build(when: float) -> Dict[str, float]:
             if obj.geodetic is not None:
                 latitude, longitude, altitude = obj.geodetic
                 return {"Lat": latitude, "Lon": longitude, "Alt": altitude}
-            if obj.object_type != "Satellite":
-                # Do NOT fall through to the orbit propagator. An
-                # unplaced target would otherwise report the SATELLITE's
-                # sub-point -- a plausible position for the wrong object,
-                # which is the exact class of silent wrongness this mock
-                # exists to expose rather than imitate.
-                raise QueryError(
-                    "LLA State", obj.path,
-                    f"{obj.object_type} {obj.path} has no position; the "
-                    f"mock only propagates satellites and objects placed "
-                    f"with SetPosition ... Geodetic",
-                )
+            self._require_positionable(obj, "LLA State")
             position, _ = self._propagate(obj, when)
             x, y, z = position
             r = math.sqrt(x * x + y * y + z * z)
@@ -637,6 +659,19 @@ class MockBackend(StkBackend):
             obj.dropped_positions += 1
             return
         obj.position_samples.append((stamp, position_m))
+
+    def set_sensor_cone(self, object_path: str, half_angle_rad: float,
+                        angular_resolution_rad: float = 0.017453) -> str:
+        obj = self._obj(object_path)
+        if obj.object_type != "Sensor":
+            raise CommandError("SetSensorCone", object_path,
+                               f"{obj.object_type} is not a sensor")
+        obj.cone_half_angle_rad = half_angle_rad
+        return "mock (stored)"
+
+    def get_sensor_cone_half_angle_rad(self, object_path: str
+                                       ) -> Optional[float]:
+        return self._obj(object_path).cone_half_angle_rad
 
     def enable_realtime_attitude(self, object_path: str) -> None:
         self._obj(object_path).realtime_attitude_enabled = True
@@ -750,3 +785,21 @@ class MockBackend(StkBackend):
             "positions": obj.dropped_positions,
             "attitudes": obj.dropped_attitudes,
         }
+
+
+def _geodetic_to_ecef(latitude_rad: float, longitude_rad: float,
+                      altitude_m: float) -> Tuple[float, float, float]:
+    """WGS84 geodetic to Earth-fixed Cartesian, metres.
+
+    The inverse of what acav/stk_queries.py does when it falls back from
+    LLA State to Cartesian Position. Both directions have to exist here
+    or that fallback path is untested against anything.
+    """
+    f = 1.0 / 298.257223563
+    e2 = f * (2.0 - f)
+    sin_lat = math.sin(latitude_rad)
+    n = R_EARTH / math.sqrt(1.0 - e2 * sin_lat * sin_lat)
+    xy = (n + altitude_m) * math.cos(latitude_rad)
+    return (xy * math.cos(longitude_rad),
+            xy * math.sin(longitude_rad),
+            (n * (1.0 - e2) + altitude_m) * sin_lat)

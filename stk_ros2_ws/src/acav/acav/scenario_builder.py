@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from stk_bridge.backends.base import PropagatorType, StkBackend, StkTime
 from stk_bridge.backends import connect_protocol as proto
@@ -48,6 +48,13 @@ from acav.ground_track import (
     verify_placement,
 )
 from acav.spec import AcavSpec, TargetSpec
+from acav.stk_queries import (
+    AngleScale,
+    measure_angle_scale,
+    osculating_elements,
+    read_geodetic,
+    read_state,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +63,12 @@ LOGGER = logging.getLogger(__name__)
 #: long enough that the bearing is numerically well-conditioned, short
 #: enough that the track's curvature over the interval is negligible.
 HEADING_SAMPLE_DT_S = 1.0
+
+#: Tolerances for "the satellite is on the orbit we asked for". Wide
+#: enough to absorb the osculating-vs-mean element difference at 500 km,
+#: far too tight to be passed by STK's default orbit.
+SMA_TOLERANCE_M = 25_000.0
+INCLINATION_TOLERANCE_DEG = 1.0
 
 
 @dataclass
@@ -88,6 +101,16 @@ class BuildReport:
     ground_station_path: str = ""
     terrain_mask_method: str = ""
     terrain_mask_verified: Optional[bool] = None
+    #: How STK reports angles back, and what unit it accepted for
+    #: geodetic positions. Both are measured, not assumed -- the first
+    #: live run showed Connect consuming degrees while the Angle unit
+    #: preference was set to radians.
+    angle_read_unit: str = "not measured"
+    geodetic_write_unit: str = "not measured"
+    #: Every Connect form tried, with the exact reason it was rejected.
+    #: Without this a NACK costs a whole live round trip to diagnose --
+    #: the first live run reported three commands as simply "none".
+    attempts: Dict[str, List[str]] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
 
@@ -119,6 +142,13 @@ class BuildReport:
                         None: "not checked"}[terrain]
         lines.append(f"  ground stn  {self.ground_station_path} "
                      f"mask={self.terrain_mask_method} -> {terrain_text}")
+        lines.append(f"  units       angles read as {self.angle_read_unit}, "
+                     f"geodetic positions written as "
+                     f"{self.geodetic_write_unit}")
+        for label, reasons in self.attempts.items():
+            lines.append(f"  rejected    {label}")
+            for reason in reasons:
+                lines.append(f"                {reason}")
         for warning in self.warnings:
             lines.append(f"  WARN  {warning}")
         for error in self.errors:
@@ -134,6 +164,8 @@ class AcavScenarioBuilder:
         self._spec = spec
         self._report = BuildReport(scenario_name=spec.name)
         self._epoch: Optional[StkTime] = None
+        self._angle_scale = AngleScale()
+        self._geodetic_write_scale = 1.0
 
     @property
     def report(self) -> BuildReport:
@@ -152,6 +184,9 @@ class AcavScenarioBuilder:
             self._create_satellite()
             if not self._report.ok:
                 return self._report
+            # Units before anything is placed: every SetPosition below
+            # depends on knowing which one STK consumes.
+            self._measure_units()
             self._create_sensor()
             self._create_targets()
             if not self._report.ok:
@@ -230,24 +265,23 @@ class AcavScenarioBuilder:
                 f"unrunnable; see docs/06_troubleshooting.md.")
 
     def _set_orbital_elements(self, path: str) -> None:
-        """Assign the classical elements.
+        """Assign the classical elements, then check they took.
 
-        Uses the Connect ``SetState Classical`` form rather than the
-        Object Model's ``AssignClassical``, because the Connect argument
-        order is stable across STK versions while the Object Model's
-        coordinate-system and element-representation enums are among the
-        names that drifted during the bridge's bring-up. This runs once
-        at setup, so the round-trip cost is irrelevant.
+        Two facts from the first live STK 12.6 run, both of which cost a
+        wrong scenario:
 
-        The argument *order* is the uncertain part, so this issues
-        candidates rather than one command, and records which was
-        accepted. An ACK still proves only that STK parsed it -- whether
-        the satellite ended up on the specified 500 km SSO is measured
-        by ``verify_acav_scenario.py``, which reads the state back and
-        derives the osculating elements. That separation is deliberate:
-        this is the command most able to fail silently, because STK's
-        default orbit is a perfectly plausible one to place targets
-        along.
+        * the accepted argument order is ``<start> <stop> <step>``, not
+          the ``<step> <start> <stop>`` the Connect reference implies;
+        * **the angles are consumed as degrees**, even though
+          ``configure_units()`` successfully set the Angle preference to
+          radians. Sending ``radians(97.4) = 1.70027`` produced a 1.700
+          deg inclination -- a perfectly valid orbit, along whose ground
+          track all seven targets were then placed. Nothing errored.
+
+        Hence degrees first, and hence ``verify``: a candidate is only
+        accepted if the satellite afterwards really is on the specified
+        orbit. Ordering the candidates by what worked last time is an
+        optimisation; the measurement is what makes it correct.
         """
         spec = self._spec
         orbit = spec.orbit
@@ -256,47 +290,72 @@ class AcavScenarioBuilder:
             self._parse_start() + spec.window_duration_s))
         propagator = self._report.propagator_applied or "HPOP"
 
-        # Distances in metres and angles in radians: the backend forced
-        # SI unit preferences at connect() time (see backends/base.py's
-        # units contract), and Connect honours those preferences.
         semi_major_m = orbit["semi_major_axis_km"] * 1000.0
+        degrees = " ".join(repr(value) for value in (
+            semi_major_m, orbit["eccentricity"], orbit["inclination_deg"],
+            orbit["arg_perigee_deg"], orbit["raan_deg"],
+            orbit["true_anomaly_deg"]))
         radians = " ".join(repr(value) for value in (
             semi_major_m, orbit["eccentricity"],
             math.radians(orbit["inclination_deg"]),
             math.radians(orbit["arg_perigee_deg"]),
             math.radians(orbit["raan_deg"]),
             math.radians(orbit["true_anomaly_deg"])))
-        degrees = " ".join(repr(value) for value in (
-            semi_major_m, orbit["eccentricity"], orbit["inclination_deg"],
-            orbit["arg_perigee_deg"], orbit["raan_deg"],
-            orbit["true_anomaly_deg"]))
 
         def command(order: str, frame: str, elements: str) -> str:
             return (f"SetState {path} Classical {propagator} {order} "
                     f"{frame} {start} {elements}")
 
-        step_first = f"60.0 {start} {stop}"
         span_first = f"{start} {stop} 60.0"
+        step_first = f"60.0 {start} {stop}"
         candidates = [
-            ("SetState Classical (step/start/stop, J2000, radians)",
-             command(step_first, "J2000", radians)),
-            ("SetState Classical (step/start/stop, ICRF, radians)",
-             command(step_first, "ICRF", radians)),
+            ("SetState Classical (start/stop/step, J2000, degrees)",
+             command(span_first, "J2000", degrees)),
+            ("SetState Classical (start/stop/step, ICRF, degrees)",
+             command(span_first, "ICRF", degrees)),
             ("SetState Classical (start/stop/step, J2000, radians)",
              command(span_first, "J2000", radians)),
             ("SetState Classical (step/start/stop, J2000, degrees)",
              command(step_first, "J2000", degrees)),
+            ("SetState Classical (step/start/stop, J2000, radians)",
+             command(step_first, "J2000", radians)),
         ]
 
         self._report.orbit_method = self._try_commands(
             candidates,
             failure_note=(
-                "no SetState Classical form was accepted; the satellite "
-                "keeps STK's default orbit, which is NOT the 500 km SSO "
-                "this study specifies. Target placement will still work -- "
-                "against the wrong ground track -- so the scenario will "
-                "look fine and measure the wrong thing. Run "
-                "verify_acav_scenario.py before trusting any result."))
+                "no SetState Classical form produced the specified orbit; "
+                "the satellite keeps whatever orbit it had, which is NOT "
+                "the 500 km SSO this study specifies. Targets would be "
+                "placed along the wrong ground track and the scenario "
+                "would look fine while measuring the wrong thing"),
+            verify=lambda: self._orbit_matches(path))
+
+    def _orbit_matches(self, path: str) -> bool:
+        """Is the satellite actually on the specified orbit now?
+
+        Propagates first: elements assigned but not propagated leave the
+        object with no ephemeris, and every data provider on it returns
+        zero rows -- which would look identical to "the command did not
+        work" and would reject a candidate that was in fact correct.
+        """
+        self._propagate(path)
+        try:
+            position, velocity = read_state(self._backend, path, self._t(0.0))
+        except StkBridgeError as exc:
+            LOGGER.debug("orbit check could not read state: %s", exc)
+            return False
+
+        sma_m, _, inclination_rad = osculating_elements(position, velocity)
+        inclination_deg = math.degrees(inclination_rad)
+        wanted_sma_m = self._spec.orbit["semi_major_axis_km"] * 1000.0
+        wanted_inc_deg = self._spec.orbit["inclination_deg"]
+        ok = (abs(sma_m - wanted_sma_m) <= SMA_TOLERANCE_M
+              and abs(inclination_deg - wanted_inc_deg)
+              <= INCLINATION_TOLERANCE_DEG)
+        LOGGER.info("orbit after SetState: a=%.3f km i=%.3f deg -> %s",
+                    sma_m / 1000.0, inclination_deg, "ok" if ok else "wrong")
+        return ok
 
     def _propagate(self, path: str) -> None:
         propagate = getattr(self._backend, "propagate", None)
@@ -337,32 +396,47 @@ class AcavScenarioBuilder:
         half_angle_deg = spec.sensor.half_angle_deg
         self._report.sensor_cone_half_angle_deg = half_angle_deg
 
-        # Connect's Define command takes the cone angle in the session's
-        # current Angle unit, which the backend set to radians.
-        candidates = [
-            ("Define SimpleConic (radians)",
-             f"Define {path} SimpleConic "
-             f"{math.radians(half_angle_deg)!r} "
-             f"{math.radians(1.0)!r}"),
-            ("Define SimpleConic (degrees)",
-             f"Define {path} SimpleConic {half_angle_deg!r} 1.0"),
-        ]
-        self._report.sensor_pattern_method = self._try_commands(
-            candidates,
-            failure_note=(
+        # Through the backend rather than a raw Connect command: the
+        # Connect `Define ... SimpleConic` form was rejected in both
+        # angle units on a live STK 12.6 install, and only a backend may
+        # reach the Object Model to try the typed path or to read the
+        # resulting cone angle back.
+        try:
+            self._report.sensor_pattern_method = self._backend.set_sensor_cone(
+                path, math.radians(half_angle_deg), math.radians(1.0))
+        except StkBridgeError as exc:
+            self._report.sensor_pattern_method = "none"
+            self._report.attempts["set the sensor cone pattern"] = [str(exc)]
+            self._report.warnings.append(
                 "could not set the sensor cone pattern; the sensor keeps "
-                "STK's default pattern and the 2.0 deg half-angle this "
-                "study depends on is NOT in effect"))
+                "STK's default half-angle and the 2.0 deg this study "
+                "depends on is NOT in effect. At the default width, "
+                "pointing error stops mattering and the effect under test "
+                "disappears -- results from this scenario would be "
+                "meaningless rather than merely imprecise.")
+
+        applied = self._backend.get_sensor_cone_half_angle_rad(path)
+        if applied is not None:
+            self._report.sensor_cone_half_angle_deg = math.degrees(applied)
 
         # Body-fixed pointing along +Z. AzEl(0, 90) in the sensor's own
         # frame is the +Z boresight; Fixed pointing means attitude
         # determines where it looks, which is the entire point of the
         # study.
+        # Degrees first. The first live run accepted the radians form
+        # -- which means it set an elevation of 1.5708 DEGREES, not 90,
+        # and pointed the sensor nearly along the sensor frame's
+        # horizontal. Nothing complained, and the boresight probe still
+        # passed because the cone was at STK's 45 deg default and saw
+        # nadir regardless. Two silent errors that happened to cancel in
+        # the one test looking at them.
         pointing_candidates = [
-            ("Point Fixed AzEl (radians)",
-             f"Point {path} Fixed AzEl 0.0 {math.radians(90.0)!r} Rotate"),
             ("Point Fixed AzEl (degrees)",
              f"Point {path} Fixed AzEl 0.0 90.0 Rotate"),
+            ("Point Fixed AzEl (radians)",
+             f"Point {path} Fixed AzEl 0.0 {math.radians(90.0)!r} Rotate"),
+            ("Point Fixed AzEl (degrees, no AboutBoresight)",
+             f"Point {path} Fixed AzEl 0.0 90.0"),
         ]
         self._report.sensor_pointing_method = self._try_commands(
             pointing_candidates,
@@ -370,6 +444,125 @@ class AcavScenarioBuilder:
                 "could not set fixed sensor pointing; if the sensor is "
                 "left targeting or nadir-locked, it will NOT follow the "
                 "commanded attitude and the study measures nothing"))
+
+    # -- targets -----------------------------------------------------------
+
+    # -- units -------------------------------------------------------------
+
+    def _measure_units(self) -> None:
+        """Measure how STK reports angles, and what unit it writes them in.
+
+        Both were assumed to be radians on the strength of
+        ``configure_units()`` succeeding. The first live run disproved
+        the write half: ``SetState Classical`` consumed degrees while
+        the Angle preference was radians. Since the two directions are
+        evidently independent, both are now measured rather than
+        inferred from each other.
+        """
+        satellite = self._report.satellite_path
+        # A spread of epochs: near the equator the two units are
+        # indistinguishable, and this orbit is at latitude ~0 at the
+        # scenario epoch.
+        self._angle_scale = measure_angle_scale(
+            self._backend, satellite,
+            [self._t(self._spec.window_duration_s * fraction)
+             for fraction in (0.25, 0.5, 0.75, 0.1, 0.9, 0.0)])
+        self._report.angle_read_unit = self._angle_scale.name
+        LOGGER.info("angle read unit: %s (%s)", self._angle_scale.name,
+                    self._angle_scale.detail)
+        if self._angle_scale.measured and self._angle_scale.factor != 1.0:
+            self._report.warnings.append(
+                "STK is reporting angles in DEGREES, not the radians the "
+                "backend's SI unit contract promises: "
+                f"{self._angle_scale.detail}. This builder compensates "
+                "locally, but core/sensing.py does NOT -- the closed loop "
+                "would read every attitude and position angle 57x too "
+                "large. Fix configure_units() in the bridge before running "
+                "any experiment.")
+
+        self._geodetic_write_scale = self._measure_geodetic_write_scale()
+
+    def _measure_geodetic_write_scale(self) -> float:
+        """Find the unit ``SetPosition ... Geodetic`` actually consumes.
+
+        Places a throwaway target at a known point, reads it back, and
+        keeps whichever interpretation round-trips. The probe point is
+        deliberately at a latitude and longitude where the two
+        interpretations are ~28 deg and ~40 deg apart, so the comparison
+        cannot be confused by the geodetic/geocentric difference or by
+        the spherical model this study places targets with.
+
+        Returns the factor to multiply radians by before sending.
+        """
+        probe_lat_rad, probe_lon_rad = 0.5, 0.7
+        path = ""
+        try:
+            path = conv.canonical_object_path(
+                self._backend.create_object("Target", "ACAV_UnitProbe"))
+        except StkBridgeError as exc:
+            self._report.warnings.append(
+                f"could not create the geodetic unit probe ({exc}); "
+                f"assuming SetPosition Geodetic takes radians")
+            self._report.geodetic_write_unit = "radians (assumed)"
+            return 1.0
+
+        try:
+            for label, factor in (("radians", 1.0),
+                                  ("degrees", 180.0 / math.pi)):
+                command = (f"SetPosition {path} Geodetic "
+                           f"{probe_lat_rad * factor!r} "
+                           f"{probe_lon_rad * factor!r} 0.0")
+                try:
+                    if not self._backend.execute_connect(command).ack:
+                        continue
+                except StkBridgeError as exc:
+                    self._report.attempts.setdefault(
+                        "SetPosition Geodetic unit probe", []).append(
+                            f"{label}: {exc}")
+                    continue
+
+                read = read_geodetic(self._backend, path, self._t(0.0),
+                                     self._angle_scale)
+                if not read.ok:
+                    self._report.attempts.setdefault(
+                        "SetPosition Geodetic unit probe", []).append(
+                            f"{label}: could not read the probe back\n"
+                            f"{read.diagnostic}")
+                    break
+                if (abs(read.point.latitude_rad - probe_lat_rad) < 0.02
+                        and abs(read.point.longitude_rad - probe_lon_rad)
+                        < 0.02):
+                    self._report.geodetic_write_unit = label
+                    LOGGER.info("SetPosition Geodetic takes %s", label)
+                    return factor
+                self._report.attempts.setdefault(
+                    "SetPosition Geodetic unit probe", []).append(
+                        f"{label}: wrote ({probe_lat_rad:.4f}, "
+                        f"{probe_lon_rad:.4f}) rad, read back "
+                        f"({read.point.latitude_rad:.4f}, "
+                        f"{read.point.longitude_rad:.4f}) rad "
+                        f"via {read.method}")
+        finally:
+            try:
+                self._backend.delete_object(path)
+            except StkBridgeError:
+                LOGGER.warning("could not delete the unit probe %s", path)
+
+        self._report.geodetic_write_unit = "UNDETERMINED (assuming radians)"
+        self._report.warnings.append(
+            "could not determine the unit SetPosition Geodetic consumes, so "
+            "target placement is unverified at the point of writing. If the "
+            "targets later turn out not to be within the satellite's "
+            "horizon, this is why.")
+        return 1.0
+
+    def _set_position_geodetic(self, path: str, point: GeoPoint) -> None:
+        """Place a static object, in whatever unit STK was measured to want."""
+        factor = getattr(self, "_geodetic_write_scale", 1.0)
+        self._backend.execute_connect(
+            f"SetPosition {path} Geodetic "
+            f"{point.latitude_rad * factor!r} "
+            f"{point.longitude_rad * factor!r} 0.0")
 
     # -- targets -----------------------------------------------------------
 
@@ -423,9 +616,7 @@ class AcavScenarioBuilder:
         try:
             path = self._backend.create_object("Target", target.id)
             path = conv.canonical_object_path(path)
-            self._backend.execute_connect(
-                f"SetPosition {path} Geodetic "
-                f"{point.latitude_rad!r} {point.longitude_rad!r} 0.0")
+            self._set_position_geodetic(path, point)
         except StkBridgeError as exc:
             self._report.errors.append(
                 f"could not create or position target {target.id}: {exc}")
@@ -444,27 +635,21 @@ class AcavScenarioBuilder:
 
     def _sub_satellite_point(self, satellite: str,
                              offset_s: float) -> GeoPoint:
-        when = self._t(offset_s)
-        data, mapping = dp.execute(
-            self._backend, dp.LLA_STATE, satellite,
-            frame=self._lla_frame(), start=when, stop=when)
-        return GeoPoint(
-            latitude_rad=dp.first_value(data, dp.LLA_STATE, mapping,
-                                        "latitude"),
-            longitude_rad=dp.first_value(data, dp.LLA_STATE, mapping,
-                                         "longitude"),
-            altitude_m=0.0,
-        )
+        """Where the satellite is over, in radians.
 
-    def _lla_frame(self) -> str:
-        """LLA State's group member.
-
-        A live STK 12.6 inventory offers ``TrueOfDateRotating`` and
-        ``Fixed`` for this provider -- notably NOT ``Detic``, which an
-        earlier version of the bridge's spec assumed. ``Fixed`` is the
-        Earth-fixed frame we want for a ground position.
+        Goes through the shared reader so the measured angle scale is
+        applied and so a failure carries the object's provider
+        inventory. ``Fixed`` is the Earth-fixed group member wanted for
+        a ground position; a live 12.6 inventory offers that and
+        ``TrueOfDateRotating``, notably not ``Detic``.
         """
-        return "Fixed"
+        read = read_geodetic(self._backend, satellite, self._t(offset_s),
+                             self._angle_scale)
+        if not read.ok:
+            raise StkBridgeError(
+                f"no sub-satellite point for {satellite} at "
+                f"t={offset_s:.1f} s.\n{read.diagnostic}")
+        return read.point
 
     # -- ground station ----------------------------------------------------
 
@@ -492,9 +677,7 @@ class AcavScenarioBuilder:
             path = self._backend.create_object("Facility",
                                                str(config.get("name", "GS1")))
             path = conv.canonical_object_path(path)
-            self._backend.execute_connect(
-                f"SetPosition {path} Geodetic "
-                f"{point.latitude_rad!r} {point.longitude_rad!r} 0.0")
+            self._set_position_geodetic(path, point)
             self._report.ground_station_path = path
         except StkBridgeError as exc:
             self._report.warnings.append(
@@ -509,12 +692,16 @@ class AcavScenarioBuilder:
 
     def _apply_elevation_constraint(self, path: str,
                                     min_elevation_deg: float) -> None:
+        # Degrees first: measured behaviour of every other angle-bearing
+        # Connect command on this install.
         candidates = [
+            ("SetConstraint ElevationAngle (degrees)",
+             f"SetConstraint {path} ElevationAngle Min {min_elevation_deg!r}"),
             ("SetConstraint ElevationAngle (radians)",
              f"SetConstraint {path} ElevationAngle Min "
              f"{math.radians(min_elevation_deg)!r}"),
-            ("SetConstraint ElevationAngle (degrees)",
-             f"SetConstraint {path} ElevationAngle Min {min_elevation_deg!r}"),
+            ("SetConstraint MinElevationAngle (degrees)",
+             f"SetConstraint {path} MinElevationAngle {min_elevation_deg!r}"),
         ]
         method = self._try_commands(
             candidates,
@@ -537,6 +724,8 @@ class AcavScenarioBuilder:
              f"SetAzElMask {path} TerrainData 1 0.0"),
             ("SetAzElMask TerrainData (no range args)",
              f"SetAzElMask {path} TerrainData"),
+            ("SetAzElMask TerrainData (metres of range)",
+             f"SetAzElMask {path} TerrainData 1 50000.0"),
         ]
         self._report.terrain_mask_method = self._try_commands(
             candidates,
@@ -549,22 +738,53 @@ class AcavScenarioBuilder:
     # -- helpers -----------------------------------------------------------
 
     def _try_commands(self, candidates: List[Tuple[str, str]],
-                      failure_note: str) -> str:
+                      failure_note: str,
+                      verify: Optional[Callable[[], bool]] = None) -> str:
         """Try each candidate Connect form; return the label that worked.
 
         Returns ``"none"`` and records a warning if all fail. Reporting
         *which* form succeeded matters: it is the difference between the
         paper describing what was configured and what was requested.
+
+        Two things this learned from the first live run:
+
+        * **The rejection reason is recorded.** That run reported three
+          separate commands as having been tried and failed, with no
+          indication of why, which is a whole round trip to the Windows
+          machine to recover one error string. Every attempt's exception
+          text now lands in ``report.attempts``.
+        * **``verify`` closes the loop.** An ACK means STK parsed the
+          command. ``SetState Classical`` ACKed on that run and left the
+          satellite at 1.7 deg inclination instead of 97.4, because it
+          consumed degrees where radians were sent. When a caller can
+          cheaply measure whether the command had its intended effect,
+          it passes a predicate here and candidates keep being tried
+          until one actually works.
         """
+        reasons: List[str] = []
         for label, command in candidates:
             try:
                 response = self._backend.execute_connect(command)
-            except StkBridgeError:
+            except StkBridgeError as exc:
+                reasons.append(f"{label}: {type(exc).__name__}: {exc}")
                 continue
-            if response.ack:
-                LOGGER.info("applied via %s", label)
-                return label
+            if not response.ack:
+                reasons.append(f"{label}: NACK {' '.join(response.messages)}")
+                continue
+            if verify is not None and not verify():
+                reasons.append(
+                    f"{label}: ACKed but did not take effect (the "
+                    f"post-condition this command exists to establish is "
+                    f"still not satisfied)")
+                continue
+            LOGGER.info("applied via %s", label)
+            if reasons:
+                self._report.attempts[label + " (accepted after failures)"] \
+                    = reasons
+            return label
 
+        self._report.attempts[failure_note.split(";")[0][:60]] = reasons
         self._report.warnings.append(
-            failure_note + f" (tried: {[c[0] for c in candidates]})")
+            failure_note + " (every candidate failed; see the rejected "
+            "list above for each one's reason)")
         return "none"

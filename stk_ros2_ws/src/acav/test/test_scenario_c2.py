@@ -313,7 +313,7 @@ class TestVerifierCatchesSilentWrongness:
 class TestCommandLine:
     def test_build_then_verify_succeeds_on_the_mock(self, capsys):
         assert build_cli.main(["--backend", "mock", "--verify"]) == 0
-        assert "13 checks" in capsys.readouterr().out
+        assert "14 checks" in capsys.readouterr().out
 
     def test_build_prints_the_mock_disclaimer(self, capsys):
         """Section 8 of the case-study plan commits the paper to
