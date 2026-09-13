@@ -934,41 +934,78 @@ class ComBackend(StkBackend):
 
     def set_az_el_mask(self, object_path: str, mode: str,
                        value: float = 0.0) -> str:
-        """Object Model first, then Connect.
+        """Object Model first, then Connect, then say what is available.
 
-        Every Connect ``SetAzElMask`` form was rejected on a live STK
-        12.6 install with the generic "Command has failed.", which says
-        nothing about why. The typed path both has a better chance of
-        working -- the same was true of SetPropagatorType and
-        SetPatternSimpleConic -- and reports a real error when it does
-        not.
+        Every Connect ``SetAzElMask`` form is rejected on STK 12.6 with
+        the generic "Command has failed.", and the first typed attempt
+        failed with ``AttributeError: eAzElMaskTerrainData`` -- the enum
+        exists, that member name does not. Guessing further spellings
+        from documentation is what this project does not do, so on
+        failure the error carries the enum's **actual** members and the
+        object's mask-related attributes. One live run then settles it.
         """
         reasons: List[str] = []
+        obj = enum_type = None
         try:
             obj = self._get_object(object_path)
+        except Exception as exc:                          # noqa: BLE001
+            reasons.append(f"object unavailable: {exc}")
+        try:
             enum_type = self._resolve_enum("AgEAzElMaskType", "AzElMaskType")
         except Exception as exc:                          # noqa: BLE001
-            reasons.append(f"Object Model unavailable: {exc}")
-            obj, enum_type = None, None
+            reasons.append(f"AgEAzElMaskType unavailable: {exc}")
 
         if obj is not None and enum_type is not None:
-            members = (("eAzElMaskTerrainData", "eAzElMaskTerrain")
-                       if mode == "terrain" else ("eAzElMaskConstant",))
+            members = (("eAzElMaskTerrainData", "eTerrainData",
+                        "eMaskTerrainData", "eAzElMaskTerrain")
+                       if mode == "terrain"
+                       else ("eAzElMaskConstant", "eConstantMask",
+                             "eConstant", "eMaskConstant"))
+            argument = value if mode == "terrain" else math.degrees(value)
             for member in members:
-                try:
-                    obj.SetAzElMask(getattr(enum_type, member),
-                                    math.degrees(value)
-                                    if mode != "terrain" else value)
-                    return f"Object Model SetAzElMask({member})"
-                except Exception as exc:                  # noqa: BLE001
-                    reasons.append(f"SetAzElMask({member}): "
-                                   f"{type(exc).__name__}: {exc}")
+                enum_value = getattr(enum_type, member, None)
+                if enum_value is None:
+                    continue
+                for how, apply in (
+                    ("SetAzElMask(member, value)",
+                     lambda v=enum_value: obj.SetAzElMask(v, argument)),
+                    ("AzElMask = member",
+                     lambda v=enum_value: setattr(obj, "AzElMask", v)),
+                ):
+                    try:
+                        apply()
+                        return f"Object Model {how} [{member}]"
+                    except Exception as exc:              # noqa: BLE001
+                        reasons.append(f"{how} [{member}]: "
+                                       f"{type(exc).__name__}: {exc}")
 
         try:
             return super().set_az_el_mask(object_path, mode, value)
         except CommandError as exc:
             reasons.append(str(exc))
+
+        reasons.append(self._describe_mask_api(obj, enum_type))
         raise CommandError("SetAzElMask", object_path, "; ".join(reasons))
+
+    @staticmethod
+    def _describe_mask_api(obj: Any, enum_type: Any) -> str:
+        """What this install actually offers, for the next attempt.
+
+        A rejected command that also tells you the available names turns
+        a round trip to the Windows machine into a single line of the
+        next report.
+        """
+        parts = []
+        if enum_type is not None:
+            members = [name for name in dir(enum_type)
+                       if name.startswith("e")]
+            parts.append(f"AgEAzElMaskType members: {members or '(none)'}")
+        if obj is not None:
+            attributes = [name for name in dir(obj)
+                          if "mask" in name.lower()]
+            parts.append(f"object mask attributes: "
+                         f"{attributes or '(none)'}")
+        return " | ".join(parts) or "no Object Model introspection available"
 
     def get_sensor_cone_half_angle_rad(self, object_path: str
                                        ) -> Optional[float]:

@@ -137,6 +137,74 @@ class TestGeodeticWriteUnitIsMeasured:
         assert check(verification, "Targets are placed").status == PASS
 
 
+class TestVerifierWritesInTheMeasuredUnit:
+    """The verifier placed its FOV probes in radians where STK wanted
+    degrees, put all seven in the wrong place, and concluded the sensor
+    could not see nadir. That was true of the probes, not the sensor."""
+
+    def _verifier(self, spec, backend, report):
+        verifier = AcavScenarioVerifier(backend, spec, report)
+        verifier._epoch = backend.get_scenario_epoch()
+        verifier._satellite = report.satellite_path
+        return verifier
+
+    def test_the_write_unit_comes_from_the_build_report(self, spec):
+        backend, report = build(spec, geodetic_unit="degrees")
+        verifier = self._verifier(spec, backend, report)
+        assert verifier.geodetic_write_unit.label == "degrees"
+        assert verifier.geodetic_write_unit.factor == pytest.approx(
+            180.0 / math.pi)
+
+    def test_it_is_measured_when_verifying_a_scenario_we_did_not_build(
+            self, spec):
+        """Standalone verification has no build report to inherit from,
+        and must not fall back to assuming radians."""
+        backend, report = build(spec, geodetic_unit="degrees")
+        verifier = AcavScenarioVerifier(backend, spec)
+        verifier._epoch = backend.get_scenario_epoch()
+        verifier._satellite = report.satellite_path
+        assert verifier.geodetic_write_unit.label == "degrees"
+
+    @pytest.mark.parametrize("unit", ["degrees", "radians"])
+    def test_probe_targets_land_where_intended(self, spec, unit):
+        backend, report = build(spec, geodetic_unit=unit)
+        verifier = self._verifier(spec, backend, report)
+        epoch_offset = verifier._probe_epoch()
+        expected = verifier._sub_satellite(epoch_offset)
+
+        with verifier._probe_targets({"nadir": 0.0}) as probes:
+            read = read_geodetic(backend, probes["nadir"],
+                                 backend.get_scenario_epoch())
+            assert read.ok, read.diagnostic
+            drift = great_circle_distance_m(read.point, expected)
+        assert drift < 1000.0, (
+            f"nadir probe landed {drift / 1000.0:.1f} km from the "
+            f"sub-satellite point")
+
+    def test_probe_targets_are_cleaned_up(self, spec):
+        backend, report = build(spec)
+        verifier = self._verifier(spec, backend, report)
+        with verifier._probe_targets({"nadir": 0.0, "edge": 2.0}):
+            pass
+        assert not [p for p in backend._objects if "Probe" in p]
+
+    def test_the_boresight_flip_is_sent_in_degrees(self, spec):
+        """It previously sent -1.5708, which STK reads as -1.57 DEG --
+        the horizon. The retry answered a question nobody asked."""
+        backend, report = build(spec)
+        verifier = self._verifier(spec, backend, report)
+        verifier._sensor = report.sensor_path
+        backend.commands.clear()
+        verifier._retry_with_flipped_boresight(report.targets[0].object_path,
+                                               100.0)
+
+        pointing = [c for c in backend.commands if c.startswith("Point ")]
+        assert pointing, "the flip issued no Point command at all"
+        assert any("-90.0" in c for c in pointing), pointing
+        # And it must put the sensor back.
+        assert "90.0" in pointing[-1] and "-90.0" not in pointing[-1]
+
+
 class TestRejectedCommandsAreDiagnosable:
     """The live run reported three commands as 'none' with no reason."""
 

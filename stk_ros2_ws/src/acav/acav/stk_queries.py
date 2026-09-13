@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
 from stk_bridge.backends.base import StkBackend, StkTime
@@ -70,6 +70,26 @@ class GeodeticRead:
     @property
     def ok(self) -> bool:
         return self.point is not None
+
+
+@dataclass
+class GeodeticWriteUnit:
+    """The unit ``SetPosition ... Geodetic`` was measured to consume.
+
+    Shared rather than measured per caller. The builder measured this
+    correctly and the verifier did not, so the verifier placed its
+    field-of-view probes in radians where STK wanted degrees, put all
+    seven of them near (0.2, 0.5) deg instead of on the ground track,
+    and concluded that the sensor could not see nadir. One measurement,
+    one code path.
+    """
+
+    factor: float = 1.0
+    label: str = "radians (assumed)"
+    attempts: List[str] = field(default_factory=list)
+
+    def to_command_angle(self, radians: float) -> float:
+        return radians * self.factor
 
 
 @dataclass
@@ -304,3 +324,83 @@ def osculating_elements(position: Sequence[float],
     eccentricity = math.sqrt(ex * ex + ey * ey + ez * ez)
 
     return sma, eccentricity, inclination
+
+
+def set_position_geodetic(backend: StkBackend, path: str, point: GeoPoint,
+                          unit: GeodeticWriteUnit) -> None:
+    """Place a static object, in whatever unit STK was measured to want."""
+    backend.execute_connect(
+        f"SetPosition {path} Geodetic "
+        f"{unit.to_command_angle(point.latitude_rad)!r} "
+        f"{unit.to_command_angle(point.longitude_rad)!r} 0.0")
+
+
+def measure_geodetic_write_unit(backend: StkBackend, when: StkTime,
+                                scale: Optional[AngleScale] = None,
+                                probe_name: str = "ACAV_UnitProbe"
+                                ) -> GeodeticWriteUnit:
+    """Find the unit ``SetPosition ... Geodetic`` actually consumes.
+
+    Places a throwaway target at a known point, reads it back, and keeps
+    whichever interpretation round-trips. The probe point is chosen so
+    the two interpretations are ~28 deg and ~40 deg apart, far outside
+    anything the geodetic/geocentric difference or the study's spherical
+    placement model could account for.
+
+    Measured on the live install: STK consumes **degrees** here, while
+    reporting radians back through LLA State once the Latitude and
+    Longitude unit preferences are set. The two directions are
+    genuinely independent and neither may be inferred from the other.
+    """
+    scale = scale or AngleScale()
+    probe_lat_rad, probe_lon_rad = 0.5, 0.7
+    attempts: List[str] = []
+
+    try:
+        path = conv_canonical(backend.create_object("Target", probe_name))
+    except StkBridgeError as exc:
+        return GeodeticWriteUnit(
+            1.0, "radians (assumed)",
+            [f"could not create the probe target: {exc}"])
+
+    try:
+        for label, factor in (("degrees", 180.0 / math.pi),
+                              ("radians", 1.0)):
+            command = (f"SetPosition {path} Geodetic "
+                       f"{probe_lat_rad * factor!r} "
+                       f"{probe_lon_rad * factor!r} 0.0")
+            try:
+                if not backend.execute_connect(command).ack:
+                    attempts.append(f"{label}: NACK")
+                    continue
+            except StkBridgeError as exc:
+                attempts.append(f"{label}: {exc}")
+                continue
+
+            read = read_geodetic(backend, path, when, scale)
+            if not read.ok:
+                attempts.append(
+                    f"{label}: could not read the probe back\n"
+                    f"{read.diagnostic}")
+                break
+            if (abs(read.point.latitude_rad - probe_lat_rad) < 0.02
+                    and abs(read.point.longitude_rad - probe_lon_rad) < 0.02):
+                LOGGER.info("SetPosition Geodetic takes %s", label)
+                return GeodeticWriteUnit(factor, label, attempts)
+            attempts.append(
+                f"{label}: wrote ({probe_lat_rad:.4f}, {probe_lon_rad:.4f}) "
+                f"rad, read back ({read.point.latitude_rad:.4f}, "
+                f"{read.point.longitude_rad:.4f}) rad via {read.method}")
+    finally:
+        try:
+            backend.delete_object(path)
+        except StkBridgeError:
+            LOGGER.warning("could not delete the unit probe %s", path)
+
+    return GeodeticWriteUnit(1.0, "UNDETERMINED (assuming radians)", attempts)
+
+
+def conv_canonical(path: str) -> str:
+    """Local alias so this module does not import core/ for one call."""
+    from stk_bridge.core import conversions as conv
+    return conv.canonical_object_path(path)

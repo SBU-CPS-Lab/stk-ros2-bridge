@@ -72,10 +72,13 @@ from acav.slew_model import off_nadir_angle_deg
 from acav.spec import AcavSpec
 from acav.stk_queries import (
     AngleScale,
+    GeodeticWriteUnit,
     measure_angle_scale,
+    measure_geodetic_write_unit,
     osculating_elements,
     read_geodetic,
     read_state,
+    set_position_geodetic,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -222,6 +225,14 @@ class AcavScenarioVerifier:
             backend_type=backend.backend_type.value, scenario_name=spec.name)
         self._epoch: Optional[StkTime] = None
         self._angle_scale = AngleScale()
+        #: The unit SetPosition Geodetic consumes. Taken from the build
+        #: report when the scenario was built in this process, measured
+        #: otherwise -- but never assumed. Placing the FOV probes in
+        #: radians where STK wanted degrees put every one of them in the
+        #: wrong place and made the verifier report that the sensor
+        #: could not see nadir, which was true of the probes and not of
+        #: the sensor.
+        self._geodetic_write_unit: Optional[GeodeticWriteUnit] = None
         self._last_read_diagnostic = ""
         self._mask_failure = ""
         #: Probe-ladder measurement, taken once and read by both the
@@ -238,6 +249,25 @@ class AcavScenarioVerifier:
     @property
     def report(self) -> VerificationReport:
         return self._report
+
+    @property
+    def geodetic_write_unit(self) -> GeodeticWriteUnit:
+        """The unit to write geodetic positions in, measured once."""
+        if self._geodetic_write_unit is None:
+            if self._build and self._build.geodetic_write_unit in (
+                    "degrees", "radians"):
+                factor = (180.0 / math.pi
+                          if self._build.geodetic_write_unit == "degrees"
+                          else 1.0)
+                self._geodetic_write_unit = GeodeticWriteUnit(
+                    factor, self._build.geodetic_write_unit)
+            else:
+                self._geodetic_write_unit = measure_geodetic_write_unit(
+                    self._backend, self._t(0.0), self._angle_scale,
+                    probe_name="ACAV_VerifyUnitProbe")
+            self._report.measurements["geodetic_write_unit"] = \
+                self._geodetic_write_unit.label
+        return self._geodetic_write_unit
 
     @property
     def is_mock(self) -> bool:
@@ -990,19 +1020,28 @@ class AcavScenarioVerifier:
 
     def _retry_with_flipped_boresight(self, target_path: str,
                                       probe_epoch: float) -> bool:
-        """Try the opposite elevation, then put the sensor back."""
-        original = (self._build.sensor_pointing_method if self._build
-                    else "Point Fixed AzEl (radians)")
-        flipped = (f"Point {self._sensor} Fixed AzEl 0.0 "
-                   f"{-math.pi / 2.0!r} Rotate")
-        if not self._connect_ok(flipped):
-            return False
+        """Try the opposite elevation, then put the sensor back.
+
+        Degrees, like every other angle-bearing Connect command measured
+        on this install. This previously sent radians, so the "flipped"
+        retry actually set an elevation of -1.57 DEG -- essentially the
+        horizon -- and the answer it produced said nothing about the
+        boresight either way.
+        """
+        for label, elevation_deg in (("flip", -90.0),):
+            if not self._connect_ok(
+                    f"Point {self._sensor} Fixed AzEl 0.0 "
+                    f"{elevation_deg!r} Rotate"):
+                LOGGER.warning("could not apply the %s pointing", label)
+                return False
+
         visible = self._probe_visible(target_path, probe_epoch)
-        restore = (f"Point {self._sensor} Fixed AzEl 0.0 "
-                   f"{math.pi / 2.0!r} Rotate")
-        if not self._connect_ok(restore):
+
+        if not self._connect_ok(
+                f"Point {self._sensor} Fixed AzEl 0.0 90.0 Rotate"):
             LOGGER.warning("could not restore the sensor pointing after the "
-                           "boresight probe (%s)", original)
+                           "boresight probe; rebuild before running "
+                           "experiments")
         return visible
 
     def _contact_seconds(self) -> float:
@@ -1115,9 +1154,11 @@ class AcavScenarioVerifier:
                 object_name = f"{_PROBE_PREFIX}_{name}".replace(".", "p")
                 path = conv.canonical_object_path(
                     verifier._backend.create_object("Target", object_name))
-                verifier._connect_ok(
-                    f"SetPosition {path} Geodetic "
-                    f"{point.latitude_rad!r} {point.longitude_rad!r} 0.0")
+                try:
+                    set_position_geodetic(verifier._backend, path, point,
+                                          verifier.geodetic_write_unit)
+                except StkBridgeError as exc:
+                    LOGGER.warning("could not place probe %s: %s", path, exc)
                 self._paths[name] = path
             return self._paths
 

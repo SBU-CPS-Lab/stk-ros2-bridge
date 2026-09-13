@@ -29,7 +29,7 @@ cost a second one.
 
 import math
 import shlex
-from typing import Optional
+from typing import List, Optional
 
 from stk_bridge.backends.base import (
     AccessIntervalData,
@@ -78,6 +78,9 @@ class Stk126Double(MockBackend):
         #: degrees. ``TERRAIN_HORIZON_DEG`` stands in for terrain having
         #: been loaded; None means no mask is in force.
         self.mask_elevation_deg: Optional[float] = None
+        #: Every Connect command issued, so a test can assert on the
+        #: unit a command was sent in rather than only on its effect.
+        self.commands: List[str] = []
 
     def _lla_columns(self, obj):
         """Report LLA in whichever unit this install is pretending to use.
@@ -163,6 +166,7 @@ class Stk126Double(MockBackend):
 
     def execute_connect(self, command: str,
                         timeout_s: Optional[float] = None) -> ConnectResponse:
+        self.commands.append(command)
         tokens = shlex.split(command)
         verb = tokens[0].lower() if tokens else ""
 

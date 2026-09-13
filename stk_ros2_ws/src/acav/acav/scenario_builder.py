@@ -50,10 +50,13 @@ from acav.ground_track import (
 from acav.spec import AcavSpec, TargetSpec
 from acav.stk_queries import (
     AngleScale,
+    GeodeticWriteUnit,
     measure_angle_scale,
+    measure_geodetic_write_unit,
     osculating_elements,
     read_geodetic,
     read_state,
+    set_position_geodetic,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -165,7 +168,7 @@ class AcavScenarioBuilder:
         self._report = BuildReport(scenario_name=spec.name)
         self._epoch: Optional[StkTime] = None
         self._angle_scale = AngleScale()
-        self._geodetic_write_scale = 1.0
+        self._geodetic_write_unit = GeodeticWriteUnit()
 
     @property
     def report(self) -> BuildReport:
@@ -445,19 +448,18 @@ class AcavScenarioBuilder:
                 "left targeting or nadir-locked, it will NOT follow the "
                 "commanded attitude and the study measures nothing"))
 
-    # -- targets -----------------------------------------------------------
-
     # -- units -------------------------------------------------------------
 
     def _measure_units(self) -> None:
         """Measure how STK reports angles, and what unit it writes them in.
 
         Both were assumed to be radians on the strength of
-        ``configure_units()`` succeeding. The first live run disproved
-        the write half: ``SetState Classical`` consumed degrees while
-        the Angle preference was radians. Since the two directions are
-        evidently independent, both are now measured rather than
-        inferred from each other.
+        ``configure_units()`` succeeding. Live runs disproved both
+        halves independently: Connect commands consume degrees, and
+        "LLA State" reported degrees until Latitude and Longitude -- which
+        are their own unit dimensions -- were set as well. The two
+        directions are measured separately because neither predicts the
+        other.
         """
         satellite = self._report.satellite_path
         # A spread of epochs: near the equator the two units are
@@ -480,89 +482,23 @@ class AcavScenarioBuilder:
                 "large. Fix configure_units() in the bridge before running "
                 "any experiment.")
 
-        self._geodetic_write_scale = self._measure_geodetic_write_scale()
-
-    def _measure_geodetic_write_scale(self) -> float:
-        """Find the unit ``SetPosition ... Geodetic`` actually consumes.
-
-        Places a throwaway target at a known point, reads it back, and
-        keeps whichever interpretation round-trips. The probe point is
-        deliberately at a latitude and longitude where the two
-        interpretations are ~28 deg and ~40 deg apart, so the comparison
-        cannot be confused by the geodetic/geocentric difference or by
-        the spherical model this study places targets with.
-
-        Returns the factor to multiply radians by before sending.
-        """
-        probe_lat_rad, probe_lon_rad = 0.5, 0.7
-        path = ""
-        try:
-            path = conv.canonical_object_path(
-                self._backend.create_object("Target", "ACAV_UnitProbe"))
-        except StkBridgeError as exc:
+        self._geodetic_write_unit = measure_geodetic_write_unit(
+            self._backend, self._t(0.0), self._angle_scale)
+        self._report.geodetic_write_unit = self._geodetic_write_unit.label
+        if self._geodetic_write_unit.attempts:
+            self._report.attempts["SetPosition Geodetic unit probe"] = \
+                list(self._geodetic_write_unit.attempts)
+        if "UNDETERMINED" in self._geodetic_write_unit.label:
             self._report.warnings.append(
-                f"could not create the geodetic unit probe ({exc}); "
-                f"assuming SetPosition Geodetic takes radians")
-            self._report.geodetic_write_unit = "radians (assumed)"
-            return 1.0
-
-        try:
-            for label, factor in (("radians", 1.0),
-                                  ("degrees", 180.0 / math.pi)):
-                command = (f"SetPosition {path} Geodetic "
-                           f"{probe_lat_rad * factor!r} "
-                           f"{probe_lon_rad * factor!r} 0.0")
-                try:
-                    if not self._backend.execute_connect(command).ack:
-                        continue
-                except StkBridgeError as exc:
-                    self._report.attempts.setdefault(
-                        "SetPosition Geodetic unit probe", []).append(
-                            f"{label}: {exc}")
-                    continue
-
-                read = read_geodetic(self._backend, path, self._t(0.0),
-                                     self._angle_scale)
-                if not read.ok:
-                    self._report.attempts.setdefault(
-                        "SetPosition Geodetic unit probe", []).append(
-                            f"{label}: could not read the probe back\n"
-                            f"{read.diagnostic}")
-                    break
-                if (abs(read.point.latitude_rad - probe_lat_rad) < 0.02
-                        and abs(read.point.longitude_rad - probe_lon_rad)
-                        < 0.02):
-                    self._report.geodetic_write_unit = label
-                    LOGGER.info("SetPosition Geodetic takes %s", label)
-                    return factor
-                self._report.attempts.setdefault(
-                    "SetPosition Geodetic unit probe", []).append(
-                        f"{label}: wrote ({probe_lat_rad:.4f}, "
-                        f"{probe_lon_rad:.4f}) rad, read back "
-                        f"({read.point.latitude_rad:.4f}, "
-                        f"{read.point.longitude_rad:.4f}) rad "
-                        f"via {read.method}")
-        finally:
-            try:
-                self._backend.delete_object(path)
-            except StkBridgeError:
-                LOGGER.warning("could not delete the unit probe %s", path)
-
-        self._report.geodetic_write_unit = "UNDETERMINED (assuming radians)"
-        self._report.warnings.append(
-            "could not determine the unit SetPosition Geodetic consumes, so "
-            "target placement is unverified at the point of writing. If the "
-            "targets later turn out not to be within the satellite's "
-            "horizon, this is why.")
-        return 1.0
+                "could not determine the unit SetPosition Geodetic consumes, "
+                "so every target and the ground station may be placed "
+                "somewhere else entirely. If they later turn out not to be "
+                "within the satellite's horizon, this is why.")
 
     def _set_position_geodetic(self, path: str, point: GeoPoint) -> None:
-        """Place a static object, in whatever unit STK was measured to want."""
-        factor = getattr(self, "_geodetic_write_scale", 1.0)
-        self._backend.execute_connect(
-            f"SetPosition {path} Geodetic "
-            f"{point.latitude_rad * factor!r} "
-            f"{point.longitude_rad * factor!r} 0.0")
+        """Place a static object, in the unit STK was measured to want."""
+        set_position_geodetic(self._backend, path, point,
+                              self._geodetic_write_unit)
 
     # -- targets -----------------------------------------------------------
 
