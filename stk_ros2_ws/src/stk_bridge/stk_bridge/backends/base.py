@@ -560,6 +560,48 @@ class StkBackend(abc.ABC):
         raise CommandError("Define SimpleConic", object_path,
                            "; ".join(reasons))
 
+    def set_az_el_mask(self, object_path: str, mode: str,
+                       value: float = 0.0) -> str:
+        """Apply an azimuth/elevation mask to a static object.
+
+        ``mode`` is ``"terrain"`` or ``"constant"``; ``value`` is the
+        elevation in radians for a constant mask, and the maximum range
+        in metres for terrain. Returns a label describing how it was
+        applied; raises :class:`CommandError` with every attempt's
+        reason if nothing worked.
+
+        Exists as a backend method rather than a Connect string in the
+        caller because Connect answers a rejected ``SetAzElMask`` with
+        "Command has failed." and nothing else, so the only way to learn
+        anything is to try the Object Model, which only backends/ may
+        reach.
+        """
+        if mode == "terrain":
+            candidates = (
+                ("Connect SetAzElMask TerrainData",
+                 f"SetAzElMask {object_path} TerrainData"),
+                ("Connect SetAzElMask TerrainData (use + range)",
+                 f"SetAzElMask {object_path} TerrainData 1 {value!r}"),
+            )
+        else:
+            degrees = math.degrees(value)
+            candidates = (
+                ("Connect SetAzElMask Constant (degrees)",
+                 f"SetAzElMask {object_path} Constant {degrees!r}"),
+                ("Connect SetAzElMask Constant (radians)",
+                 f"SetAzElMask {object_path} Constant {value!r}"),
+            )
+
+        reasons = []
+        for label, command in candidates:
+            try:
+                if self.execute_connect(command).ack:
+                    return label
+                reasons.append(f"{label}: NACK")
+            except Exception as exc:                      # noqa: BLE001
+                reasons.append(f"{label}: {type(exc).__name__}: {exc}")
+        raise CommandError("SetAzElMask", object_path, "; ".join(reasons))
+
     def get_sensor_cone_half_angle_rad(self, object_path: str
                                        ) -> Optional[float]:
         """The sensor's configured cone half-angle, or None if unreadable.

@@ -223,6 +223,7 @@ class AcavScenarioVerifier:
         self._epoch: Optional[StkTime] = None
         self._angle_scale = AngleScale()
         self._last_read_diagnostic = ""
+        self._mask_failure = ""
         #: Probe-ladder measurement, taken once and read by both the
         #: boresight and the half-angle check. They are two conclusions
         #: from one experiment, and running the probes twice would both
@@ -1047,20 +1048,17 @@ class AcavScenarioVerifier:
             the result as evidence about masking -- a conclusion drawn
             from an experiment whose treatment never ran.
             """
-            path = self._verifier._ground_station
-            # Degrees first, matching every other angle-bearing Connect
-            # command measured on this install.
-            for command in (
-                f"SetAzElMask {path} Constant {self._elevation_deg!r}",
-                f"SetAzElMask {path} Constant "
-                f"{math.radians(self._elevation_deg)!r}",
-            ):
-                if self._verifier._connect_ok(command):
-                    self.applied = True
-                    return True
-            LOGGER.warning("could not apply a constant %.1f deg mask",
-                           self._elevation_deg)
-            return False
+            try:
+                self._verifier._backend.set_az_el_mask(
+                    self._verifier._ground_station, "constant",
+                    math.radians(self._elevation_deg))
+            except StkBridgeError as exc:
+                LOGGER.warning("could not apply a constant %.1f deg mask: %s",
+                               self._elevation_deg, exc)
+                self._verifier._mask_failure = str(exc)
+                return False
+            self.applied = True
+            return True
 
         def __exit__(self, exc_type, exc, tb) -> None:
             self._verifier._restore_configured_mask()
@@ -1080,18 +1078,16 @@ class AcavScenarioVerifier:
         if not path:
             return True
         config = self._spec.ground_station or {}
-        if config.get("terrain_masking", False):
-            candidates = (f"SetAzElMask {path} TerrainData 1 0.0",
-                          f"SetAzElMask {path} TerrainData")
-        else:
-            minimum = float(config.get("min_elevation_deg", 0.0))
-            candidates = (
-                f"SetAzElMask {path} Constant {math.radians(minimum)!r}",
-                f"SetAzElMask {path} Constant {minimum!r}")
-        for command in candidates:
-            if self._connect_ok(command):
-                return True
-        return False
+        terrain = bool(config.get("terrain_masking", False))
+        mode = "terrain" if terrain else "constant"
+        value = 0.0 if terrain else math.radians(
+            float(config.get("min_elevation_deg", 0.0)))
+        try:
+            self._backend.set_az_el_mask(path, mode, value)
+        except StkBridgeError as exc:
+            LOGGER.warning("could not restore the configured mask: %s", exc)
+            return False
+        return True
 
     class _ProbeTargets:
         """Creates FOV probe targets and always removes them again.

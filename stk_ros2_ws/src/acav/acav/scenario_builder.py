@@ -713,27 +713,25 @@ class AcavScenarioBuilder:
     def _apply_terrain_mask(self, path: str) -> None:
         """Enable terrain masking on the ground station.
 
-        The command ACKing proves only that STK parsed it, not that
+        Applying it proves only that STK accepted the request, not that
         terrain data covers this region. ``verify_acav_scenario.py``
-        therefore computes access with the terrain mask and again with a
-        constant mask and compares: identical results mean the terrain
-        mask is not actually doing anything, whatever the ACK said.
+        therefore computes access with the terrain mask, again with a
+        constant mask, and again with a control mask well above it:
+        identical results mean the terrain mask is not actually doing
+        anything, whatever was accepted here.
         """
-        candidates = [
-            ("SetAzElMask TerrainData",
-             f"SetAzElMask {path} TerrainData 1 0.0"),
-            ("SetAzElMask TerrainData (no range args)",
-             f"SetAzElMask {path} TerrainData"),
-            ("SetAzElMask TerrainData (metres of range)",
-             f"SetAzElMask {path} TerrainData 1 50000.0"),
-        ]
-        self._report.terrain_mask_method = self._try_commands(
-            candidates,
-            failure_note=(
-                "could not enable terrain masking. The scenario spec says "
-                "terrain is licensed, so this is unexpected -- check that "
-                "terrain data is loaded for the ground station's region "
-                "(Scenario > Basic > Terrain)."))
+        try:
+            self._report.terrain_mask_method = self._backend.set_az_el_mask(
+                path, "terrain", 0.0)
+        except StkBridgeError as exc:
+            self._report.terrain_mask_method = "none"
+            self._report.attempts["enable terrain masking"] = [str(exc)]
+            self._report.warnings.append(
+                "could not enable terrain masking. The study still runs; "
+                "the paper must then describe the ground-station mask as a "
+                "spherical-Earth elevation mask and must NOT claim terrain "
+                "masking. Check that terrain data is loaded for the "
+                "station's region (Scenario > Basic > Terrain).")
 
     # -- helpers -----------------------------------------------------------
 

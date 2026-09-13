@@ -132,6 +132,25 @@ class Stk126Double(MockBackend):
             obj.cone_half_angle_rad = STK_DEFAULT_CONE_HALF_ANGLE_RAD
         return path
 
+    def set_az_el_mask(self, object_path: str, mode: str,
+                       value: float = 0.0) -> str:
+        """Reject every form, as the live install did.
+
+        Goes through the backend method rather than execute_connect
+        because that is where the caller now asks; a double that only
+        intercepted the old path would let a regression through while
+        still looking like it reproduced the failure.
+        """
+        if self.reject_azelmask:
+            raise CommandError(
+                "SetAzElMask", object_path,
+                "Object Model SetAzElMask(eAzElMaskTerrainData): "
+                "no such enum member; "
+                "Connect SetAzElMask TerrainData: NACK Command has failed.")
+        self.mask_elevation_deg = (TERRAIN_HORIZON_DEG if mode == "terrain"
+                                   else math.degrees(value))
+        return f"double (stored {mode})"
+
     def set_sensor_cone(self, object_path: str, half_angle_rad: float,
                         angular_resolution_rad: float = 0.017453) -> str:
         if self.reject_define:
@@ -150,6 +169,7 @@ class Stk126Double(MockBackend):
         if verb == "define" and self.reject_define:
             raise CommandError("Define", command, "Command has failed.")
         if verb == "setazelmask":
+            # Reached only if something bypasses set_az_el_mask.
             if self.reject_azelmask:
                 raise CommandError("SetAzElMask", command,
                                    "Command has failed.")

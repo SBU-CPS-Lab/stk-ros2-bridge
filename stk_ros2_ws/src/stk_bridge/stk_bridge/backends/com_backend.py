@@ -147,24 +147,36 @@ class ComBackend(StkBackend):
             self._stk = None
 
     def configure_units(self) -> None:
-        """Force STK's unit preferences to SI.
-
-        After this, every Data Provider returns metres, metres/second,
-        radians, and seconds, so no downstream conversion is needed. See
-        ``backends/base.py``'s units contract.
+        """Force STK's unit preferences to SI, then check they took.
 
         ``SetCurrentUnit`` raises rather than returning a status if the
         dimension or unit name is unknown, and the exact spellings have
         shifted slightly across STK versions, so each is attempted
         independently and failures are logged rather than aborting the
         connection -- a session missing one unit preference is degraded,
-        not unusable, and ``core/validation.py`` will catch the resulting
-        magnitude error at startup if it matters.
+        not unusable.
+
+        Two things measured on a live STK 12.6 install shape this:
+
+        * **Latitude and Longitude are their own dimensions**, separate
+          from Angle. Setting Angle to radians succeeded and left "LLA
+          State" reporting *degrees*, because that provider's columns
+          are Latitude/Longitude-dimensioned. The bridge reported SI
+          units while handing out degrees, and only a case-study check
+          that compared LLA against a Cartesian position caught it.
+        * **Acceptance is not application.** Every preference is now
+          read back, because the failure above raised nothing and
+          logged a success.
         """
         preferences = (
             ("Distance", "m"),
             ("Time", "sec"),
             ("Angle", "rad"),
+            # Separate dimensions from Angle. Without these, every
+            # geodetic latitude and longitude the bridge reports is in
+            # degrees while claiming to be radians.
+            ("Latitude", "rad"),
+            ("Longitude", "rad"),
             ("Mass", "kg"),
             ("DateFormat", "UTCG"),
             ("AngleRate", "rad/sec"),
@@ -185,6 +197,33 @@ class ComBackend(StkBackend):
                 "core/validation.py's startup self-test",
                 ", ".join(failed),
             )
+
+        mismatched = self._verify_units(preferences)
+        if mismatched:
+            LOGGER.warning(
+                "unit preferences did not take effect: %s. SetCurrentUnit "
+                "accepted these and STK is still reporting the old unit, so "
+                "data providers in these dimensions are NOT SI. Anything "
+                "reading them must measure the scale rather than trust this "
+                "call.", ", ".join(mismatched))
+
+    def _verify_units(self, preferences) -> List[str]:
+        """Read each preference back; return the ones that disagree.
+
+        ``GetCurrentUnitAbbrv`` is the only direct evidence that a
+        preference applied. If the call itself is unavailable the list
+        comes back empty and the caller is no worse off than before.
+        """
+        mismatched: List[str] = []
+        for dimension, unit in preferences:
+            try:
+                actual = str(self._root.UnitPreferences.GetCurrentUnitAbbrv(
+                    dimension))
+            except Exception:
+                continue
+            if actual.strip().lower() != unit.strip().lower():
+                mismatched.append(f"{dimension}: asked {unit}, got {actual}")
+        return mismatched
 
     # -- version / capability probing --------------------------------------
 
@@ -490,6 +529,33 @@ class ComBackend(StkBackend):
             ) from exc
 
     def _exec_provider(self, provider: Any, query: DataProviderQuery) -> Any:
+        """Execute a provider, time-varying or fixed.
+
+        STK has two data-provider interfaces and they are not
+        interchangeable. ``AgDataPrvTimeVar`` takes epochs --
+        ``ExecSingle(time)`` / ``Exec(start, stop, step)``. A **fixed**
+        provider (``AgDataPrvFixed``) describes something that does not
+        vary with time, so it takes no epochs at all: ``Exec()``.
+
+        Static objects -- Target, Facility, Place -- serve *every*
+        provider through the fixed interface, position included.
+        Confirmed on a live STK 12.6 install, where reading a target's
+        position failed with ``'AgDataPrvFixed' object has no attribute
+        'ExecSingle'``. That single missing branch made every target and
+        facility position unreadable, which in turn made target
+        placement unverifiable and hid a unit error that put the whole
+        scenario in the wrong place.
+        """
+        if not hasattr(provider, "ExecSingle"):
+            try:
+                if query.elements:
+                    return provider.ExecElements(list(query.elements))
+                return provider.Exec()
+            except Exception as exc:
+                raise QueryError(
+                    query.provider_name, query.object_path,
+                    f"fixed-provider execution failed: {exc}") from exc
+
         start = (proto.format_utcg(query.start) if query.start
                  else str(self._root.CurrentScenario.StartTime))
         stop = (proto.format_utcg(query.stop) if query.stop
@@ -865,6 +931,44 @@ class ComBackend(StkBackend):
         except CommandError as exc:
             reasons.append(str(exc))
         raise CommandError("SetSensorCone", object_path, "; ".join(reasons))
+
+    def set_az_el_mask(self, object_path: str, mode: str,
+                       value: float = 0.0) -> str:
+        """Object Model first, then Connect.
+
+        Every Connect ``SetAzElMask`` form was rejected on a live STK
+        12.6 install with the generic "Command has failed.", which says
+        nothing about why. The typed path both has a better chance of
+        working -- the same was true of SetPropagatorType and
+        SetPatternSimpleConic -- and reports a real error when it does
+        not.
+        """
+        reasons: List[str] = []
+        try:
+            obj = self._get_object(object_path)
+            enum_type = self._resolve_enum("AgEAzElMaskType", "AzElMaskType")
+        except Exception as exc:                          # noqa: BLE001
+            reasons.append(f"Object Model unavailable: {exc}")
+            obj, enum_type = None, None
+
+        if obj is not None and enum_type is not None:
+            members = (("eAzElMaskTerrainData", "eAzElMaskTerrain")
+                       if mode == "terrain" else ("eAzElMaskConstant",))
+            for member in members:
+                try:
+                    obj.SetAzElMask(getattr(enum_type, member),
+                                    math.degrees(value)
+                                    if mode != "terrain" else value)
+                    return f"Object Model SetAzElMask({member})"
+                except Exception as exc:                  # noqa: BLE001
+                    reasons.append(f"SetAzElMask({member}): "
+                                   f"{type(exc).__name__}: {exc}")
+
+        try:
+            return super().set_az_el_mask(object_path, mode, value)
+        except CommandError as exc:
+            reasons.append(str(exc))
+        raise CommandError("SetAzElMask", object_path, "; ".join(reasons))
 
     def get_sensor_cone_half_angle_rad(self, object_path: str
                                        ) -> Optional[float]:

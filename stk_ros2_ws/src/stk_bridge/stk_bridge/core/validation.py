@@ -275,6 +275,8 @@ class ConventionValidator:
             self._run("ephemeris_present", self._check_ephemeris)
             self._run("data_provider_returns_data", self._check_data_present)
             self._run("distance_is_metres", self._check_distance_units)
+            self._run("geodetic_angles_are_radians",
+                      self._check_geodetic_angle_units)
             self._run("realtime_attitude_available",
                       self._check_realtime_attitude)
             self._run("quaternion_ordering", self._check_quaternion_ordering)
@@ -355,6 +357,70 @@ class ConventionValidator:
             f"object is not where it is expected to be, or the position "
             f"elements were misidentified (resolved to "
             f"{mapping['x']}/{mapping['y']}/{mapping['z']})."
+        )
+
+    def _check_geodetic_angle_units(self) -> str:
+        """Are LLA latitude and longitude radians, as the contract says?
+
+        Distance is checked above by magnitude; angles cannot be, because
+        a latitude is a small number in either unit. So this compares the
+        reported latitude against the one implied by the Fixed-frame
+        Cartesian position, whose unit the distance check has just
+        established.
+
+        This exists because the assumption failed on a live STK 12.6
+        install and nothing noticed. ``SetCurrentUnit("Angle", "rad")``
+        was accepted, and "LLA State" went on reporting degrees --
+        because **Latitude and Longitude are separate unit dimensions
+        from Angle**, and only Angle was being set. The bridge published
+        LLASample values 57x too large while its own logs said units
+        were SI.
+
+        Fatal by default: a digital twin fed degrees-labelled-radians
+        produces plausible, wrong, silently-accepted results, which is
+        the failure mode this whole validation pass exists to prevent.
+        """
+        epoch = self._backend.get_scenario_epoch()
+        cartesian, cmap = dp.execute(
+            self._backend, dp.CARTESIAN_POSITION, self._path,
+            frame="Fixed", start=epoch, stop=epoch)
+        x = dp.first_value(cartesian, dp.CARTESIAN_POSITION, cmap, "x")
+        y = dp.first_value(cartesian, dp.CARTESIAN_POSITION, cmap, "y")
+        z = dp.first_value(cartesian, dp.CARTESIAN_POSITION, cmap, "z")
+
+        radius = math.sqrt(x * x + y * y + z * z)
+        if radius <= 0.0:
+            raise ConventionValidationError(
+                "Fixed-frame position is degenerate; cannot check the "
+                "geodetic angle unit against it.")
+        implied_lat_rad = math.asin(max(-1.0, min(1.0, z / radius)))
+
+        lla, lmap = dp.execute(self._backend, dp.LLA_STATE, self._path,
+                               frame="Fixed", start=epoch, stop=epoch)
+        reported = dp.first_value(lla, dp.LLA_STATE, lmap, "latitude")
+
+        # Near the equator the two units are indistinguishable, so say so
+        # rather than confirm whichever was asked about first.
+        if abs(implied_lat_rad) < 0.05:
+            return (f"latitude {implied_lat_rad:.4f} rad is too close to the "
+                    f"equator to distinguish radians from degrees; unit "
+                    f"UNVERIFIED at this epoch")
+
+        # Geocentric vs geodetic latitude differ by at most 0.19 deg,
+        # nowhere near the 57x that separates the two units.
+        if abs(reported - implied_lat_rad) <= abs(
+                math.radians(reported) - implied_lat_rad):
+            return (f"LLA latitude {reported:.6f} matches the "
+                    f"Cartesian-implied {implied_lat_rad:.6f} rad -- radians")
+
+        raise ConventionValidationError(
+            f"LLA State reports latitude {reported:.6f}, which matches "
+            f"{math.degrees(implied_lat_rad):.6f} DEGREES rather than the "
+            f"{implied_lat_rad:.6f} radians the units contract promises. "
+            f"Latitude and Longitude are separate unit dimensions from "
+            f"Angle in STK: setting Angle alone leaves these in degrees. "
+            f"Check that configure_units() set Latitude and Longitude too, "
+            f"and that GetCurrentUnitAbbrv agrees they took effect."
         )
 
     def _check_realtime_attitude(self) -> str:

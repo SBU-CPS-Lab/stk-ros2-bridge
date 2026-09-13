@@ -106,6 +106,8 @@ class _MockObject:
     #: still at STK's wide default -- which is a real state, not an
     #: error, and one the verifier has to be able to detect.
     cone_half_angle_rad: Optional[float] = None
+    #: ("terrain"|"constant", value) once a mask is applied.
+    az_el_mask: Optional[Tuple[str, float]] = None
 
     dropped_positions: int = 0
     dropped_attitudes: int = 0
@@ -659,6 +661,12 @@ class MockBackend(StkBackend):
             obj.dropped_positions += 1
             return
         obj.position_samples.append((stamp, position_m))
+
+    def set_az_el_mask(self, object_path: str, mode: str,
+                       value: float = 0.0) -> str:
+        obj = self._obj(object_path)
+        obj.az_el_mask = (mode, value)
+        return f"mock (stored {mode})"
 
     def set_sensor_cone(self, object_path: str, half_angle_rad: float,
                         angular_resolution_rad: float = 0.017453) -> str:
