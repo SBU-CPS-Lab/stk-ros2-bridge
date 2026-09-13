@@ -217,4 +217,9 @@ one is unresolvable. Edit the builder, not the model.
 - **Block wiring.** `build_acav_twin` needs `setup_stk_ros` to have run
   first; it now checks for the message types up front and says so,
   rather than dying inside a mask callback with a half-built model open.
-  What happens after that point is unverified.
+  Connecting the Subscribe/Publish blocks' signals through Bus
+  Selector/Creator blocks into `GuidanceControl`'s inputs and outputs is
+  still unverified and unbuilt -- it needs the MATLAB-generated bus
+  object field names, which need `ros2genmsg` to have run, which this
+  development environment cannot do (see C4's own message additions,
+  `docs/C4_scheduler.md` section 2). Do it on the deploy machine, once.

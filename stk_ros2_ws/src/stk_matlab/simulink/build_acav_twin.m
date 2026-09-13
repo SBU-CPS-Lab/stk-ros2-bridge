@@ -14,7 +14,9 @@ function modelName = build_acav_twin(options)
 % ---------
 %   ROS2 Subscribe  /stk/<ns>/attitude     -> AttitudeState
 %   ROS2 Subscribe  /stk/<ns>/orbit        -> OrbitState
-%   ROS2 Subscribe  /acav/setpoint         -> the scheduler's target (C4)
+%   ROS2 Subscribe  /acav/setpoint         -> stk_msgs/TargetSetpoint,
+%                                              the scheduler's guidance
+%                                              target (C4)
 %           |
 %   Stateflow chart "MissionMode"  NADIR -> SLEW -> SETTLE -> IMAGE,
 %           |                      SAFE reachable from anywhere
@@ -26,6 +28,10 @@ function modelName = build_acav_twin(options)
 %   bypassed by the ForcedTruth switch.
 %           |
 %   ROS2 Publish   /stk/cmd/attitude       -> AttitudeCommand
+%   ROS2 Publish   /acav/twin_status       -> stk_msgs/TwinStatus (mode +
+%                                              boresight error, for the
+%                                              scheduler's capture scoring
+%                                              and SAFE detection)
 %   ROS2 Publish   /stk/lockstep/ack       -> the barrier ack
 %
 % Why the chart AND adcs.mission_mode
@@ -37,12 +43,33 @@ function modelName = build_acav_twin(options)
 % written to mirror that file line for line, and any change belongs in
 % both.
 %
+% Why /acav/setpoint carries a POSITION, not an attitude
+% -------------------------------------------------------
+% stk_msgs/TargetSetpoint carries the target's inertial position and a
+% has_target flag -- not a quaternion. The scheduler's whole
+% contribution to E2 is WHEN it switches targets and WHETHER it
+% attempts one at all (acav/scheduling.py); the guidance law that turns
+% "point here" into a commanded attitude, accounting for this vehicle's
+% own boresight axis and a velocity-referenced roll, stays entirely in
+% adcs.twin_step. An earlier version of this file wired the SAME topic
+% to stk_msgs/AttitudeCommand, which cannot carry a target position at
+% all -- caught before anything downstream depended on it, since the
+% signal wiring below was (and remains) unbuilt.
+%
 % What this does NOT do
 % ---------------------
-% It does not verify that the generated model runs. Simulink model
-% construction is version-sensitive, and the honest position is the same
-% one taken for STK: run it, and if a block name or parameter has moved
-% in your release, the error will say which. See docs/C3_adcs_twin.md.
+% It does not wire the blocks' signals together, and it does not verify
+% that the generated model runs. Both need a MATLAB-side ros2genmsg
+% pass against stk_msgs (see setup_stk_ros) to even know the generated
+% bus object's field names, which cannot be done in this development
+% environment (see docs/C3_adcs_twin.md). Wiring blind, without being
+% able to check a single connection, would risk shipping something that
+% LOOKS complete and silently is not -- worse than leaving it explicit.
+% Connect AttitudeSub/OrbitSub/SetpointSub through Bus Selector blocks
+% into GuidanceControl's (qMeas, omega, pos, vel, targetEci, haveTarget,
+% t) inputs, and GuidanceControl's (mode, err) outputs into a
+% TwinStatusPub via a Bus Creator, on the deploy machine, once messages
+% are generated there.
 
     arguments
         options.ModelName (1,1) string = "acav_twin"
@@ -50,6 +77,8 @@ function modelName = build_acav_twin(options)
         options.Prefix (1,1) string = "stk"
         options.LockstepMode (1,1) logical = true
         options.SampleTime (1,1) double = 0.1
+        options.SetpointTopic (1,1) string = "/acav/setpoint"
+        options.TwinStatusTopic (1,1) string = "/acav/twin_status"
     end
 
     modelName = char(options.ModelName);
@@ -83,7 +112,7 @@ function modelName = build_acav_twin(options)
     addSubscribe(modelName, 'OrbitSub', [40 130 200 190], ...
         [base '/orbit'], 'stk_msgs/OrbitState');
     addSubscribe(modelName, 'SetpointSub', [40 220 200 280], ...
-        '/acav/setpoint', 'stk_msgs/AttitudeCommand');
+        options.SetpointTopic, 'stk_msgs/TargetSetpoint');
 
     % -- mission mode chart ---------------------------------------------
     % In +adcs so it can be built and structurally checked without the
@@ -97,10 +126,12 @@ function modelName = build_acav_twin(options)
         controlBlock, 'Position', [270 40 470 190]);
     setMatlabFunctionBody(controlBlock, guidanceControlSource());
 
-    % -- command out ------------------------------------------------------
+    % -- command + status out ---------------------------------------------
     addPublish(modelName, 'AttitudeCmdPub', [540 40 720 100], ...
         sprintf('/%s/cmd/attitude', options.Prefix), ...
         'stk_msgs/AttitudeCommand');
+    addPublish(modelName, 'TwinStatusPub', [540 130 720 190], ...
+        options.TwinStatusTopic, 'stk_msgs/TwinStatus');
 
     if options.LockstepMode
         addPublish(modelName, 'LockstepAckPub', [540 220 720 280], ...
@@ -143,7 +174,8 @@ function requireMessages()
 % stk_msgs/AttitudeState", which does not tell a reader to run
 % setup_stk_ros.
     needed = ["stk_msgs/AttitudeState", "stk_msgs/OrbitState", ...
-              "stk_msgs/AttitudeCommand"];
+              "stk_msgs/AttitudeCommand", "stk_msgs/TargetSetpoint", ...
+              "stk_msgs/TwinStatus"];
     try
         available = string(ros2("msg", "list"));
     catch err

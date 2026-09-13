@@ -55,6 +55,8 @@ set(msg_files
   "msg/DataProviderRequest.msg"
   "msg/DataProviderResult.msg"
   "msg/ObjectDescriptor.msg"
+  "msg/TargetSetpoint.msg"
+  "msg/TwinStatus.msg"
 )
 
 set(srv_files

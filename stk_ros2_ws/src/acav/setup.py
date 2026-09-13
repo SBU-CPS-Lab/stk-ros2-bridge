@@ -30,11 +30,12 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            # C4 adds the scheduler node; C5 adds the campaign driver.
+            # C5 adds the campaign driver.
             "describe_scenario = acav.spec_cli:main",
             "build_acav_scenario = acav.build_cli:main",
             "verify_acav_scenario = acav.verify_cli:main",
             "export_twin_fixtures = acav.fixtures_cli:main",
+            "acav_scheduler = acav.scheduler_node:main",
         ],
     },
 )

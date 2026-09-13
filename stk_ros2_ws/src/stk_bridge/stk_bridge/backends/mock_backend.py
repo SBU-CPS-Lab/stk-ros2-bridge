@@ -396,12 +396,16 @@ class MockBackend(StkBackend):
         name = query.provider_name.strip().lower()
         if name == "cartesian position":
             self._require_group(query, {"ICRF", "J2000", "Fixed"})
-            return self._columns(query, times, self._position_columns(obj),
-                                 coverage=self._has_position_ephemeris_at)
+            return self._columns(
+                query, times,
+                self._position_columns(obj, query.group_element),
+                coverage=self._has_position_ephemeris_at)
         if name == "cartesian velocity":
             self._require_group(query, {"ICRF", "J2000", "Fixed"})
-            return self._columns(query, times, self._velocity_columns(obj),
-                                 coverage=self._has_position_ephemeris_at)
+            return self._columns(
+                query, times,
+                self._velocity_columns(obj, query.group_element),
+                coverage=self._has_position_ephemeris_at)
         if name in ("attitude quaternions", "attitude quaternion"):
             return self._columns(query, times,
                                  self._quaternion_columns(obj, inertial=True),
@@ -484,24 +488,58 @@ class MockBackend(StkBackend):
             columns=columns, row_count=len(times),
         )
 
-    def _position_columns(self, obj: _MockObject):
+    def _position_columns(self, obj: _MockObject,
+                          group_element: Optional[str] = None):
         def build(when: float) -> Dict[str, float]:
             self._require_positionable(obj, "Cartesian Position")
             if obj.geodetic is not None:
-                return dict(zip(("x", "y", "z"), _geodetic_to_ecef(
-                    *obj.geodetic)))
-            position, _ = self._propagate(obj, when)
+                fixed = _geodetic_to_ecef(*obj.geodetic)
+                position = self._maybe_to_inertial(fixed, when,
+                                                   group_element)
+            else:
+                position, _ = self._propagate(obj, when)
             return {"x": position[0], "y": position[1], "z": position[2]}
         return build
 
-    def _velocity_columns(self, obj: _MockObject):
+    def _velocity_columns(self, obj: _MockObject,
+                          group_element: Optional[str] = None):
         def build(when: float) -> Dict[str, float]:
             self._require_positionable(obj, "Cartesian Velocity")
             if obj.geodetic is not None:
+                # A fixed (Earth-rotating) point has non-zero velocity in
+                # an inertial frame even though it is motionless on the
+                # ground; that rotational component is not modelled here
+                # -- callers needing a placed object's inertial velocity
+                # should not rely on this mock for it.
                 return {"x": 0.0, "y": 0.0, "z": 0.0}
             _, velocity = self._propagate(obj, when)
             return {"x": velocity[0], "y": velocity[1], "z": velocity[2]}
         return build
+
+    def _maybe_to_inertial(self, fixed: Tuple[float, float, float],
+                           when: float, group_element: Optional[str]
+                           ) -> Tuple[float, float, float]:
+        """Rotate a Fixed-frame vector to inertial if that was requested.
+
+        Placed (geodetic) objects -- targets, facilities -- are static
+        only in the Fixed frame; their inertial position is
+        time-varying because the Earth rotates under them. Without this,
+        a "Cartesian Position/ICRF" query on a target returned the same
+        frozen value a "Fixed" query would, which is a plausible-looking
+        wrong answer for exactly the class of caller (a scheduler
+        computing an inertial line of sight to a ground target) this
+        mock exists to support developing against. Reuses the SAME
+        Earth-rotation model already applied to attitude in
+        ``_attitude_at``, for the same reason: fidelity does not matter
+        here, only that it is non-identity and time-varying.
+        """
+        if not group_element or group_element.strip().lower() == "fixed":
+            return fixed
+        from stk_bridge.core.conversions import (
+            quaternion_conjugate, rotate_vector,
+        )
+        rotation = self._earth_rotation(when)
+        return rotate_vector(quaternion_conjugate(rotation), fixed)
 
     def _quaternion_columns(self, obj: _MockObject, inertial: bool = True):
         def build(when: float) -> Dict[str, float]:

@@ -187,3 +187,89 @@ class TestProviderInventory:
         """Confirmed on a live STK 12.6 inventory: this provider does
         not exist. Rates come from Attitude Segment Quaternions."""
         assert "Body Axes Angular Velocity" not in backend.list_data_providers(SAT)
+
+
+class TestPlacedObjectInertialFrame:
+    """A geodetic (placed) object's Fixed-frame position is static by
+    construction; its INERTIAL position must not be, because a caller
+    asking "where is this ground point in ICRF right now" needs the
+    Earth's rotation folded in. Added when the ACAV scheduler needed a
+    target's inertial position for guidance and found every frame
+    returning the same frozen ECEF value -- a plausible-looking wrong
+    answer for exactly that caller."""
+
+    @pytest.fixture
+    def placed(self, backend):
+        path = backend.create_object("Target", "T1")
+        backend._objects[path].geodetic = (
+            math.radians(12.0), math.radians(34.0), 0.0)
+        return path
+
+    def _position(self, backend, path, group, when):
+        data = backend.query_data_provider(DataProviderQuery(
+            object_path=path, provider_name="Cartesian Position",
+            group_element=group, start=when, stop=when))
+        return tuple(data.columns[axis][0] for axis in ("x", "y", "z"))
+
+    def test_fixed_frame_is_constant_over_time(self, backend, placed):
+        epoch = backend.get_scenario_epoch()
+        early = self._position(backend, placed, "Fixed", epoch)
+        later = self._position(backend, placed, "Fixed",
+                               StkTime(epoch.epoch_seconds + 400.0))
+        assert early == pytest.approx(later)
+
+    def test_inertial_frame_varies_with_time(self, backend, placed):
+        epoch = backend.get_scenario_epoch()
+        early = self._position(backend, placed, "ICRF", epoch)
+        later = self._position(backend, placed, "ICRF",
+                               StkTime(epoch.epoch_seconds + 400.0))
+        assert early != pytest.approx(later)
+
+    def test_inertial_and_fixed_agree_at_the_epoch(self, backend, placed):
+        """The mock's Earth-rotation model is zeroed at the scenario
+        epoch (see _earth_rotation), so the two frames must coincide
+        there -- the one point where "frozen" and "rotating" cannot be
+        told apart, and therefore the one point a bug here could hide."""
+        epoch = backend.get_scenario_epoch()
+        fixed = self._position(backend, placed, "Fixed", epoch)
+        inertial = self._position(backend, placed, "ICRF", epoch)
+        assert fixed == pytest.approx(inertial, abs=1e-6)
+
+    def test_rotation_preserves_distance_from_earth_centre(self, backend,
+                                                            placed):
+        """A frame change must not move the point relative to the Earth
+        it is fixed to -- only relabel its inertial coordinates."""
+        epoch = backend.get_scenario_epoch()
+        fixed = self._position(backend, placed, "Fixed", epoch)
+        inertial = self._position(backend, placed, "ICRF",
+                                  StkTime(epoch.epoch_seconds + 250.0))
+        radius_fixed = math.sqrt(sum(c * c for c in fixed))
+        radius_inertial = math.sqrt(sum(c * c for c in inertial))
+        assert radius_inertial == pytest.approx(radius_fixed, rel=1e-9)
+
+    def test_a_satellite_is_unaffected(self, backend):
+        """Only PLACED (geodetic) objects get this treatment. A
+        satellite's Cartesian Position comes straight from orbit
+        propagation regardless of which frame was asked for -- a
+        separate, pre-existing simplification this change must not
+        alter -- so the two must still agree exactly, at a time well
+        away from the epoch where they would differ if this patch had
+        accidentally started rotating satellites too."""
+        epoch = backend.get_scenario_epoch()
+        later = StkTime(epoch.epoch_seconds + 250.0)
+        icrf = self._position(backend, SAT, "ICRF", later)
+        fixed = self._position(backend, SAT, "Fixed", later)
+        assert icrf == pytest.approx(fixed)
+
+    def test_velocity_is_still_zero_in_either_frame(self, backend, placed):
+        """Documented limitation: the rotational velocity component of a
+        placed object's inertial motion is not modelled. Fixed velocity
+        is correctly zero; inertial velocity is ALSO reported as zero,
+        which is wrong in an absolute sense but is an explicit,
+        documented gap rather than a silent one."""
+        epoch = backend.get_scenario_epoch()
+        data = backend.query_data_provider(DataProviderQuery(
+            object_path=placed, provider_name="Cartesian Velocity",
+            group_element="ICRF", start=epoch, stop=epoch))
+        velocity = tuple(data.columns[axis][0] for axis in ("x", "y", "z"))
+        assert velocity == (0.0, 0.0, 0.0)

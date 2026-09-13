@@ -375,5 +375,13 @@ class BridgePublishers:
         message.python_version = info.python_version
         message.agi_stk_wheel_version = info.agi_stk_wheel_version
         message.mean_command_latency_ms = worker.last_latency_ms
-        message.com_apartment_thread_id = worker.thread_id
+        # Masked to 32 bits: the field is diagnostic-only
+        # (BackendDiagnostics.msg), but threading.get_ident() is only
+        # GUARANTEED to fit a native thread handle, which is 32 bits on
+        # Windows -- where this bridge normally runs -- but can exceed
+        # uint32 on 64-bit Linux (observed running the mock backend in
+        # a container: an unmasked id here raised
+        # "must be an unsigned integer in [0, 4294967295]" and took
+        # down the free-run loop's status publish on every iteration).
+        message.com_apartment_thread_id = worker.thread_id & 0xFFFFFFFF
         self._pub_diagnostics.publish(message)

@@ -51,6 +51,22 @@ logs at WARNING every call.
 otherwise) · `compute_coverage` (goal rejected if any requested asset is
 on the RealTime propagator, since STK Coverage analysis excludes those)
 
+## Application-level messages
+
+Two `stk_msgs` types exist for consumers to talk to EACH OTHER, not to
+the bridge, and carry no `stk/` topic of their own -- the bridge never
+publishes or subscribes to them:
+
+| Type | Used on (by convention) | Purpose |
+|---|---|---|
+| `TargetSetpoint` | `/acav/setpoint` | A guidance target: inertial position + a have-target flag. The ACAV scheduler (`acav_scheduler`) publishes it; a closed-loop twin subscribes and turns it into a commanded attitude itself. |
+| `TwinStatus` | `/acav/twin_status` | A twin's own mode name and boresight pointing error, streamed back so a scheduler can score captures without re-deriving the angle from raw telemetry. |
+
+They live in `stk_msgs` rather than a separate package because that is
+where every other typed interface in this workspace already is, and
+because `ros2genmsg` (see `docs/02_matlab_setup.md`) only needs to be
+run against one message source, not several.
+
 ## Why absence, not defaults
 
 Every telemetry topic follows one rule: **if the bridge has no data for

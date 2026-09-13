@@ -1,0 +1,601 @@
+"""The ACAV scheduler: a ROS 2 node driving one closed-loop E2 run.
+
+    ros2 run acav acav_scheduler --ros-args \\
+        -p scheduler_type:=dynamics_aware \\
+        -p output_json:=/tmp/run_dynamics_aware.json
+
+This node is the "target scheduler" half of the ACAV architecture
+(``docs/C1_case_study_spec.md``): it decides WHICH target the vehicle
+should be pointed at and WHEN (``acav/scheduling.py``, entirely offline
+logic), tells the twin via ``/acav/setpoint``, and scores what actually
+happened against ``acav/metrics.py``'s capture criterion using the
+twin's own telemetry plus STK's access answer, obtained from the bridge
+it is a client of.
+
+It is also a lockstep barrier participant -- ``acav_scenario.yaml``
+names it in ``bridge.barrier_participants`` -- so it must acknowledge
+every step or the whole run stalls against the bridge's barrier
+timeout. That single obligation shapes the concurrency here: the
+lockstep ack is published unconditionally, every tick, from the very
+top of the step callback, before anything that could plausibly be slow
+(a service call) is even considered. Service calls (target position
+lookups, access checks) are all fire-and-forget (``call_async`` plus a
+done-callback that updates state when the answer eventually arrives),
+exactly so a slow STK round trip can never be the reason a step's ack
+is late.
+
+Design decisions worth being explicit about
+---------------------------------------------
+**Who computes the pointing error.** The twin does, in
+``/acav/twin_status`` -- not this node, independently, from raw
+telemetry. The twin already has the freshest (satellite state, target
+position) pair at the instant it computes ``boresight_error_rad``, and
+a second, independently-written implementation of the same angle here
+would risk exactly the failure C1 warns about for the slew model: two
+models measuring their own disagreement instead of the effect under
+study.
+
+**Who supplies target geometry.** This node queries each attempted
+target's Cartesian Position (ICRF) from the bridge's own
+``QueryDataProvider`` service, once, at start-of-run -- not by
+re-deriving an Earth-rotation model independently. Each target is
+static in STK's Fixed frame, so one query per target (at its own image
+epoch, since a target's *inertial* position drifts with Earth's
+rotation) is enough for the whole run; there is no ongoing per-step
+STK traffic this node introduces.
+
+**Who decides "was there access".** STK does, once, shortly after a
+target's image epoch has passed and the real-time attitude history up
+to it has therefore been committed -- via ``ComputeAccess`` on the
+(sensor, target) pair. Querying earlier would ask a question STK
+cannot yet answer.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Set
+
+from stk_bridge.backends.base import StkTime
+from stk_bridge.core import conversions as conv
+from stk_bridge.core import data_providers as dp
+from stk_bridge.exceptions import StkBridgeError
+
+from acav.capture_tracking import CaptureTracker, TelemetrySample, \
+    declined_result
+from acav.metrics import RunResult, TargetResult
+from acav.scheduling import ScheduleEntry, SchedulePlan, plan
+from acav.spec import AcavSpec
+
+LOGGER = logging.getLogger(__name__)
+
+#: Additional seconds of telemetry to keep buffered beyond
+#: pointing.settle_hold_s, so the tracker's retention window is not on
+#: the hairline against the hold window it has to score.
+RETENTION_MARGIN_S = 5.0
+
+#: Delay, seconds, after a target's image epoch before this node asks
+#: STK whether it had access at that epoch. STK's real-time attitude
+#: injection for that instant has already happened by the time the
+#: local sim clock reaches it; this margin is for the ScenarioTime tick
+#: sequencing, not for STK, and one extra step is generous slack.
+DEFAULT_ACCESS_QUERY_DELAY_S = 0.2
+
+#: How long past the window's own end to keep waiting for outstanding
+#: access answers before finalising the run anyway (as UNVERIFIED
+#: rather than silently omitted -- see ``_finish_run``).
+FINALIZE_GRACE_S = 10.0
+
+
+@dataclass
+class SchedulerOptions:
+    """Everything about a run that is not scenario data.
+
+    Scenario data (targets, tolerances, the barrier participant name)
+    comes from ``AcavSpec`` / ``acav_scenario.yaml`` -- these are the
+    run-time choices that make one invocation "the kinematic run" and
+    another "the dynamics-aware run" of the SAME scenario, which is
+    exactly what E2 compares.
+    """
+
+    scheduler_type: str = "dynamics_aware"
+    prefix: str = "stk"
+    participant_name: str = "acav_scheduler"
+    setpoint_topic: str = "/acav/setpoint"
+    twin_status_topic: str = "/acav/twin_status"
+    output_json: str = ""
+    access_query_delay_s: float = DEFAULT_ACCESS_QUERY_DELAY_S
+    auto_shutdown: bool = True
+    run_id: str = "run"
+    seed: Optional[int] = None
+
+
+class SchedulerNode:
+    """ROS-facing wiring around the pure scheduling/capture logic.
+
+    Constructed with an already-created ``node`` (dependency injection,
+    matching ``nodes/clock_node.py``'s convention) so the class itself
+    never imports ``rclpy``/``stk_msgs`` at module scope -- only lazily,
+    inside methods -- and so a future test could hand it a fake node
+    without a sourced ROS environment. The substantial logic it calls
+    into (``acav.scheduling``, ``acav.capture_tracking``) already is
+    tested that way, in ``test_scheduling.py`` / ``test_capture_tracking.py``.
+    """
+
+    def __init__(self, node, spec: AcavSpec, options: SchedulerOptions):
+        from std_msgs.msg import String
+        from stk_msgs.msg import ScenarioTime, TargetSetpoint, TwinStatus
+        from stk_msgs.srv import ComputeAccess, QueryDataProvider
+
+        from stk_bridge.interfaces import qos as qos_module
+
+        self._node = node
+        self._spec = spec
+        self._options = options
+        self._plan: SchedulePlan = plan(spec, options.scheduler_type)
+
+        if options.participant_name not in spec.bridge.get(
+                "barrier_participants", []):
+            LOGGER.warning(
+                "this node's participant_name %r is not listed in "
+                "acav_scenario.yaml's bridge.barrier_participants %r; "
+                "if the bridge runs in lockstep it will time out waiting "
+                "for an ack that never claims to be from a declared "
+                "participant.", options.participant_name,
+                spec.bridge.get("barrier_participants", []))
+
+        self._epoch: Optional[StkTime] = None
+        self._target_positions: Dict[str, "tuple[float, float, float]"] = {}
+        self._requested_positions: Set[str] = set()
+        self._access_requested: Set[str] = set()
+        self._results: Dict[str, TargetResult] = {}
+        self._finalized: Set[str] = set()
+        self._window_elapsed_at: Optional[float] = None
+        self._shutdown_requested = False
+
+        retention_s = spec.pointing.settle_hold_s + RETENTION_MARGIN_S
+        self._tracker = CaptureTracker(
+            capture_error_deg=spec.pointing.capture_error_deg,
+            settle_hold_s=spec.pointing.settle_hold_s,
+            retention_s=retention_s)
+
+        # Declined targets need no telemetry at all; their result is
+        # known the instant the schedule is built.
+        for declined in self._plan.declined:
+            self._results[declined.target_id] = declined_result(declined)
+            self._finalized.add(declined.target_id)
+
+        profiles = qos_module.from_config({})
+        prefix = options.prefix
+
+        self._pub_setpoint = node.create_publisher(
+            TargetSetpoint, options.setpoint_topic, profiles["command"])
+        self._pub_ack = node.create_publisher(
+            String, f"{prefix}/lockstep/ack", profiles["command"])
+
+        node.create_subscription(
+            ScenarioTime, f"{prefix}/scenario_time", self._on_scenario_time,
+            profiles["clock"])
+        node.create_subscription(
+            TwinStatus, options.twin_status_topic, self._on_twin_status,
+            profiles["telemetry"])
+
+        self._client_query = node.create_client(
+            QueryDataProvider, f"{prefix}/query_data_provider")
+        self._client_access = node.create_client(
+            ComputeAccess, f"{prefix}/compute_access")
+
+        LOGGER.info(
+            "acav_scheduler ready: policy=%s, %d attempted, %d declined",
+            self._plan.scheduler_type.value, len(self._plan.attempted),
+            len(self._plan.declined))
+
+    # -- lockstep step ------------------------------------------------------
+
+    def _on_scenario_time(self, message) -> None:
+        stamp = conv.ros_time_to_stk(message.sim_time)
+        epoch = conv.ros_time_to_stk(message.scenario_epoch)
+
+        if self._epoch is None:
+            self._epoch = epoch
+            LOGGER.info("scenario epoch resolved: %s", epoch)
+
+        sim_time_s = stamp - self._epoch
+
+        # Retried every tick, not just once at start: a service that is
+        # not yet advertised at t=0 (the bridge node and this one can
+        # start in either order) would otherwise leave a target's
+        # position permanently unrequested. Each call is a no-op for
+        # any target already resolved or already in flight.
+        self._request_all_target_positions()
+        self._publish_setpoint(sim_time_s)
+        self._check_access_due(sim_time_s)
+        self._check_run_complete(sim_time_s)
+
+        # Ack unconditionally, last: everything above is either O(1) or
+        # a fire-and-forget async call. Nothing here can block on STK.
+        self._acknowledge_step(int(message.step_index))
+
+    def _acknowledge_step(self, step_index: int) -> None:
+        from std_msgs.msg import String
+
+        message = String()
+        message.data = f"{self._options.participant_name}:{step_index}"
+        self._pub_ack.publish(message)
+
+    def _publish_setpoint(self, sim_time_s: float) -> None:
+        from stk_msgs.msg import TargetSetpoint
+
+        active = self._plan.active_entry_at(sim_time_s)
+        message = TargetSetpoint()
+        message.header.stamp = conv.stk_time_to_ros(self._epoch + sim_time_s)
+        message.header.frame_id = "icrf"
+
+        if active is not None and active.target_id in self._target_positions:
+            x, y, z = self._target_positions[active.target_id]
+            message.target_id = active.target_id
+            message.target_position_m.x = x
+            message.target_position_m.y = y
+            message.target_position_m.z = z
+            message.has_target = True
+        else:
+            # Either genuinely no active target (nadir hold), or one IS
+            # active but its position query has not resolved yet -- the
+            # latter is possible only in the first fraction of a second
+            # of the run, while the start-of-run queries are still in
+            # flight. Holding at nadir is the honest answer in both
+            # cases: pointing at (0, 0, 0) would be worse than pointing
+            # at nothing.
+            message.target_id = ""
+            message.has_target = False
+
+        self._pub_setpoint.publish(message)
+
+    # -- twin telemetry -------------------------------------------------
+
+    def _on_twin_status(self, message) -> None:
+        if self._epoch is None:
+            LOGGER.debug("twin_status received before the scenario epoch "
+                        "is known; dropping one sample")
+            return
+        time_s = conv.ros_time_to_stk(message.header.stamp) - self._epoch
+        try:
+            self._tracker.observe(TelemetrySample(
+                time_s=time_s,
+                error_deg=math.degrees(message.boresight_error_rad),
+                mode=str(message.mode)))
+        except ValueError as exc:
+            # Out-of-order telemetry is a harness/transport problem, not
+            # something to crash the node over mid-run; log loudly and
+            # keep going; that target's window may end up short a
+            # sample, which evaluate_capture will notice on its own.
+            LOGGER.error("twin_status out of order: %s", exc)
+
+    # -- target geometry --------------------------------------------------
+
+    def _request_all_target_positions(self) -> None:
+        for entry in self._plan.attempted:
+            self._request_target_position(entry)
+
+    def _request_target_position(self, entry: ScheduleEntry) -> None:
+        from stk_msgs.msg import DataProviderRequest
+        from stk_msgs.srv import QueryDataProvider
+
+        if (entry.target_id in self._requested_positions
+                or entry.target_id in self._target_positions):
+            return
+        self._requested_positions.add(entry.target_id)
+
+        target_path = target_object_path(entry.target_id)
+        when = self._epoch + entry.t_image_s
+        request = QueryDataProvider.Request()
+        request.request = DataProviderRequest(
+            object_path=target_path, provider_name="Cartesian Position",
+            group_name="ICRF", element_names=[],
+            start_time=conv.stk_time_to_ros(when),
+            stop_time=conv.stk_time_to_ros(when), step_s=1.0)
+
+        if not self._client_query.wait_for_service(timeout_sec=0.0):
+            LOGGER.warning(
+                "%s/query_data_provider is not available yet; will retry "
+                "on the next scenario_time tick", self._options.prefix)
+            self._requested_positions.discard(entry.target_id)
+            return
+
+        future = self._client_query.call_async(request)
+        future.add_done_callback(
+            lambda f, target_id=entry.target_id, path=target_path:
+                self._on_target_position_response(target_id, path, f))
+
+    def _on_target_position_response(self, target_id: str, target_path: str,
+                                     future) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:                          # noqa: BLE001
+            LOGGER.error("QueryDataProvider for %s failed: %s; retrying",
+                         target_id, exc)
+            self._requested_positions.discard(target_id)
+            return
+
+        result = response.result
+        if not result.success or result.row_count == 0:
+            LOGGER.error(
+                "could not get %s's Cartesian Position/ICRF (%s); this "
+                "target's captures cannot be evaluated and its setpoint "
+                "will hold at nadir for the whole run", target_id,
+                result.error_message or "no rows")
+            return
+
+        try:
+            columns = _unflatten(result.column_names, result.flattened_data,
+                                 result.row_count)
+            data = dp.DataProviderData(
+                object_path=target_path, provider_name="Cartesian Position",
+                columns=columns, row_count=result.row_count)
+            mapping = dp.resolve_columns(dp.CARTESIAN_POSITION, data)
+            x = dp.first_value(data, dp.CARTESIAN_POSITION, mapping, "x")
+            y = dp.first_value(data, dp.CARTESIAN_POSITION, mapping, "y")
+            z = dp.first_value(data, dp.CARTESIAN_POSITION, mapping, "z")
+        except StkBridgeError as exc:
+            LOGGER.error("could not parse %s's position result: %s",
+                        target_id, exc)
+            return
+
+        self._target_positions[target_id] = (x, y, z)
+        LOGGER.info("%s inertial position resolved: (%.1f, %.1f, %.1f) m",
+                   target_id, x, y, z)
+
+    # -- access checks ------------------------------------------------------
+
+    def _check_access_due(self, sim_time_s: float) -> None:
+        for entry in self._plan.attempted:
+            if entry.target_id in self._access_requested:
+                continue
+            due_at = entry.t_image_s + self._options.access_query_delay_s
+            if sim_time_s >= due_at:
+                self._request_access(entry)
+
+    def _request_access(self, entry: ScheduleEntry) -> None:
+        from stk_msgs.srv import ComputeAccess
+
+        self._access_requested.add(entry.target_id)
+        target_path = target_object_path(entry.target_id)
+        sensor_path = self._spec.sensor.object_path
+
+        window_start = self._epoch + max(
+            0.0, entry.t_image_s - self._spec.pointing.settle_hold_s)
+        window_stop = self._epoch + entry.t_image_s
+
+        if not self._client_access.wait_for_service(timeout_sec=0.0):
+            LOGGER.warning(
+                "%s/compute_access not available yet for %s; retrying "
+                "on the next tick", self._options.prefix, entry.target_id)
+            self._access_requested.discard(entry.target_id)
+            return
+
+        request = ComputeAccess.Request()
+        request.from_object_path = sensor_path
+        request.to_object_path = target_path
+        request.start_time = conv.stk_time_to_ros(window_start)
+        request.stop_time = conv.stk_time_to_ros(window_stop)
+
+        future = self._client_access.call_async(request)
+        future.add_done_callback(
+            lambda f, e=entry: self._on_access_response(e, f))
+
+    def _on_access_response(self, entry: ScheduleEntry, future) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:                          # noqa: BLE001
+            LOGGER.error("ComputeAccess for %s failed: %s", entry.target_id,
+                        exc)
+            self._access_requested.discard(entry.target_id)
+            return
+
+        if not response.success:
+            LOGGER.error("ComputeAccess for %s reported failure: %s",
+                        entry.target_id, response.message)
+            self._access_requested.discard(entry.target_id)
+            return
+
+        image_epoch = self._epoch + entry.t_image_s
+        has_access = any(
+            conv.ros_time_to_stk(interval.start_time) <= image_epoch
+            <= conv.ros_time_to_stk(interval.stop_time)
+            for interval in response.accesses.intervals)
+
+        try:
+            self._results[entry.target_id] = self._tracker.finalize(
+                entry, has_access)
+        except ValueError as exc:
+            LOGGER.error("could not finalise %s: %s", entry.target_id, exc)
+            return
+        self._finalized.add(entry.target_id)
+        LOGGER.info("%s finalised: %s (access=%s)", entry.target_id,
+                   self._results[entry.target_id].outcome.value, has_access)
+
+    # -- run completion -------------------------------------------------
+
+    def _check_run_complete(self, sim_time_s: float) -> None:
+        if self._shutdown_requested:
+            return
+        if sim_time_s < self._spec.window_duration_s:
+            return
+        if self._window_elapsed_at is None:
+            self._window_elapsed_at = sim_time_s
+
+        all_done = len(self._finalized) == len(self._spec.targets)
+        grace_expired = (sim_time_s - self._window_elapsed_at
+                        >= FINALIZE_GRACE_S)
+        if all_done or grace_expired:
+            self._finish_run(forced=not all_done)
+
+    def _finish_run(self, forced: bool) -> None:
+        self._shutdown_requested = True
+        if forced:
+            missing = [t.id for t in self._spec.targets
+                      if t.id not in self._finalized]
+            LOGGER.error(
+                "finalising the run with %d target(s) never scored (no "
+                "access answer arrived in time): %s. Neither CAPTURED "
+                "nor any other outcome is a valid guess for missing "
+                "data, so these are omitted from the result rather than "
+                "scored as a failure they may not have been.",
+                len(missing), missing)
+            for target_id in missing:
+                self._results.pop(target_id, None)
+
+        result = self._build_run_result()
+        self._write_output(result)
+        LOGGER.info("run complete: %d/%d captured (scheduler=%s)\n%s",
+                   result.captured_count, result.attempted_count,
+                   result.scheduler,
+                   "\n".join(f"  {t.target_id}: {t.outcome.value}"
+                            for t in result.targets))
+        if self._options.auto_shutdown:
+            self._request_shutdown()
+
+    def _build_run_result(self) -> RunResult:
+        ordered_ids = [t.id for t in
+                       sorted(self._spec.targets, key=lambda t: t.t_image_s)]
+        targets = [self._results[target_id] for target_id in ordered_ids
+                  if target_id in self._results]
+        return RunResult(
+            run_id=self._options.run_id,
+            scheduler=self._plan.scheduler_type.value,
+            targets=targets,
+            seed=self._options.seed,
+        )
+
+    def _write_output(self, result: RunResult) -> None:
+        if not self._options.output_json:
+            return
+        payload = {
+            "run_id": result.run_id,
+            "scheduler": result.scheduler,
+            "seed": result.seed,
+            "attempted_count": result.attempted_count,
+            "captured_count": result.captured_count,
+            "targets": [
+                {
+                    "target_id": t.target_id,
+                    "attempted": t.attempted,
+                    "outcome": t.outcome.value,
+                    "image_time_s": t.image_time_s,
+                    "error_at_image_deg": t.error_at_image_deg,
+                    "max_error_in_hold_deg": t.max_error_in_hold_deg,
+                }
+                for t in result.targets
+            ],
+        }
+        with open(self._options.output_json, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        LOGGER.info("wrote %s", self._options.output_json)
+
+    def _request_shutdown(self) -> None:
+        import rclpy
+
+        if rclpy.ok():
+            self._node.create_timer(0.5, self._shutdown_timer_callback)
+
+    def _shutdown_timer_callback(self) -> None:
+        import rclpy
+
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+def target_object_path(target_id: str) -> str:
+    """The STK object path a scenario target id resolves to.
+
+    Matches the convention ``scenario_builder.py`` creates targets
+    under (``Target`` objects named by their scenario id) -- this is
+    the ONE place that convention is assumed on the scheduler side, so
+    a future change to it needs changing in one place, not wherever a
+    target path gets built.
+    """
+    return f"*/Target/{target_id}"
+
+
+def _unflatten(column_names: List[str], flattened: List[float],
+              row_count: int) -> Dict[str, List[float]]:
+    """Row-major ``flattened_data`` back into per-column lists.
+
+    Mirrors ``DataProviderResult.msg``'s own documented layout
+    (``row_count x len(column_names)``, row-major) exactly, so this must
+    not drift from that comment if the wire format ever changes.
+    """
+    columns: Dict[str, List[float]] = {name: [] for name in column_names}
+    width = len(column_names)
+    for row in range(row_count):
+        offset = row * width
+        for index, name in enumerate(column_names):
+            columns[name].append(flattened[offset + index])
+    return columns
+
+
+def load_spec(spec_path: str) -> AcavSpec:
+    return AcavSpec.load(spec_path or None)
+
+
+def main(args=None) -> None:
+    import rclpy
+    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.node import Node
+
+    rclpy.init(args=args)
+    node = Node("acav_scheduler")
+
+    node.declare_parameter("scenario_config", "")
+    node.declare_parameter("scheduler_type", "dynamics_aware")
+    node.declare_parameter("prefix", "stk")
+    node.declare_parameter("participant_name", "acav_scheduler")
+    node.declare_parameter("setpoint_topic", "/acav/setpoint")
+    node.declare_parameter("twin_status_topic", "/acav/twin_status")
+    node.declare_parameter("output_json", "")
+    node.declare_parameter("access_query_delay_s",
+                           DEFAULT_ACCESS_QUERY_DELAY_S)
+    node.declare_parameter("auto_shutdown", True)
+    node.declare_parameter("run_id", "run")
+    node.declare_parameter("seed", -1)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+
+    spec = load_spec(node.get_parameter("scenario_config").value)
+    seed_value = int(node.get_parameter("seed").value)
+    options = SchedulerOptions(
+        scheduler_type=str(node.get_parameter("scheduler_type").value),
+        prefix=str(node.get_parameter("prefix").value),
+        participant_name=str(node.get_parameter("participant_name").value),
+        setpoint_topic=str(node.get_parameter("setpoint_topic").value),
+        twin_status_topic=str(node.get_parameter("twin_status_topic").value),
+        output_json=str(node.get_parameter("output_json").value),
+        access_query_delay_s=float(
+            node.get_parameter("access_query_delay_s").value),
+        auto_shutdown=bool(node.get_parameter("auto_shutdown").value),
+        run_id=str(node.get_parameter("run_id").value),
+        seed=None if seed_value < 0 else seed_value,
+    )
+
+    scheduler = SchedulerNode(node, spec, options)
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        LOGGER.info("interrupted")
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+    del scheduler
+
+
+if __name__ == "__main__":
+    main()
