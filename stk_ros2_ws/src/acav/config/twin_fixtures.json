@@ -1,0 +1,1135 @@
+{
+  "version": 1,
+  "generated_from": "acav/twin_reference.py",
+  "note": "Expected values produced by the Python reference. The MATLAB twin must reproduce them; see stk_matlab/test_acav_twin.m.",
+  "config": {
+    "inertia_kg_m2": [
+      0.123,
+      0.096,
+      0.041
+    ],
+    "max_torque_Nm": 0.002,
+    "momentum_capacity_Nms": 0.02,
+    "boresight_body": [
+      0.0,
+      0.0,
+      1.0
+    ],
+    "natural_frequency_rad_s": 1.0,
+    "damping_ratio": 0.707,
+    "profile_authority": 0.8,
+    "settle_entry_rad": 0.03490658503988659,
+    "capture_error_rad": 0.008726646259971648,
+    "settle_hold_s": 2.0,
+    "max_body_rate_rad_s": 0.2617993877991494
+  },
+  "quaternion_algebra": [
+    {
+      "name": "multiply",
+      "a": [
+        0.0,
+        0.0,
+        0.3420201433256687,
+        0.9396926207859084
+      ],
+      "b": [
+        -0.21643961393810288,
+        -0.0,
+        -0.0,
+        0.9762960071199334
+      ],
+      "expected": [
+        -0.20338670806338613,
+        -0.07402670778046234,
+        0.3339129002834377,
+        0.9174181535933481
+      ]
+    },
+    {
+      "name": "rotate_inertial_x_into_body_after_90deg_yaw",
+      "a": [
+        0.0,
+        0.0,
+        0.7071067811865475,
+        0.7071067811865476
+      ],
+      "vector": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "expected": [
+        2.220446049250313e-16,
+        -1.0,
+        0.0
+      ]
+    },
+    {
+      "name": "error_quaternion_is_body_referenced",
+      "a": [
+        0.08189960831908934,
+        0.029809019626209157,
+        0.34071865342161006,
+        0.9361168066628592
+      ],
+      "b": [
+        0.0,
+        0.0,
+        0.3420201433256687,
+        0.9396926207859084
+      ],
+      "expected": [
+        0.08715574274765818,
+        0.0,
+        -5.551115123125783e-17,
+        0.9961946980917457
+      ]
+    },
+    {
+      "name": "boresight_error_ignores_roll",
+      "a": [
+        0.0,
+        0.0,
+        0.6087614290087207,
+        0.7933533402912353
+      ],
+      "b": [
+        0.0,
+        0.0,
+        0.3420201433256687,
+        0.9396926207859084
+      ],
+      "expected_scalar": 0.0
+    }
+  ],
+  "attitude_construction": [
+    {
+      "name": "nadir",
+      "position": [
+        6878137.0,
+        0.0,
+        0.0
+      ],
+      "velocity": [
+        0.0,
+        1000.0,
+        7500.0
+      ],
+      "expected": [
+        -0.04682974299888196,
+        -0.7055543743544213,
+        0.04682974299888196,
+        0.7055543743544213
+      ]
+    },
+    {
+      "name": "target",
+      "position": [
+        6878137.0,
+        0.0,
+        0.0
+      ],
+      "velocity": [
+        0.0,
+        1000.0,
+        7500.0
+      ],
+      "target": [
+        6371000.0,
+        200000.0,
+        50000.0
+      ],
+      "expected": [
+        -0.16679839185337744,
+        -0.6530780902966073,
+        -0.09252614014486678,
+        0.732875308520867
+      ]
+    }
+  ],
+  "wheels": [
+    {
+      "name": "within_limits",
+      "torque_Nm": [
+        0.001,
+        -0.0005,
+        0.0002
+      ],
+      "dt": 0.1,
+      "initial_momentum_Nms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "health": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "expected_delivered_Nm": [
+        0.001,
+        -0.0005,
+        0.0002
+      ],
+      "expected_momentum_Nms": [
+        -0.0001,
+        5e-05,
+        -2e-05
+      ],
+      "expected_saturated": false
+    },
+    {
+      "name": "torque_saturated",
+      "torque_Nm": [
+        0.01,
+        0.0,
+        0.0
+      ],
+      "dt": 0.1,
+      "initial_momentum_Nms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "health": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "expected_delivered_Nm": [
+        0.002,
+        0.0,
+        0.0
+      ],
+      "expected_momentum_Nms": [
+        -0.0002,
+        0.0,
+        0.0
+      ],
+      "expected_saturated": true
+    },
+    {
+      "name": "momentum_saturated",
+      "torque_Nm": [
+        0.002,
+        0.0,
+        0.0
+      ],
+      "dt": 1.0,
+      "initial_momentum_Nms": [
+        -0.0195,
+        0.0,
+        0.0
+      ],
+      "health": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "expected_delivered_Nm": [
+        0.0005000000000000004,
+        0.0,
+        0.0
+      ],
+      "expected_momentum_Nms": [
+        -0.02,
+        0.0,
+        0.0
+      ],
+      "expected_saturated": true
+    },
+    {
+      "name": "failed_wheel",
+      "torque_Nm": [
+        0.002,
+        0.002,
+        0.0
+      ],
+      "dt": 0.1,
+      "initial_momentum_Nms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "health": [
+        0.0,
+        1.0,
+        1.0
+      ],
+      "expected_delivered_Nm": [
+        -0.0,
+        0.002,
+        0.0
+      ],
+      "expected_momentum_Nms": [
+        0.0,
+        -0.0002,
+        0.0
+      ],
+      "expected_saturated": true
+    }
+  ],
+  "dynamics": [
+    {
+      "name": "torque_free_tumble",
+      "initial_rate_rad_s": [
+        0.05,
+        -0.03,
+        0.08
+      ],
+      "torque_Nm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "wheel_momentum_Nms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "steps": 500,
+      "dt": 0.01,
+      "expected_quaternion": [
+        0.11756788628765315,
+        -0.09433633169532833,
+        0.19007686440932955,
+        0.9701284627576081
+      ],
+      "expected_rate_rad_s": [
+        0.04345407066221992,
+        -0.04548153011470691,
+        0.07415570312481876
+      ]
+    },
+    {
+      "name": "constant_torque",
+      "initial_rate_rad_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "torque_Nm": [
+        0.001,
+        0.0,
+        0.0
+      ],
+      "wheel_momentum_Nms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "steps": 200,
+      "dt": 0.01,
+      "expected_quaternion": [
+        0.008129991737122635,
+        0.0,
+        0.0,
+        0.9999669510710614
+      ],
+      "expected_rate_rad_s": [
+        0.016260162601626067,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "gyroscopic_with_wheel_momentum",
+      "initial_rate_rad_s": [
+        0.02,
+        0.01,
+        -0.03
+      ],
+      "torque_Nm": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "wheel_momentum_Nms": [
+        0.005,
+        -0.002,
+        0.001
+      ],
+      "steps": 500,
+      "dt": 0.01,
+      "expected_quaternion": [
+        0.05136425422288968,
+        0.03700429449798345,
+        -0.057184890556271524,
+        0.996354497088712
+      ],
+      "expected_rate_rad_s": [
+        0.02051746569424497,
+        0.01904341759316295,
+        -0.014903400033144887
+      ]
+    }
+  ],
+  "profile": [
+    {
+      "name": "slew_13.4deg",
+      "start": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "finish": [
+        0.11667073709933316,
+        0.0,
+        0.0,
+        0.9931706495384861
+      ],
+      "expected_duration_s": 8.480347388428516,
+      "expected_total_angle_rad": 0.23387411976724015,
+      "samples": [
+        {
+          "elapsed_s": 0.0,
+          "angle_rad": 0.0,
+          "rate_rad_s": 0.0,
+          "quaternion": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "omega_rad_s": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 2.120086847107129,
+          "angle_rad": 0.029234264970905026,
+          "rate_rad_s": 0.027578365490824448,
+          "quaternion": [
+            0.014616611973556005,
+            0.0,
+            0.0,
+            0.999893171621056
+          ],
+          "omega_rad_s": [
+            0.027578365490824448,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 4.240173694214258,
+          "angle_rad": 0.1169370598836201,
+          "rate_rad_s": 0.055156730981648895,
+          "quaternion": [
+            0.05843522251824644,
+            0.0,
+            0.0,
+            0.9982912023899855
+          ],
+          "omega_rad_s": [
+            0.055156730981648895,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 6.360260541321387,
+          "angle_rad": 0.20463985479633512,
+          "rate_rad_s": 0.027578365490824448,
+          "quaternion": [
+            0.10214148334579,
+            0.0,
+            0.0,
+            0.9947698816208308
+          ],
+          "omega_rad_s": [
+            0.027578365490824448,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 8.480347388428516,
+          "angle_rad": 0.23387411976724015,
+          "rate_rad_s": 0.0,
+          "quaternion": [
+            0.11667073709933316,
+            0.0,
+            0.0,
+            0.9931706495384861
+          ],
+          "omega_rad_s": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "slew_42.3deg",
+      "start": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "finish": [
+        0.36081082648764173,
+        0.0,
+        0.0,
+        0.9326390231430941
+      ],
+      "expected_duration_s": 15.06716095122211,
+      "expected_total_angle_rad": 0.7382742735936013,
+      "samples": [
+        {
+          "elapsed_s": 0.0,
+          "angle_rad": 0.0,
+          "rate_rad_s": 0.0,
+          "quaternion": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "omega_rad_s": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 3.7667902378055276,
+          "angle_rad": 0.09228428419920016,
+          "rate_rad_s": 0.048998897402348335,
+          "quaternion": [
+            0.046125770324365024,
+            0.0,
+            0.0,
+            0.9989356402251268
+          ],
+          "omega_rad_s": [
+            0.048998897402348335,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 7.533580475611055,
+          "angle_rad": 0.36913713679680066,
+          "rate_rad_s": 0.09799779480469667,
+          "quaternion": [
+            0.18352244666103637,
+            0.0,
+            0.0,
+            0.9830155194967917
+          ],
+          "omega_rad_s": [
+            0.09799779480469667,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 11.300370713416584,
+          "angle_rad": 0.6459899893944012,
+          "rate_rad_s": 0.04899889740234832,
+          "quaternion": [
+            0.3174081005805511,
+            0.0,
+            0.0,
+            0.9482890369954968
+          ],
+          "omega_rad_s": [
+            0.04899889740234832,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 15.06716095122211,
+          "angle_rad": 0.7382742735936013,
+          "rate_rad_s": 0.0,
+          "quaternion": [
+            0.3608108264876418,
+            0.0,
+            0.0,
+            0.9326390231430942
+          ],
+          "omega_rad_s": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "slew_120deg",
+      "start": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "finish": [
+        0.8660254037844386,
+        0.0,
+        0.0,
+        0.5000000000000001
+      ],
+      "expected_duration_s": 26.10066234964769,
+      "expected_total_angle_rad": 2.0943951023931953,
+      "samples": [
+        {
+          "elapsed_s": 0.0,
+          "angle_rad": 0.0,
+          "rate_rad_s": 0.0,
+          "quaternion": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "omega_rad_s": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 6.525165587411922,
+          "angle_rad": 0.27692868906110424,
+          "rate_rad_s": 0.08488020276308192,
+          "quaternion": [
+            0.1380223200934998,
+            0.0,
+            0.0,
+            0.9904291186935124
+          ],
+          "omega_rad_s": [
+            0.08488020276308192,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 13.050331174823844,
+          "angle_rad": 1.0471975511965979,
+          "rate_rad_s": 0.13008130081300814,
+          "quaternion": [
+            0.5000000000000001,
+            0.0,
+            0.0,
+            0.8660254037844387
+          ],
+          "omega_rad_s": [
+            0.13008130081300814,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 19.575496762235765,
+          "angle_rad": 1.8174664133320908,
+          "rate_rad_s": 0.08488020276308193,
+          "quaternion": [
+            0.7887256173896646,
+            0.0,
+            0.0,
+            0.6147453948369945
+          ],
+          "omega_rad_s": [
+            0.08488020276308193,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "elapsed_s": 26.10066234964769,
+          "angle_rad": 2.0943951023931953,
+          "rate_rad_s": 0.0,
+          "quaternion": [
+            0.8660254037844386,
+            0.0,
+            0.0,
+            0.5000000000000001
+          ],
+          "omega_rad_s": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    }
+  ],
+  "controller": [
+    {
+      "name": "small_error",
+      "quaternion": [
+        0.10710833401230097,
+        -0.44633487830518065,
+        0.25308595322820776,
+        0.8516222645468932
+      ],
+      "omega_rad_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_reference": [
+        0.09967254373236599,
+        -0.448526446795647,
+        0.24918135933091498,
+        0.8525245220595057
+      ],
+      "omega_reference_rad_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "expected_torque_Nm": [
+        -0.001073363866299992,
+        4.3298697960381105e-18,
+        5.6898930012039275e-19
+      ]
+    },
+    {
+      "name": "large_error",
+      "quaternion": [
+        0.38524211306370443,
+        -0.33625194804874836,
+        0.3875589642190628,
+        0.7670209847253731
+      ],
+      "omega_rad_s": [
+        0.01,
+        -0.02,
+        0.005
+      ],
+      "quaternion_reference": [
+        0.09967254373236599,
+        -0.448526446795647,
+        0.24918135933091498,
+        0.8525245220595057
+      ],
+      "omega_reference_rad_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "expected_torque_Nm": [
+        -0.04380769762905724,
+        0.0027148800000000063,
+        -0.0002898699999999989
+      ]
+    },
+    {
+      "name": "tracking_with_feedforward",
+      "quaternion": [
+        0.11453596757791411,
+        -0.4441093196856755,
+        0.25697127365030015,
+        0.8506551527016456
+      ],
+      "omega_rad_s": [
+        0.05,
+        0.0,
+        0.0
+      ],
+      "quaternion_reference": [
+        0.09967254373236599,
+        -0.448526446795647,
+        0.24918135933091498,
+        0.8525245220595057
+      ],
+      "omega_reference_rad_s": [
+        0.05,
+        0.0,
+        0.0
+      ],
+      "expected_torque_Nm": [
+        -0.0021466459917858743,
+        4.662936703425658e-18,
+        -1.422473250300982e-18
+      ]
+    },
+    {
+      "name": "long_way_round",
+      "quaternion": [
+        0.8222648033746757,
+        0.3232815346966935,
+        0.39844243327898893,
+        -0.24619762350208632
+      ],
+      "omega_rad_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_reference": [
+        0.09967254373236599,
+        -0.448526446795647,
+        0.24918135933091498,
+        0.8525245220595057
+      ],
+      "omega_reference_rad_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "expected_torque_Nm": [
+        0.12113135362050158,
+        6.661338147750939e-19,
+        0.0
+      ]
+    }
+  ],
+  "mode_chart": [
+    {
+      "name": "nadir_to_slew",
+      "mode_in": "NADIR",
+      "boresight_error_rad": 0.5235987755982988,
+      "body_rate_rad_s": 0.0,
+      "momentum_fraction": 0.0,
+      "slew_requested": true,
+      "expected_mode": "SLEW"
+    },
+    {
+      "name": "slew_holds_until_profile_done",
+      "mode_in": "SLEW",
+      "boresight_error_rad": 0.5235987755982988,
+      "body_rate_rad_s": 0.017453292519943295,
+      "momentum_fraction": 0.0,
+      "slew_requested": false,
+      "expected_mode": "SETTLE"
+    },
+    {
+      "name": "settle_to_image",
+      "mode_in": "SETTLE",
+      "boresight_error_rad": 0.017453292519943295,
+      "body_rate_rad_s": 0.0017453292519943296,
+      "momentum_fraction": 0.0,
+      "slew_requested": false,
+      "expected_mode": "IMAGE"
+    },
+    {
+      "name": "settle_waits",
+      "mode_in": "SETTLE",
+      "boresight_error_rad": 0.05235987755982989,
+      "body_rate_rad_s": 0.0017453292519943296,
+      "momentum_fraction": 0.0,
+      "slew_requested": false,
+      "expected_mode": "SETTLE"
+    },
+    {
+      "name": "saturation_trips_safe_from_image",
+      "mode_in": "IMAGE",
+      "boresight_error_rad": 0.0017453292519943296,
+      "body_rate_rad_s": 0.0,
+      "momentum_fraction": 1.0,
+      "slew_requested": true,
+      "expected_mode": "SAFE"
+    },
+    {
+      "name": "rate_trips_safe",
+      "mode_in": "SLEW",
+      "boresight_error_rad": 0.08726646259971647,
+      "body_rate_rad_s": 0.2792526803190927,
+      "momentum_fraction": 0.0,
+      "slew_requested": false,
+      "expected_mode": "SAFE"
+    },
+    {
+      "name": "safe_latches",
+      "mode_in": "SAFE",
+      "boresight_error_rad": 0.0,
+      "body_rate_rad_s": 0.0,
+      "momentum_fraction": 0.0,
+      "slew_requested": true,
+      "expected_mode": "SAFE"
+    }
+  ],
+  "closed_loop": [
+    {
+      "name": "closed_loop_18.6deg",
+      "start": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "target": [
+        0.16160382110336113,
+        0.0,
+        0.0,
+        0.9868557164068072
+      ],
+      "duration_s": 40.0,
+      "dt": 0.01,
+      "expected_settling_time_s": 12.950000000000001,
+      "checkpoints": [
+        {
+          "time_s": 0.0,
+          "quaternion": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "rate_rad_s": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 0.3246312408709453,
+          "wheel_momentum_Nms": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "time_s": 5.0,
+          "quaternion": [
+            0.0699471495347163,
+            0.0,
+            0.0,
+            0.9975506985973035
+          ],
+          "rate_rad_s": [
+            0.06315341875542882,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 0.18462261535138202,
+          "wheel_momentum_Nms": [
+            -0.007784848004697728,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "time_s": 10.0,
+          "quaternion": [
+            0.17115782449161834,
+            0.0,
+            0.0,
+            0.985243624244936
+          ],
+          "rate_rad_s": [
+            0.003538169083875115,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 0.019378189421186232,
+          "wheel_momentum_Nms": [
+            -0.00041712374285529126,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "time_s": 20.0,
+          "quaternion": [
+            0.16168416692932905,
+            0.0,
+            0.0,
+            0.9868425559147563
+          ],
+          "rate_rad_s": [
+            -0.00010011717721882122,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 0.00016283304707763292,
+          "wheel_momentum_Nms": [
+            1.2240429324815876e-05,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "time_s": 30.0,
+          "quaternion": [
+            0.16160395719980153,
+            0.0,
+            0.0,
+            0.986855694120151
+          ],
+          "rate_rad_s": [
+            -1.7994399440218026e-07,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 2.7581831807399826e-07,
+          "wheel_momentum_Nms": [
+            2.1989777404347362e-08,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "time_s": 40.0,
+          "quaternion": [
+            0.16160382129089174,
+            0.0,
+            0.0,
+            0.986855716376098
+          ],
+          "rate_rad_s": [
+            -2.5204802093941655e-10,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 3.8005681934905056e-10,
+          "wheel_momentum_Nms": [
+            3.0797295734170107e-11,
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "closed_loop_42.3deg",
+      "start": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "target": [
+        0.36081082648764173,
+        0.0,
+        0.0,
+        0.9326390231430941
+      ],
+      "duration_s": 40.0,
+      "dt": 0.01,
+      "expected_settling_time_s": 18.240000000000002,
+      "checkpoints": [
+        {
+          "time_s": 0.0,
+          "quaternion": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "rate_rad_s": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 0.7382742735936013,
+          "wheel_momentum_Nms": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "time_s": 5.0,
+          "quaternion": [
+            0.0699471495347163,
+            0.0,
+            0.0,
+            0.9975506985973035
+          ],
+          "rate_rad_s": [
+            0.06315341875542882,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 0.598265648074038,
+          "wheel_momentum_Nms": [
+            -0.00778504721773814,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "time_s": 10.0,
+          "quaternion": [
+            0.28239593110555594,
+            0.0,
+            0.0,
+            0.959297940212021
+          ],
+          "rate_rad_s": [
+            0.07702283092810792,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 0.16569270878544318,
+          "wheel_momentum_Nms": [
+            -0.009453808204157288,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "time_s": 20.0,
+          "quaternion": [
+            0.3624333379342574,
+            0.0,
+            0.0,
+            0.9320096971350849
+          ],
+          "rate_rad_s": [
+            -0.0019069863356113706,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 0.0034805720122540857,
+          "wheel_momentum_Nms": [
+            0.0002333832012125146,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "time_s": 30.0,
+          "quaternion": [
+            0.3608144899427284,
+            0.0,
+            0.0,
+            0.9326376058509376
+          ],
+          "rate_rad_s": [
+            -5.033118209203513e-06,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 7.856111055496205e-06,
+          "wheel_momentum_Nms": [
+            6.151513480583888e-07,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "time_s": 40.0,
+          "quaternion": [
+            0.3608108318973668,
+            0.0,
+            0.0,
+            0.9326390210502294
+          ],
+          "rate_rad_s": [
+            -7.648690158285148e-09,
+            0.0,
+            0.0
+          ],
+          "boresight_error_rad": 1.1600897797947596e-08,
+          "wheel_momentum_Nms": [
+            9.34620565770656e-10,
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    }
+  ]
+}

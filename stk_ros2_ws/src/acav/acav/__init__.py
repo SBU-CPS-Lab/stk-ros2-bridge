@@ -13,10 +13,30 @@ Phase C1 (this delivery) fixes the cross-phase contracts:
 ``metrics``     The capture criterion and every reported metric, shared
                 by C4, C5, and C6.
 
-Later phases add the STK scenario builder (C2), the Simulink twin (C3),
-the scheduler node (C4), the experiment harness (C5), and analysis (C6).
+C2 adds the STK scenario builder and its empirical verifier.
+
+C3 adds the ADCS twin's executable reference:
+
+``attitude``        Quaternion algebra and the study's frame conventions.
+``twin_reference``  Dynamics, wheels, profile, control law, mode logic --
+                    the semantics the MATLAB twin is a transcription of.
+``twin_fixtures``   The cross-language contract between the two.
+
+Later phases add the scheduler node (C4), the experiment harness (C5),
+and analysis (C6).
 """
 
+from acav.attitude import (  # noqa: F401
+    boresight_error_rad,
+    pointing_error_rad,
+    quat_align,
+    quat_error,
+    quat_from_axis_angle,
+    quat_multiply,
+    quat_normalize,
+    rotate_to_body,
+    rotate_to_inertial,
+)
 from acav.metrics import (  # noqa: F401
     CaptureOutcome,
     PointingSample,
@@ -39,14 +59,33 @@ from acav.slew_model import (  # noqa: F401
     slew_time_s,
 )
 from acav.spec import AcavSpec, TargetSpec  # noqa: F401
+from acav.twin_reference import (  # noqa: F401
+    MissionMode,
+    ReactionWheels,
+    RigidBody,
+    SlewProfile,
+    TwinConfig,
+    nadir_attitude,
+    settling_time_s,
+    simulate_slew,
+    target_attitude,
+    tracking_torque,
+    update_mode,
+)
 
 __version__ = "0.1.0"
 
 __all__ = [
-    "AcavSpec", "CaptureOutcome", "PointingSample", "RunResult",
-    "SlewLimits", "TargetResult", "TargetSpec", "capture_rate",
-    "coverage_rate", "determinism_report", "determinism_signature",
-    "evaluate_capture", "off_nadir_angle_deg", "outcome_breakdown",
-    "over_promise_gap", "pointing_error_stats", "slew_between_targets_rad",
-    "slew_time_deg_s", "slew_time_s",
+    "AcavSpec", "CaptureOutcome", "MissionMode", "PointingSample",
+    "ReactionWheels", "RigidBody", "RunResult", "SlewLimits", "SlewProfile",
+    "TargetResult", "TargetSpec", "TwinConfig", "boresight_error_rad",
+    "capture_rate", "coverage_rate", "determinism_report",
+    "determinism_signature", "evaluate_capture", "nadir_attitude",
+    "off_nadir_angle_deg", "outcome_breakdown", "over_promise_gap",
+    "pointing_error_rad", "pointing_error_stats", "quat_align",
+    "quat_error", "quat_from_axis_angle", "quat_multiply",
+    "quat_normalize", "rotate_to_body", "rotate_to_inertial",
+    "settling_time_s", "simulate_slew", "slew_between_targets_rad",
+    "slew_time_deg_s", "slew_time_s", "target_attitude", "tracking_torque",
+    "update_mode",
 ]

@@ -13,7 +13,8 @@ setup(
         ("share/ament_index/resource_index/packages",
             ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
+        (os.path.join("share", package_name, "config"),
+            glob("config/*.yaml") + glob("config/*.json")),
         # Installed for reference/inspection; the runnable form is the
         # console_scripts below, which import acav.build_cli /
         # acav.verify_cli. The files in scripts/ are thin shims so the
@@ -33,6 +34,7 @@ setup(
             "describe_scenario = acav.spec_cli:main",
             "build_acav_scenario = acav.build_cli:main",
             "verify_acav_scenario = acav.verify_cli:main",
+            "export_twin_fixtures = acav.fixtures_cli:main",
         ],
     },
 )

@@ -1,0 +1,456 @@
+"""Tests for the ADCS twin's reference implementation.
+
+These are the semantics the MATLAB twin is a transcription of, so a test
+that only checks the code against itself is worth nothing here. Each one
+below asserts either a physical invariant (momentum conservation, energy
+behaviour), agreement with the *independently derived* slew model that
+the scheduler uses, or a control-design property the study depends on
+(no overshoot past the capture tolerance, SAFE latching).
+"""
+
+import math
+
+import pytest
+
+from acav.attitude import (
+    boresight_error_rad,
+    dot,
+    pointing_error_rad,
+    quat_from_axis_angle,
+    quat_multiply,
+    rotate_to_inertial,
+)
+from acav.slew_model import slew_time_s
+from acav.spec import AcavSpec
+from acav.twin_reference import (
+    MissionMode,
+    ModeState,
+    ReactionWheels,
+    RigidBody,
+    SlewProfile,
+    TwinConfig,
+    nadir_attitude,
+    settling_time_s,
+    simulate_slew,
+    target_attitude,
+    tracking_torque,
+    update_mode,
+)
+
+IDENTITY = (0.0, 0.0, 0.0, 1.0)
+X, Y, Z = (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
+
+
+@pytest.fixture(scope="module")
+def spec():
+    return AcavSpec.load()
+
+
+@pytest.fixture(scope="module")
+def config(spec):
+    return TwinConfig.from_spec(spec)
+
+
+class TestConfigComesFromTheScenario:
+    def test_nothing_is_hardcoded_away_from_the_yaml(self, spec, config):
+        assert config.inertia_kg_m2 == (0.123, 0.096, 0.041)
+        assert config.max_torque_Nm == spec.actuators.max_torque_Nm
+        assert config.boresight_body == tuple(
+            spec.sensor.boresight_body_axis)
+        assert config.capture_error_rad == pytest.approx(
+            math.radians(spec.pointing.capture_error_deg))
+
+    def test_the_twin_and_the_scheduler_share_one_slew_model(self, spec,
+                                                             config):
+        """C1's central contract. Two independently-written slew models
+        would make E2 measure their disagreement rather than the effect
+        under study."""
+        assert config.slew_limits().alpha_rad_s2 == pytest.approx(
+            spec.slew_limits().alpha_rad_s2)
+        assert config.slew_limits().omega_max_rad_s == pytest.approx(
+            spec.slew_limits().omega_max_rad_s)
+
+    def test_gains_equalise_bandwidth_across_a_very_anisotropic_body(
+            self, config):
+        """Inertia spans 0.041 to 0.123 kg m^2. One scalar gain would
+        make the z axis three times faster than x and the response
+        direction-dependent for no physical reason."""
+        kp, kd = config.gains()
+        for axis in range(3):
+            omega_n = math.sqrt(kp[axis] / config.inertia_kg_m2[axis])
+            zeta = kd[axis] / (2.0 * math.sqrt(kp[axis]
+                                               * config.inertia_kg_m2[axis]))
+            assert omega_n == pytest.approx(config.natural_frequency_rad_s)
+            assert zeta == pytest.approx(config.damping_ratio)
+
+
+class TestReactionWheels:
+    def _wheels(self):
+        return ReactionWheels(max_torque_Nm=0.002,
+                              momentum_capacity_Nms=0.020)
+
+    def test_torque_is_clamped_to_the_wheel_limit(self):
+        wheels = self._wheels()
+        delivered, saturated = wheels.command((0.010, 0.0, 0.0), 0.1)
+        assert delivered[0] == pytest.approx(0.002)
+        assert saturated
+
+    def test_momentum_accumulates_opposite_the_body_torque(self):
+        """The wheel absorbs the reaction. A sign error here makes
+        momentum unload when it should build, and the SAFE trip that E5
+        depends on never fires."""
+        wheels = self._wheels()
+        wheels.command((0.002, 0.0, 0.0), 1.0)
+        assert wheels.momentum_Nms[0] == pytest.approx(-0.002)
+
+    def test_momentum_saturation_clamps_and_reports(self):
+        wheels = self._wheels()
+        for _ in range(20):
+            wheels.command((0.002, 0.0, 0.0), 1.0)
+        assert abs(wheels.momentum_Nms[0]) == pytest.approx(0.020)
+        _, saturated = wheels.command((0.002, 0.0, 0.0), 1.0)
+        assert saturated
+        assert wheels.momentum_fraction == pytest.approx(1.0)
+
+    def test_a_saturated_wheel_can_still_torque_back(self):
+        """Clamping both directions would make saturation permanent, so
+        every E5 run would end in an unrecoverable SAFE -- a termination
+        rather than a fault injection."""
+        wheels = self._wheels()
+        for _ in range(20):
+            wheels.command((0.002, 0.0, 0.0), 1.0)
+        delivered, _ = wheels.command((-0.002, 0.0, 0.0), 1.0)
+        assert delivered[0] == pytest.approx(-0.002)
+        assert abs(wheels.momentum_Nms[0]) < 0.020
+
+    def test_a_failed_wheel_delivers_nothing(self):
+        """E5's injected fault."""
+        wheels = ReactionWheels(max_torque_Nm=0.002,
+                                momentum_capacity_Nms=0.020,
+                                health=(0.0, 1.0, 1.0))
+        delivered, saturated = wheels.command((0.002, 0.002, 0.0), 0.1)
+        assert delivered[0] == pytest.approx(0.0)
+        assert delivered[1] == pytest.approx(0.002)
+        assert saturated
+
+
+class TestRigidBody:
+    def test_torque_free_motion_conserves_angular_momentum(self):
+        """The strongest available check on the dynamics: with no
+        external torque, |J w| in inertial axes must not drift. An error
+        in the gyroscopic term shows up here and essentially nowhere
+        else in a nominal run."""
+        body = RigidBody(inertia_kg_m2=(0.123, 0.096, 0.041),
+                         rate_rad_s=(0.05, -0.03, 0.08))
+
+        def inertial_momentum():
+            j = body.inertia_kg_m2
+            body_momentum = tuple(j[k] * body.rate_rad_s[k]
+                                  for k in range(3))
+            return rotate_to_inertial(body.quaternion, body_momentum)
+
+        initial = inertial_momentum()
+        for _ in range(20000):
+            body.step((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.005)
+        final = inertial_momentum()
+
+        for k in range(3):
+            assert final[k] == pytest.approx(initial[k], abs=1e-9)
+
+    def test_torque_free_motion_conserves_kinetic_energy(self):
+        body = RigidBody(inertia_kg_m2=(0.123, 0.096, 0.041),
+                         rate_rad_s=(0.05, -0.03, 0.08))
+
+        def energy():
+            j = body.inertia_kg_m2
+            return 0.5 * sum(j[k] * body.rate_rad_s[k] ** 2
+                             for k in range(3))
+
+        initial = energy()
+        for _ in range(20000):
+            body.step((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.005)
+        assert energy() == pytest.approx(initial, rel=1e-9)
+
+    def test_constant_torque_about_a_principal_axis_matches_theory(self):
+        body = RigidBody(inertia_kg_m2=(0.123, 0.096, 0.041))
+        torque, duration, dt = 0.001, 2.0, 0.001
+        for _ in range(int(duration / dt)):
+            body.step((torque, 0.0, 0.0), (0.0, 0.0, 0.0), dt)
+        expected_rate = torque / 0.123 * duration
+        assert body.rate_rad_s[0] == pytest.approx(expected_rate, rel=1e-6)
+        assert pointing_error_rad(body.quaternion, IDENTITY) == \
+            pytest.approx(0.5 * torque / 0.123 * duration ** 2, rel=1e-5)
+
+    def test_the_quaternion_stays_normalised(self):
+        body = RigidBody(inertia_kg_m2=(0.123, 0.096, 0.041),
+                         rate_rad_s=(0.3, 0.2, -0.4))
+        for _ in range(50000):
+            body.step((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.002)
+        assert math.sqrt(dot(body.quaternion, body.quaternion)) == \
+            pytest.approx(1.0, abs=1e-12)
+
+
+class TestSlewProfile:
+    def test_duration_matches_the_shared_slew_model_exactly(self, config):
+        """Not "closely" -- exactly, for whichever limits it is given.
+        The profile generator and the scheduler run the same code."""
+        for angle_deg in (5.0, 18.1, 42.3, 92.0, 120.0):
+            target = quat_from_axis_angle(X, math.radians(angle_deg))
+            for limits in (config.slew_limits(), config.profile_limits()):
+                profile = SlewProfile.between(IDENTITY, target, limits)
+                assert profile.duration_s == pytest.approx(
+                    slew_time_s(math.radians(angle_deg), limits))
+
+    def test_the_profile_leaves_the_controller_some_authority(self, config):
+        """At full authority the feedforward term alone demands every
+        newton-metre the wheels have, so tracking error cannot be
+        corrected until the profile stops asking. Measured: the largest
+        scenario slew then settled 9.8 s past the bound against an 8 s
+        budget."""
+        assert 0.5 <= config.profile_authority < 1.0
+        assert config.profile_limits().alpha_rad_s2 < \
+            config.slew_limits().alpha_rad_s2
+
+    def test_it_starts_and_finishes_at_rest_on_target(self, config):
+        target = quat_from_axis_angle((1.0, 0.3, 0.0), math.radians(30.0))
+        profile = SlewProfile.between(IDENTITY, target,
+                                      config.profile_limits())
+
+        q0, w0 = profile.reference_at(0.0)
+        assert pointing_error_rad(q0, IDENTITY) == pytest.approx(0.0,
+                                                                 abs=1e-12)
+        assert w0 == pytest.approx((0.0, 0.0, 0.0), abs=1e-12)
+
+        q1, w1 = profile.reference_at(profile.duration_s)
+        assert pointing_error_rad(q1, target) < 1e-9
+        assert w1 == pytest.approx((0.0, 0.0, 0.0), abs=1e-12)
+
+    def test_the_angle_profile_integrates_its_own_rate(self, config):
+        """Position and rate references must be consistent, or the
+        feedforward term fights the feedback term throughout the slew."""
+        target = quat_from_axis_angle(X, math.radians(42.3))
+        profile = SlewProfile.between(IDENTITY, target,
+                                      config.profile_limits())
+        dt = 1e-4
+        integrated = 0.0
+        t = 0.0
+        while t < profile.duration_s:
+            integrated += profile.angle_at(t)[1] * dt
+            t += dt
+        assert integrated == pytest.approx(profile.total_angle_rad, rel=1e-3)
+
+    def test_it_never_exceeds_the_actuator_limits(self, config):
+        limits = config.profile_limits()
+        target = quat_from_axis_angle(X, math.radians(120.0))
+        profile = SlewProfile.between(IDENTITY, target, limits)
+        for index in range(2000):
+            _, rate = profile.angle_at(profile.duration_s * index / 2000.0)
+            assert rate <= limits.omega_max_rad_s + 1e-12
+
+    def test_every_acav_slew_is_triangular(self, spec, config):
+        """The scenario was designed so; if it stops holding the wheel
+        sizing changed and the feasibility table is stale."""
+        limits = config.slew_limits()
+        previous = 0.0
+        for target in sorted(spec.targets, key=lambda t: t.t_image_s):
+            angle = math.radians(spec.slew_between_deg(previous,
+                                                       target.cross_track_km))
+            assert angle <= limits.crossover_rad
+            previous = target.cross_track_km
+
+
+class TestClosedLoop:
+    def test_a_nominal_slew_converges_inside_the_capture_tolerance(self,
+                                                                   config):
+        target = quat_from_axis_angle(X, math.radians(18.1))
+        run = simulate_slew(config, IDENTITY, target, duration_s=40.0)
+        assert math.degrees(run.samples[-1].boresight_error_rad) < 0.5
+
+    def test_achieved_slew_time_is_close_to_the_analytic_bound(self, config):
+        """The model is a lower bound; tracking a feasible profile should
+        land near it. A large excess means the controller is lagging the
+        profile, which would show up in E2 as settling time the
+        scheduler never budgeted."""
+        angle = math.radians(42.3)
+        target = quat_from_axis_angle(X, angle)
+        run = simulate_slew(config, IDENTITY, target, duration_s=60.0)
+        bound = slew_time_s(angle, config.slew_limits())
+        settled = settling_time_s(run, config.capture_error_rad,
+                                  config.settle_hold_s)
+        assert settled is not None, "never settled inside capture tolerance"
+        assert settled >= bound * 0.95
+        assert settled < bound + 8.0, (
+            f"settled at {settled:.1f} s against a {bound:.1f} s bound; the "
+            f"scheduler budgets 8.0 s of settling on top, so exceeding it "
+            f"would make every tight target fail for a reason unrelated to "
+            f"the effect under study")
+
+    def test_it_does_not_overshoot_past_the_capture_tolerance(self, config):
+        """A saturated PD controller on a double integrator overshoots
+        badly. This is the property the profile generator exists to buy,
+        so it is asserted rather than hoped for."""
+        target = quat_from_axis_angle(X, math.radians(30.0))
+        run = simulate_slew(config, IDENTITY, target, duration_s=60.0)
+        settled = settling_time_s(run, config.capture_error_rad,
+                                  config.settle_hold_s)
+        assert settled is not None
+        after = [s for s in run.samples if s.time_s >= settled]
+        worst = max(math.degrees(s.boresight_error_rad) for s in after)
+        assert worst <= 0.5
+
+    def test_wheels_stay_inside_their_momentum_budget(self, config):
+        """If a nominal 42 deg slew saturated the wheels, SAFE would trip
+        during normal operation and E5 would have nothing to measure."""
+        target = quat_from_axis_angle(X, math.radians(42.3))
+        run = simulate_slew(config, IDENTITY, target, duration_s=60.0)
+        worst = max(max(abs(h) for h in s.wheel_momentum_Nms)
+                    for s in run.samples)
+        assert worst < config.momentum_capacity_Nms
+
+    def test_commanded_torque_never_exceeds_the_wheel_limit(self, config):
+        target = quat_from_axis_angle((0.3, 1.0, 0.2), math.radians(60.0))
+        run = simulate_slew(config, IDENTITY, target, duration_s=60.0)
+        for sample in run.samples:
+            for axis in range(3):
+                assert abs(sample.torque_Nm[axis]) <= \
+                    config.max_torque_Nm + 1e-12
+
+    @pytest.mark.parametrize("angle_deg", [13.4, 18.6, 30.4, 42.3])
+    def test_every_acav_slew_fits_the_scheduler_s_budget(self, config,
+                                                         angle_deg,
+                                                         spec):
+        """The design property the whole experiment rests on.
+
+        A dynamics-aware scheduler budgets `analytic bound +
+        settle_estimate_s` and declines anything that does not fit. If
+        the twin cannot actually meet that budget then every target
+        fails, E2 measures the controller's inadequacy rather than the
+        scheduling effect, and the headline result is an artifact. This
+        test is what stops a gain change from doing that quietly.
+        """
+        target = quat_from_axis_angle(X, math.radians(angle_deg))
+        run = simulate_slew(config, IDENTITY, target, duration_s=60.0)
+        settled = settling_time_s(run, config.capture_error_rad,
+                                  config.settle_hold_s)
+        assert settled is not None, f"{angle_deg} deg never settled"
+
+        bound = slew_time_s(math.radians(angle_deg), config.slew_limits())
+        budget = bound + spec.scheduling.settle_estimate_s
+        assert settled <= budget, (
+            f"{angle_deg} deg settled at {settled:.1f} s against a "
+            f"{budget:.1f} s budget ({bound:.1f} s bound + "
+            f"{spec.scheduling.settle_estimate_s:.1f} s settling)")
+
+
+class TestCommandedAttitudes:
+    def test_nadir_attitude_points_the_boresight_down(self, config):
+        position = (6_878_137.0, 0.0, 0.0)
+        velocity = (0.0, 1000.0, 7500.0)
+        q = nadir_attitude(position, velocity, config.boresight_body)
+        boresight = rotate_to_inertial(q, config.boresight_body)
+        assert dot(boresight, (-1.0, 0.0, 0.0)) > 0.999
+
+    def test_target_attitude_points_the_boresight_at_the_target(self,
+                                                                config):
+        position = (6_878_137.0, 0.0, 0.0)
+        velocity = (0.0, 1000.0, 7500.0)
+        target = (6_371_000.0, 200_000.0, 0.0)
+        q = target_attitude(position, velocity, target, config.boresight_body)
+        boresight = rotate_to_inertial(q, config.boresight_body)
+        expected = [t - p for t, p in zip(target, position)]
+        magnitude = math.sqrt(sum(c * c for c in expected))
+        assert dot(boresight, [c / magnitude for c in expected]) > 0.999999
+
+    def test_the_boresight_axis_is_the_only_place_plus_z_is_assumed(self):
+        """If the live install turns out to mount the boresight the other
+        way, one value in the scenario YAML changes and nothing else
+        does. This asserts the plumbing actually honours it."""
+        position = (6_878_137.0, 0.0, 0.0)
+        velocity = (0.0, 1000.0, 7500.0)
+        flipped = (0.0, 0.0, -1.0)
+        q = nadir_attitude(position, velocity, flipped)
+        assert dot(rotate_to_inertial(q, flipped), (-1.0, 0.0, 0.0)) > 0.999
+        # ... and +Z then points at zenith, as it should.
+        assert dot(rotate_to_inertial(q, Z), (1.0, 0.0, 0.0)) > 0.999
+
+
+class TestMissionModeChart:
+    def _state(self, mode):
+        return ModeState(mode=mode, entered_at_s=0.0)
+
+    def test_slew_request_moves_out_of_nadir(self, config):
+        state = update_mode(self._state(MissionMode.NADIR), config, 1.0,
+                            0.5, 0.0, 0.0, slew_requested=True)
+        assert state.mode is MissionMode.SLEW
+
+    def test_settle_waits_for_the_entry_threshold(self, config):
+        state = update_mode(self._state(MissionMode.SETTLE), config, 1.0,
+                            math.radians(3.0), 0.0, 0.0,
+                            slew_requested=False)
+        assert state.mode is MissionMode.SETTLE
+        state = update_mode(state, config, 2.0, math.radians(1.0), 0.0, 0.0,
+                            slew_requested=False)
+        assert state.mode is MissionMode.IMAGE
+
+    def test_momentum_saturation_trips_safe_from_any_mode(self, config):
+        for mode in (MissionMode.NADIR, MissionMode.SLEW,
+                     MissionMode.SETTLE, MissionMode.IMAGE):
+            state = update_mode(self._state(mode), config, 5.0, 0.0, 0.0,
+                                1.0, slew_requested=False)
+            assert state.mode is MissionMode.SAFE, mode
+
+    def test_safe_guards_are_evaluated_before_everything_else(self, config):
+        """A wheel that saturates during IMAGE must trip SAFE, not be
+        masked by an already-satisfied hold. Ordering the transitions the
+        other way gives a chart that is correct in every nominal run and
+        silently fails to protect the vehicle in exactly the campaign
+        that exists to test it."""
+        state = update_mode(self._state(MissionMode.IMAGE), config, 5.0,
+                            0.0, 0.0, 1.0, slew_requested=True)
+        assert state.mode is MissionMode.SAFE
+
+    def test_excess_body_rate_trips_safe(self, config):
+        state = update_mode(self._state(MissionMode.SLEW), config, 5.0, 1.0,
+                            math.radians(16.0), 0.0, slew_requested=False)
+        assert state.mode is MissionMode.SAFE
+
+    def test_safe_latches(self, config):
+        """An ADCS that re-armed the instant the trip cleared would
+        oscillate in and out of SAFE and make E5's replay meaningless."""
+        state = self._state(MissionMode.SAFE)
+        for _ in range(10):
+            state = update_mode(state, config, 9.0, 0.0, 0.0, 0.0,
+                                slew_requested=True)
+        assert state.mode is MissionMode.SAFE
+
+
+class TestSettlingTime:
+    def _run_with(self, errors_deg, dt=0.1):
+        from acav.twin_reference import TwinRun, TwinSample
+        run = TwinRun()
+        for index, error in enumerate(errors_deg):
+            run.samples.append(TwinSample(
+                time_s=index * dt, quaternion=IDENTITY,
+                rate_rad_s=(0.0, 0.0, 0.0),
+                boresight_error_rad=math.radians(error),
+                torque_Nm=(0.0, 0.0, 0.0),
+                wheel_momentum_Nms=(0.0, 0.0, 0.0), mode="IMAGE"))
+        return run
+
+    def test_reports_the_start_of_the_sustained_interval(self):
+        run = self._run_with([5.0] * 10 + [0.1] * 40)
+        assert settling_time_s(run, math.radians(0.5), 2.0) == \
+            pytest.approx(1.0)
+
+    def test_a_brief_excursion_restarts_the_clock(self):
+        """Otherwise a controller that dips inside tolerance and bounces
+        out again scores as settled, and the capture criterion stops
+        meaning what section 6 of the spec says it means."""
+        run = self._run_with([0.1] * 10 + [5.0] + [0.1] * 40)
+        assert settling_time_s(run, math.radians(0.5), 2.0) == \
+            pytest.approx(1.1)
+
+    def test_never_settling_is_none_not_zero(self):
+        """Conflating the two would quietly bias any campaign average."""
+        assert settling_time_s(self._run_with([5.0] * 50),
+                               math.radians(0.5), 2.0) is None
