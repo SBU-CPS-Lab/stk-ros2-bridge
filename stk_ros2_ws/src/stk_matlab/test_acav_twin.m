@@ -1,4 +1,4 @@
-function results = test_acav_twin(fixturePath)
+function varargout = test_acav_twin(fixturePath)
 %TEST_ACAV_TWIN Check the MATLAB twin against the Python reference.
 %
 %   test_acav_twin()                     % uses the shipped fixtures
@@ -22,8 +22,10 @@ function results = test_acav_twin(fixturePath)
 % runs, nothing stops at the first failure, and the summary says what is
 % wrong rather than merely that something is.
 %
-% Exit: prints a summary and returns a struct array. results(k).status
-% is "pass" or "FAIL".
+% Called with an output it returns the struct array; called as a
+% statement it prints the summary and ERRORS if anything failed, so
+% `matlab -batch test_acav_twin` exits non-zero. That mirrors
+% verify_acav_scenario.py's exit-code contract.
 
     if nargin < 1 || isempty(fixturePath)
         here = fileparts(mfilename('fullpath'));
@@ -38,7 +40,7 @@ function results = test_acav_twin(fixturePath)
     end
 
     fx = jsondecode(fileread(fixturePath));
-    EXPECTED_VERSION = 1;
+    EXPECTED_VERSION = 2;
     if fx.version ~= EXPECTED_VERSION
         error('test_acav_twin:StaleFixtures', ...
             ['fixture version %d, this test expects %d. Regenerate the ' ...
@@ -61,6 +63,7 @@ function results = test_acav_twin(fixturePath)
     results = controllerCases(results, fx, tol);
     results = modeCases(results, fx);
     results = closedLoopCases(results, fx);
+    results = missionChart(results);
 
     fprintf('%s\n', repmat('-', 1, 64));
     failed = sum(strcmp({results.status}, 'FAIL'));
@@ -76,9 +79,108 @@ function results = test_acav_twin(fixturePath)
                  'says nothing\nabout STK: run ' ...
                  'verify_acav_scenario.py for that.\n']);
     end
+
+    if nargout > 0
+        varargout{1} = results;
+    elseif failed > 0
+        error('test_acav_twin:Failed', ...
+            '%d of %d checks failed; see the list above.', ...
+            failed, numel(results));
+    end
 end
 
 % -----------------------------------------------------------------------
+
+function results = missionChart(results)
+%MISSIONCHART Structural check of the Stateflow chart.
+%
+% The chart carries no fixtures -- it is graph structure, not numbers --
+% but two of its properties are load-bearing enough to assert directly:
+% SAFE must latch, and its guards must be evaluated before anything else
+% leaving a state. Both are easy to break while editing the chart and
+% neither shows up in a nominal run.
+    if isempty(ver('stateflow'))
+        results = record(results, 'chart: structure', true, ...
+            'Stateflow not available; skipped');
+        return
+    end
+
+    model = 'acav_chart_check';
+    cleanup = onCleanup(@() closeQuietly(model));
+    try
+        if bdIsLoaded(model)
+            close_system(model, 0);
+        end
+        new_system(model);
+        chart = adcs.build_mission_chart(model, 'MissionMode', ...
+            [100 100 400 300]);
+
+        states = sort(string({chart.find('-isa', 'Stateflow.State').Name}));
+        expected = sort(["NADIR" "SLEW" "SETTLE" "IMAGE" "SAFE"]);
+        results = record(results, 'chart: states', ...
+            isequal(states, expected), ...
+            sprintf('got %s', strjoin(states, ', ')));
+
+        transitions = chart.find('-isa', 'Stateflow.Transition');
+        outgoing = 0; incoming = 0; priorities = [];
+        for k = 1:numel(transitions)
+            t = transitions(k);
+            if ~isempty(t.Source) && strcmp(t.Source.Name, 'SAFE')
+                outgoing = outgoing + 1;
+            end
+            if ~isempty(t.Destination) && strcmp(t.Destination.Name, 'SAFE')
+                incoming = incoming + 1;
+                priorities(end+1) = t.ExecutionOrder; %#ok<AGROW>
+            end
+        end
+
+        results = record(results, 'chart: SAFE latches', outgoing == 0, ...
+            sprintf(['SAFE has %d outgoing transitions; it must have ' ...
+                     'none, or the vehicle oscillates in and out of ' ...
+                     'SAFE and E5 replay stops being deterministic'], ...
+                    outgoing));
+        results = record(results, 'chart: SAFE reachable everywhere', ...
+            incoming == 4, sprintf('%d of 4 nominal states can trip SAFE', ...
+                                   incoming));
+        results = record(results, 'chart: SAFE guards run first', ...
+            ~isempty(priorities) && all(priorities == 1), ...
+            sprintf(['execution orders %s; a wheel saturating during ' ...
+                     'IMAGE must trip SAFE rather than be masked by an ' ...
+                     'already-satisfied hold'], mat2str(priorities)));
+    catch err
+        results = record(results, 'chart: structure', false, err.message);
+    end
+end
+
+function closeQuietly(model)
+    if bdIsLoaded(model)
+        close_system(model, 0);
+    end
+end
+
+function cases = fixtureCases(value)
+%FIXTURECASES Normalise a decoded JSON array to a cell array of structs.
+%
+% jsondecode returns a STRUCT ARRAY when every object in a JSON array
+% has the same field names, and a CELL ARRAY when they differ. Fixture
+% sections legitimately contain cases with different fields -- a
+% rotation case has a `vector`, a scalar case has `expected_scalar` --
+% so code written for one shape fails on the other with "Dot indexing
+% is not supported for variables of this type", which says nothing
+% whatever about the cause.
+%
+% Normalising here means adding a case with a new field can never break
+% the harness again, which is worth more than making the JSON uniform:
+% the JSON is meant to be readable, and padding every case with null
+% fields it does not use would make it less so.
+    if iscell(value)
+        cases = value(:).';
+    elseif isstruct(value)
+        cases = num2cell(value(:).');
+    else
+        cases = {value};
+    end
+end
 
 function results = record(results, name, ok, detail)
     entry = struct('name', name, 'status', "pass", 'detail', detail);
@@ -112,8 +214,9 @@ function [ok, detail] = compareVec(actual, expected, tol)
 end
 
 function results = quatAlgebra(results, fx, tol)
-    for k = 1:numel(fx.quaternion_algebra)
-        c = fx.quaternion_algebra(k);
+    cases = fixtureCases(fx.quaternion_algebra);
+    for k = 1:numel(cases)
+        c = cases{k};
         switch c.name
             case 'multiply'
                 got = adcs.quat.multiply(c.a.', c.b.');
@@ -136,8 +239,9 @@ end
 
 function results = attitudes(results, fx, tol)
     boresight = fx.config.boresight_body.';
-    for k = 1:numel(fx.attitude_construction)
-        c = fx.attitude_construction(k);
+    cases = fixtureCases(fx.attitude_construction);
+    for k = 1:numel(cases)
+        c = cases{k};
         if strcmp(c.name, 'nadir')
             nadir = -c.position.' / norm(c.position);
             got = adcs.quat.align(boresight, nadir, [1 0 0], c.velocity.');
@@ -157,8 +261,9 @@ end
 
 function results = wheelCases(results, fx, tol)
     cfgFx = fx.config;
-    for k = 1:numel(fx.wheels)
-        c = fx.wheels(k);
+    cases = fixtureCases(fx.wheels);
+    for k = 1:numel(cases)
+        c = cases{k};
         [delivered, momentum, saturated] = adcs.wheels( ...
             c.torque_Nm.', c.dt, c.initial_momentum_Nms.', ...
             cfgFx.max_torque_Nm, cfgFx.momentum_capacity_Nms, ...
@@ -180,8 +285,9 @@ end
 
 function results = dynamicsCases(results, fx, tol)
     inertia = fx.config.inertia_kg_m2.';
-    for k = 1:numel(fx.dynamics)
-        c = fx.dynamics(k);
+    cases = fixtureCases(fx.dynamics);
+    for k = 1:numel(cases)
+        c = cases{k};
         q = [0 0 0 1];
         w = c.initial_rate_rad_s.';
         for step = 1:c.steps
@@ -206,8 +312,9 @@ function results = profileCases(results, fx, tol)
     omegaMax = cfgFx.momentum_capacity_Nms / inertia(1) ...
         * cfgFx.profile_authority;
 
-    for k = 1:numel(fx.profile)
-        c = fx.profile(k);
+    cases = fixtureCases(fx.profile);
+    for k = 1:numel(cases)
+        c = cases{k};
         p = adcs.slew_profile(c.start.', c.finish.', alpha, omegaMax);
         [okD, dD] = compareVec(p.duration, c.expected_duration_s, 1e-9);
         [okA, dA] = compareVec(p.totalAngle, ...
@@ -218,8 +325,9 @@ function results = profileCases(results, fx, tol)
         if ~okA
             detail = dA;
         end
-        for s = 1:numel(c.samples)
-            sample = c.samples(s);
+        samples = fixtureCases(c.samples);
+        for s = 1:numel(samples)
+            sample = samples{s};
             [qRef, omegaRef] = p.referenceAt(sample.elapsed_s);
             angle = adcs.quat.pointingError(qRef, sample.quaternion.');
             [okQ, dQ] = compareVec(angle, 0, 1e-9);
@@ -243,8 +351,9 @@ function results = controllerCases(results, fx, tol)
     kp = inertia * wn^2;
     kd = 2 * cfgFx.damping_ratio * wn * inertia;
 
-    for k = 1:numel(fx.controller)
-        c = fx.controller(k);
+    cases = fixtureCases(fx.controller);
+    for k = 1:numel(cases)
+        c = cases{k};
         got = adcs.tracking_torque(c.quaternion.', c.omega_rad_s.', ...
             c.quaternion_reference.', c.omega_reference_rad_s.', kp, kd);
         [ok, d] = compareVec(got, c.expected_torque_Nm, tol);
@@ -255,15 +364,13 @@ end
 function results = modeCases(results, fx)
     cfg = struct('settleEntryRad', fx.config.settle_entry_rad, ...
                  'maxBodyRateRadS', fx.config.max_body_rate_rad_s);
-    for k = 1:numel(fx.mode_chart)
-        c = fx.mode_chart(k);
-        % The reference's SLEW branch holds until the profile finishes;
-        % these fixtures never mark it done.
-        profileDone = false;
+    cases = fixtureCases(fx.mode_chart);
+    for k = 1:numel(cases)
+        c = cases{k};
         got = adcs.mission_mode(c.mode_in, 0, 10, ...
             c.boresight_error_rad, c.body_rate_rad_s, ...
             c.momentum_fraction, logical(c.slew_requested), ...
-            profileDone, cfg);
+            logical(c.profile_done), cfg);
         ok = strcmp(got, c.expected_mode);
         results = record(results, ['mode: ' c.name], ok, ...
             sprintf('got %s, expected %s', got, c.expected_mode));
@@ -286,14 +393,15 @@ function results = closedLoopCases(results, fx)
     omegaMax = cfgFx.momentum_capacity_Nms / inertia(1) ...
         * cfgFx.profile_authority;
 
-    for k = 1:numel(fx.closed_loop)
-        c = fx.closed_loop(k);
+    cases = fixtureCases(fx.closed_loop);
+    for k = 1:numel(cases)
+        c = cases{k};
         p = adcs.slew_profile(c.start.', c.target.', alpha, omegaMax);
         q = c.start.';
         w = [0 0 0];
         h = [0 0 0];
         steps = round(c.duration_s / c.dt);
-        log = zeros(steps + 1, 8);
+        log = zeros(steps + 1, 9);   % t, q(4), err, h(3)
         for index = 0:steps
             t = index * c.dt;
             [qRef, omegaRef] = p.referenceAt(t);
@@ -308,8 +416,9 @@ function results = closedLoopCases(results, fx)
 
         ok = true;
         detail = '';
-        for s = 1:numel(c.checkpoints)
-            cp = c.checkpoints(s);
+        checkpoints = fixtureCases(c.checkpoints);
+        for s = 1:numel(checkpoints)
+            cp = checkpoints{s};
             [~, row] = min(abs(log(:, 1) - cp.time_s));
             angle = adcs.quat.pointingError(log(row, 2:5), cp.quaternion.');
             if angle > 1e-6

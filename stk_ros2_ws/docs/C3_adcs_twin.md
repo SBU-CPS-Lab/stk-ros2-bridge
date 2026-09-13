@@ -143,7 +143,41 @@ The Stateflow chart is what the paper shows; `+adcs/mission_mode.m` is
 the same logic as a function, which is what the fixtures can exercise.
 They must agree, and a change belongs in both.
 
-## 5. Running it
+## 5. What has actually been executed
+
+Run against MATLAB R2023a on the development machine:
+
+| | |
+|---|---|
+| `test_acav_twin` | **35/35 pass** — the MATLAB reproduces every fixture, closed-loop trajectories included |
+| `adcs.build_mission_chart` | builds; SAFE latches (0 outgoing), reachable from all four nominal states, all guards at execution order 1 |
+| `build_acav_twin` | reaches the ROS blocks and stops there — `stk_msgs` must be generated first |
+| `ros2genmsg` | validates the `.msg` files, then fails on MATLAB's internal Python venv (R2023a wants Python ≤3.10; the dev box has 3.14) |
+
+So the algorithms and the chart are verified; the block wiring is not.
+That is an honest boundary, and the same one C2 draws around STK.
+
+Three things this turned up:
+
+- **`jsondecode` returns a struct array only when every object in a JSON
+  array has identical field names, and a cell array otherwise.** The
+  fixture sections legitimately mix shapes, so the harness normalises
+  both through one accessor. The symptom was `Dot indexing is not
+  supported for variables of this type`, which says nothing about the
+  cause.
+- **There is no ROS time-source model parameter.** R2023a's model has
+  none, and the ROS 2 Current Time block exposes only `OutputFormat` and
+  `SampleTime`. An earlier version set an invented `ROSTimeSource` and
+  warned when it failed, which read as a release incompatibility rather
+  than as a parameter that never existed. Time follows `/clock` because
+  the *node* runs with `use_sim_time` — a launch-time setting.
+- **`profile_done` was derived in Python and passed as an argument in
+  MATLAB**, so the two disagreed about a SLEW state with no profile. The
+  cross-check caught it. It is now an explicit input on both sides,
+  which also stops a bug state (SLEW without a profile) from being
+  silently treated as "finished".
+
+## 6. Running it
 
 On the Windows machine, with the workspace built and sourced:
 
@@ -174,13 +208,13 @@ is not checked in: Simulink's binary format does not diff or merge, so a
 reviewer cannot see what changed in a control law and a git conflict in
 one is unresolvable. Edit the builder, not the model.
 
-## 6. Open against the live install
+## 7. Open against the live install
 
-- **The boresight.** `sensor.boresight_body_axis` is `[0, 0, 1]` per the
-  spec, and it is the single place the assumption enters. C2's verifier
-  has not yet confirmed it against STK — if run #4 says the boresight is
-  inverted, that one YAML value changes and nothing else does.
-- **Simulink construction.** `build_acav_twin` has not been run. Block
-  names and parameters are version-sensitive; the honest position is the
-  same one taken for STK — run it, and the error will say which name
-  moved.
+- **The boresight is confirmed.** C2 run #4 saw a nadir target inside a
+  measured (1.80, 2.20]° cone, so `+Z` is the boresight under the
+  scenario's default attitude and `sensor.boresight_body_axis =
+  [0, 0, 1]` stands.
+- **Block wiring.** `build_acav_twin` needs `setup_stk_ros` to have run
+  first; it now checks for the message types up front and says so,
+  rather than dying inside a mask callback with a half-built model open.
+  What happens after that point is unverified.

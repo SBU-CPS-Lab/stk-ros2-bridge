@@ -20,6 +20,7 @@ from acav.scenario_verifier import (
     FAIL,
     PASS,
     SKIP,
+    WARN,
     AcavScenarioVerifier,
 )
 from acav.spec import AcavSpec
@@ -235,18 +236,48 @@ class TestRejectedCommandsAreDiagnosable:
 class TestVerifierDoesNotOverclaim:
     """Conclusions must not outrun the measurement that supports them."""
 
-    def test_mask_checks_skip_when_the_mask_cannot_be_applied(self, spec,
-                                                              monkeypatch):
-        """The live run compared the unmasked baseline against itself
-        three times and reported a verdict about terrain masking."""
+    def test_terrain_check_skips_when_the_mask_cannot_be_applied(
+            self, spec, monkeypatch):
+        """The first live run compared the unmasked baseline against
+        itself three times and reported a verdict about terrain."""
         backend, report = build(spec)
         treat_as_live(monkeypatch)
         verification = AcavScenarioVerifier(backend, spec, report).verify()
 
-        for fragment in ("Elevation constraint", "Terrain mask"):
-            result = check(verification, fragment)
-            assert result.status == SKIP, result.detail
-            assert "SetAzElMask form was accepted" in result.detail
+        result = check(verification, "Terrain mask")
+        assert result.status == SKIP, result.detail
+        assert "never ran" in result.detail
+
+    def test_the_elevation_check_still_measures_without_the_mask(
+            self, spec, monkeypatch):
+        """The constraint is a different mechanism from the mask, so a
+        mask that cannot be applied must not block it -- which is
+        exactly the live install's situation. It does have to flag that
+        it could not control for the terrain confound."""
+        backend, report = build(spec)
+        treat_as_live(monkeypatch)
+        verification = AcavScenarioVerifier(backend, spec, report).verify()
+
+        result = check(verification, "Elevation constraint")
+        assert result.status == PASS, result.detail
+        assert "could not be disabled" in result.detail
+
+    def test_a_terrain_horizon_above_the_minimum_hides_the_constraint(
+            self, spec, monkeypatch):
+        """The confound the check controls for. With terrain occluding
+        to 15 deg, a 10 deg constraint changes nothing -- and reporting
+        "not applied" would be a wrong diagnosis of a correct scenario.
+        """
+        backend, report = build(spec, reject_azelmask=False)
+        treat_as_live(monkeypatch)
+        # Pin the mask on so the verifier's attempt to disable it fails.
+        backend.reject_azelmask = True
+        backend.mask_horizon_deg = 15.0
+
+        verification = AcavScenarioVerifier(backend, spec, report).verify()
+        result = check(verification, "Elevation constraint")
+        assert result.status == WARN
+        assert "already occluding" in result.detail
 
     def test_mask_checks_measure_when_the_mask_does_work(self, spec,
                                                          monkeypatch):
@@ -258,9 +289,19 @@ class TestVerifierDoesNotOverclaim:
 
         elevation = check(verification, "Elevation constraint")
         assert elevation.status == PASS, elevation.detail
+        assert "could not be disabled" not in elevation.detail
         terrain = check(verification, "Terrain mask")
         assert terrain.status == PASS, terrain.detail
         assert verification.measurements["mask_mode"] == "terrain"
+
+    def test_a_constant_mask_is_refused_rather_than_attempted(self, spec):
+        """STK has no constant-elevation mask: the type enum offers only
+        None, File and TerrainData. An earlier verifier tried to use one
+        as its experimental control, failed on every live run, and then
+        reported a terrain verdict from three identical numbers."""
+        backend, _ = build(spec, reject_azelmask=False)
+        with pytest.raises(Exception, match="AgEAzElMaskType|unknown mask"):
+            backend.set_az_el_mask("*/Facility/GS1", "constant", 10.0)
 
     def test_perturbation_check_skips_when_the_orbit_is_wrong(self, spec):
         # Not gated on treat_as_live: the perturbation check reads state

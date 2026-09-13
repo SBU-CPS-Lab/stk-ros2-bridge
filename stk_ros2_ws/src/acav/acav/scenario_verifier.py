@@ -835,12 +835,17 @@ class AcavScenarioVerifier:
         return PASS, f"{path} (resolved via {how})"
 
     def _check_elevation_constraint(self) -> Tuple[str, str]:
-        """Compare access under the configured mask against a 0 deg mask.
+        """Does the minimum-elevation constraint actually shorten contact?
 
-        A constraint that ACKed but did not apply leaves the two
-        identical. This also establishes that ``SetAzElMask`` changes
-        anything at all on this install, which the terrain check below
-        depends on being able to assume.
+        Compares contact as configured against contact with the minimum
+        dropped to 0 deg. A constraint that was accepted but not applied
+        leaves the two identical.
+
+        This is a *constraint*, not a mask. STK has no constant-elevation
+        az-el mask -- the type enum offers only None, File and
+        TerrainData -- and an earlier version of this check tried to use
+        one as its control, failed on every run, and reported a verdict
+        from three identical numbers.
         """
         if not self._ground_station:
             return SKIP, "no ground station"
@@ -849,53 +854,69 @@ class AcavScenarioVerifier:
 
         minimum = float(self._spec.ground_station.get("min_elevation_deg",
                                                       10.0))
-        baseline = self._contact_seconds()
-        with self._temporary_mask(0.0) as applied:
-            unmasked = self._contact_seconds() if applied else None
+        # Turn the terrain mask off for the duration. A terrain horizon
+        # higher than the elevation minimum hides the constraint
+        # completely -- the two measurements come out identical and the
+        # check reports "not applied" about a constraint that is applied
+        # and simply not binding. Controlling for the confound is the
+        # difference between a measurement and a coincidence.
+        confounded = ""
+        with self._temporary_mask("none") as mask_off:
+            if not mask_off:
+                confounded = (
+                    "\nNOTE: the terrain mask could not be disabled for "
+                    "this comparison, so a terrain horizon above "
+                    f"{minimum:.0f} deg would hide the constraint's "
+                    "effect entirely.")
+            baseline = self._contact_seconds()
+            with self._temporary_elevation(0.0) as applied:
+                unmasked = self._contact_seconds() if applied else None
 
         if unmasked is None:
             return SKIP, (
                 f"contact over the window is {baseline:.1f} s, but no "
-                f"SetAzElMask form was accepted, so the 0 deg control could "
-                f"not be applied and nothing was measured. This is NOT "
-                f"evidence that the {minimum:.0f} deg constraint is missing "
-                f"-- it is evidence that the mask command does not work "
-                f"here. See the builder's rejected-command list for why.")
+                f"SetConstraint ElevationAngle form was accepted, so the "
+                f"0 deg control could not be applied and nothing was "
+                f"measured. This is NOT evidence that the "
+                f"{minimum:.0f} deg constraint is missing.")
 
-        detail = (f"contact over the window: {baseline:.1f} s as configured, "
-                  f"{unmasked:.1f} s with a 0 deg mask")
-        if unmasked <= 0.0 and baseline <= 0.0:
+        detail = (f"contact over the window: {baseline:.1f} s at the "
+                  f"configured {minimum:.0f} deg minimum, "
+                  f"{unmasked:.1f} s at 0 deg" + confounded)
+        self._report.measurements["contact_s_configured"] = baseline
+        self._report.measurements["contact_s_zero_elevation"] = unmasked
+
+        if baseline <= 0.0 and unmasked <= 0.0:
             return WARN, (
                 detail + "\nNo contact at all in either case, so the "
-                "constraint is unverifiable here: the ground station is "
-                "placed on the ground track at t=600 s, and the pass should "
-                "cover it. Check the station's position before trusting any "
+                "constraint is unverifiable here: the ground station sits "
+                "on the ground track at t=600 s and the pass should cover "
+                "it. Check the station's position before trusting any "
                 "contact-derived result.")
         if abs(baseline - unmasked) < 1e-3:
             return WARN, (
-                detail + f"\nIdentical, so the {minimum:.0f} deg elevation "
-                f"constraint is not being applied -- contact windows are "
-                f"optimistic by the low-elevation tails.")
+                detail + f"\nIdentical. Either the {minimum:.0f} deg "
+                f"constraint is not being applied -- in which case "
+                f"contact windows are optimistic by the low-elevation "
+                f"tails -- or something else is already occluding "
+                f"everything below it.")
+        if baseline > unmasked:
+            return FAIL, (
+                detail + "\nRaising the minimum elevation LENGTHENED "
+                "contact, which is geometrically impossible. The "
+                "constraint is being applied with the wrong sense or the "
+                "wrong unit.")
         return PASS, detail
 
     def _check_terrain_mask(self) -> Tuple[str, str]:
-        """Terrain masking: effective, or merely ACKed?
+        """Terrain masking: effective, or merely applied?
 
-        Three access computations, because two cannot distinguish the
-        two ways this fails:
-
-        * ``terrain`` as configured;
-        * ``constant at the configured minimum elevation`` -- the
-          spherical-Earth fallback the study degrades to;
-        * ``constant well above it`` -- a control proving that
-          SetAzElMask changes access on this install at all.
-
-        If terrain equals the constant mask but the control differs, the
-        command works and terrain data simply does not cover this
-        region: the study degrades gracefully and the paper must claim
-        an elevation mask, not terrain. If all three agree, SetAzElMask
-        is doing nothing whatsoever, which is a different and worse
-        problem wearing the same symptom.
+        Two access computations, against the only control STK actually
+        has: the terrain mask, and no mask at all. If they agree, terrain
+        data is not affecting this region -- either it is not loaded, or
+        the local horizon never rises above the elevation minimum. The
+        study still runs; the paper must then describe the mask as a
+        spherical-Earth elevation constraint and must NOT claim terrain.
         """
         config = self._spec.ground_station or {}
         if not config.get("terrain_masking", False):
@@ -905,59 +926,49 @@ class AcavScenarioVerifier:
         if self.is_mock:
             return self._skip_on_mock("terrain")
 
-        minimum = float(config.get("min_elevation_deg", 10.0))
-        control_deg = minimum + 10.0
-
+        reported = self._backend.get_az_el_mask(self._ground_station)
         terrain = self._contact_seconds()
-        with self._temporary_mask(minimum) as applied_constant:
-            constant = self._contact_seconds() if applied_constant else None
-        with self._temporary_mask(control_deg) as applied_control:
-            control = self._contact_seconds() if applied_control else None
+        with self._temporary_mask("none") as applied:
+            unmasked = self._contact_seconds() if applied else None
         restored = self._restore_configured_mask()
 
-        if constant is None or control is None:
+        if unmasked is None:
             self._report.measurements["mask_mode"] = "unmeasurable"
             return SKIP, (
-                f"contact over the window is {terrain:.1f} s, but no "
-                f"SetAzElMask form was accepted, so neither the constant "
-                f"comparison nor the control could be applied. Nothing here "
-                f"distinguishes terrain masking from no masking, and "
-                f"reporting a verdict from three identical numbers -- which "
-                f"is what the first live run did -- would be an inference "
-                f"from an experiment that never ran. The builder's "
-                f"rejected-command list has the reason SetAzElMask failed.")
+                f"contact over the window is {terrain:.1f} s, but the "
+                f"no-mask control could not be applied, so nothing "
+                f"distinguishes terrain masking from no masking. "
+                f"Reporting a verdict from one number would be an "
+                f"inference from an experiment that never ran.")
 
-        detail = (f"contact over the window: {terrain:.1f} s with terrain, "
-                  f"{constant:.1f} s with a constant {minimum:.0f} deg mask, "
-                  f"{control:.1f} s with a constant {control_deg:.0f} deg "
-                  f"control mask")
+        detail = (f"contact over the window: {terrain:.1f} s with the "
+                  f"terrain mask, {unmasked:.1f} s with no mask")
+        if reported is not None:
+            detail += f"\nSTK reports the mask type as {reported}"
         if not restored:
-            detail += ("\nWARNING: could not restore the configured mask "
-                       "after the comparison; rebuild the scenario before "
-                       "running experiments.")
+            detail += ("\nWARNING: could not restore the terrain mask "
+                       "afterwards; rebuild before running experiments.")
         self._report.measurements["contact_s_terrain"] = terrain
-        self._report.measurements["contact_s_constant_mask"] = constant
+        self._report.measurements["contact_s_no_mask"] = unmasked
 
-        if abs(constant - control) < 1e-3:
-            self._report.measurements["mask_mode"] = "none"
-            return FAIL, (
-                detail + "\nEven the control mask changes nothing, so "
-                "SetAzElMask has no effect on this install regardless of "
-                "what it ACKed. No masking of any kind is being applied and "
-                "the contact windows are unconstrained line-of-sight.")
-        if abs(terrain - constant) < 1e-3:
-            self._report.measurements["mask_mode"] = "constant_elevation"
+        if abs(terrain - unmasked) < 1e-3:
+            self._report.measurements["mask_mode"] = "elevation_only"
             return WARN, (
-                detail + "\nTerrain masking produces exactly the same "
-                "contacts as a constant elevation mask, so terrain data is "
-                "not affecting this region -- either it is not loaded, or "
-                "the local horizon never rises above the elevation minimum. "
-                "The study still runs; the paper must describe the mask as a "
-                "spherical-Earth elevation mask and must NOT claim terrain "
-                "masking.")
+                detail + "\nIdentical, so terrain is not affecting this "
+                "region -- either terrain data is not loaded for it, or "
+                "the local horizon never rises above the elevation "
+                "minimum. The study still runs; the paper must describe "
+                "the mask as a spherical-Earth elevation constraint and "
+                "must NOT claim terrain masking.")
+        if terrain > unmasked:
+            return FAIL, (
+                detail + "\nThe terrain mask LENGTHENED contact, which "
+                "is impossible: a horizon can only occlude. Something "
+                "other than the mask changed between the two "
+                "measurements.")
         self._report.measurements["mask_mode"] = "terrain"
-        return PASS, (detail + "\nTerrain changes the contact windows, so "
-                      "the mask is genuinely terrain-derived.")
+        return PASS, (detail + "\nTerrain shortens the contact windows, "
+                      "so the mask is genuinely terrain-derived.")
 
     # -- measurement helpers ----------------------------------------------
 
@@ -1070,30 +1081,36 @@ class AcavScenarioVerifier:
             return False
 
     class _MaskContext:
-        """Applies a constant az-el mask, then restores what was there."""
+        """Applies an az-el mask mode, then restores the configured one.
 
-        def __init__(self, verifier: "AcavScenarioVerifier",
-                     elevation_deg: float):
+        ``mode`` is one of STK's three: ``terrain``, ``none``, ``file``.
+        There is no constant-elevation mask -- a live 12.6 install
+        reports exactly ``eAzElMaskNone``, ``eMaskFile`` and
+        ``eTerrainData``. The verifier previously tried to apply a
+        constant mask as an experimental control, which failed on every
+        run and left the terrain check with nothing to compare against.
+        A minimum elevation is an access *constraint*, checked
+        separately.
+        """
+
+        def __init__(self, verifier: "AcavScenarioVerifier", mode: str):
             self._verifier = verifier
-            self._elevation_deg = elevation_deg
+            self._mode = mode
             self.applied = False
 
         def __enter__(self) -> bool:
             """Returns whether the mask was actually applied.
 
-            Callers must branch on this. On the first live run every
-            SetAzElMask form was rejected, and the checks below went on
-            to compare the unmasked baseline against itself and report
-            the result as evidence about masking -- a conclusion drawn
-            from an experiment whose treatment never ran.
+            Callers must branch on this. A check that concludes from a
+            treatment which never ran is worse than no check: it reports
+            a verdict with nothing behind it.
             """
             try:
                 self._verifier._backend.set_az_el_mask(
-                    self._verifier._ground_station, "constant",
-                    math.radians(self._elevation_deg))
+                    self._verifier._ground_station, self._mode)
             except StkBridgeError as exc:
-                LOGGER.warning("could not apply a constant %.1f deg mask: %s",
-                               self._elevation_deg, exc)
+                LOGGER.warning("could not apply the %s mask: %s",
+                               self._mode, exc)
                 self._verifier._mask_failure = str(exc)
                 return False
             self.applied = True
@@ -1102,8 +1119,43 @@ class AcavScenarioVerifier:
         def __exit__(self, exc_type, exc, tb) -> None:
             self._verifier._restore_configured_mask()
 
-    def _temporary_mask(self, elevation_deg: float) -> "_MaskContext":
-        return AcavScenarioVerifier._MaskContext(self, elevation_deg)
+    def _temporary_mask(self, mode: str) -> "_MaskContext":
+        return AcavScenarioVerifier._MaskContext(self, mode)
+
+    class _ElevationConstraint:
+        """Temporarily changes the minimum-elevation access constraint."""
+
+        def __init__(self, verifier: "AcavScenarioVerifier",
+                     minimum_deg: float):
+            self._verifier = verifier
+            self._minimum_deg = minimum_deg
+            self.applied = False
+
+        def __enter__(self) -> bool:
+            self.applied = self._verifier._set_elevation_constraint(
+                self._minimum_deg)
+            return self.applied
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            configured = float((self._verifier._spec.ground_station or {})
+                               .get("min_elevation_deg", 0.0))
+            self._verifier._set_elevation_constraint(configured)
+
+    def _temporary_elevation(self, minimum_deg: float
+                             ) -> "_ElevationConstraint":
+        return AcavScenarioVerifier._ElevationConstraint(self, minimum_deg)
+
+    def _set_elevation_constraint(self, minimum_deg: float) -> bool:
+        """Degrees first, matching every angle-bearing Connect command."""
+        path = self._ground_station
+        for command in (
+            f"SetConstraint {path} ElevationAngle Min {minimum_deg!r}",
+            f"SetConstraint {path} ElevationAngle Min "
+            f"{math.radians(minimum_deg)!r}",
+        ):
+            if self._connect_ok(command):
+                return True
+        return False
 
     def _restore_configured_mask(self) -> bool:
         """Put the mask back to what the spec asks for.
@@ -1117,12 +1169,9 @@ class AcavScenarioVerifier:
         if not path:
             return True
         config = self._spec.ground_station or {}
-        terrain = bool(config.get("terrain_masking", False))
-        mode = "terrain" if terrain else "constant"
-        value = 0.0 if terrain else math.radians(
-            float(config.get("min_elevation_deg", 0.0)))
+        mode = "terrain" if config.get("terrain_masking", False) else "none"
         try:
-            self._backend.set_az_el_mask(path, mode, value)
+            self._backend.set_az_el_mask(path, mode)
         except StkBridgeError as exc:
             LOGGER.warning("could not restore the configured mask: %s", exc)
             return False

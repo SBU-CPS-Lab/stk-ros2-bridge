@@ -74,10 +74,16 @@ class Stk126Double(MockBackend):
         self.setstate_unit = setstate_unit
         self.lla_unit = lla_unit
         self.setstate_order = setstate_order
-        #: Effective horizon elevation from the currently applied mask,
-        #: degrees. ``TERRAIN_HORIZON_DEG`` stands in for terrain having
-        #: been loaded; None means no mask is in force.
-        self.mask_elevation_deg: Optional[float] = None
+        #: Effective horizon from the applied mask, degrees.
+        #: ``TERRAIN_HORIZON_DEG`` stands in for terrain having been
+        #: loaded for the region.
+        self.mask_horizon_deg: float = 0.0
+        self.mask_mode: Optional[str] = None
+        #: Minimum-elevation access constraint, degrees. Separate from
+        #: the mask, because in STK it is a separate mechanism -- and
+        #: because a terrain horizon above it hides its effect, which is
+        #: a confound the verifier has to control for.
+        self.elevation_min_deg: float = 0.0
         #: Every Connect command issued, so a test can assert on the
         #: unit a command was sent in rather than only on its effect.
         self.commands: List[str] = []
@@ -115,8 +121,9 @@ class Stk126Double(MockBackend):
         if not facility:
             return super().compute_access(from_path, to_path, start, stop)
 
-        elevation = (self.mask_elevation_deg
-                     if self.mask_elevation_deg is not None else 0.0)
+        # Whichever occludes more wins, exactly as a real horizon and a
+        # minimum-elevation constraint compose.
+        elevation = max(self.mask_horizon_deg, self.elevation_min_deg)
         seconds = max(0.0, 600.0 - 20.0 * elevation)
         if seconds <= 0.0:
             return []
@@ -137,22 +144,32 @@ class Stk126Double(MockBackend):
 
     def set_az_el_mask(self, object_path: str, mode: str,
                        value: float = 0.0) -> str:
-        """Reject every form, as the live install did.
+        """STK's three mask types, and nothing else.
 
-        Goes through the backend method rather than execute_connect
-        because that is where the caller now asks; a double that only
-        intercepted the old path would let a regression through while
-        still looking like it reproduced the failure.
+        A live install reports exactly eAzElMaskNone, eMaskFile and
+        eTerrainData -- there is no constant-elevation mask. Rejecting
+        anything else here is how the double stops the verifier from
+        going back to using one as a control.
         """
+        if mode not in ("terrain", "none", "file"):
+            raise CommandError("SetAzElMask", object_path,
+                               f"unknown mask mode {mode!r}; "
+                               f"AgEAzElMaskType members: "
+                               f"['eAzElMaskNone', 'eMaskFile', "
+                               f"'eTerrainData']")
         if self.reject_azelmask:
             raise CommandError(
                 "SetAzElMask", object_path,
-                "Object Model SetAzElMask(eAzElMaskTerrainData): "
+                "Object Model SetAzElMask [eTerrainData]: "
                 "no such enum member; "
                 "Connect SetAzElMask TerrainData: NACK Command has failed.")
-        self.mask_elevation_deg = (TERRAIN_HORIZON_DEG if mode == "terrain"
-                                   else math.degrees(value))
+        self.mask_horizon_deg = (TERRAIN_HORIZON_DEG if mode == "terrain"
+                                 else 0.0)
+        self.mask_mode = mode
         return f"double (stored {mode})"
+
+    def get_az_el_mask(self, object_path: str) -> Optional[str]:
+        return self.mask_mode
 
     def set_sensor_cone(self, object_path: str, half_angle_rad: float,
                         angular_resolution_rad: float = 0.017453) -> str:
@@ -173,11 +190,15 @@ class Stk126Double(MockBackend):
         if verb == "define" and self.reject_define:
             raise CommandError("Define", command, "Command has failed.")
         if verb == "setazelmask":
-            # Reached only if something bypasses set_az_el_mask.
-            if self.reject_azelmask:
-                raise CommandError("SetAzElMask", command,
-                                   "Command has failed.")
-            return self._set_az_el_mask(tokens, command)
+            # Connect is rejected outright on the live install; the
+            # typed path in set_az_el_mask is the one that works.
+            raise CommandError("SetAzElMask", command,
+                               "Command has failed.")
+        if verb == "setconstraint" and len(tokens) >= 5 \
+                and tokens[2].lower() == "elevationangle":
+            self.elevation_min_deg = float(tokens[4])
+            return ConnectResponse(command=command, ack=True, messages=[],
+                                   raw="ACK")
         if verb == "setstate":
             return self._set_state(tokens, command)
         if verb == "setposition" and len(tokens) >= 6 \
@@ -189,18 +210,6 @@ class Stk126Double(MockBackend):
 
     def _angle_to_rad(self, value: float, unit: str) -> float:
         return math.radians(value) if unit == "degrees" else value
-
-    def _set_az_el_mask(self, tokens, command) -> ConnectResponse:
-        if len(tokens) >= 3 and tokens[2].lower() == "terraindata":
-            self.mask_elevation_deg = TERRAIN_HORIZON_DEG
-        elif len(tokens) >= 4 and tokens[2].lower() == "constant":
-            # Degrees, matching every other angle-bearing Connect
-            # command measured on this install.
-            self.mask_elevation_deg = float(tokens[3])
-        else:
-            raise CommandError("SetAzElMask", command, "Command has failed.")
-        return ConnectResponse(command=command, ack=True, messages=[],
-                               raw="ACK")
 
     def _set_position_geodetic(self, tokens, command) -> ConnectResponse:
         obj = self._objects.get(tokens[1])

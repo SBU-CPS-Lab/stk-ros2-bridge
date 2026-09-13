@@ -564,36 +564,36 @@ class StkBackend(abc.ABC):
                        value: float = 0.0) -> str:
         """Apply an azimuth/elevation mask to a static object.
 
-        ``mode`` is ``"terrain"`` or ``"constant"``; ``value`` is the
-        elevation in radians for a constant mask, and the maximum range
-        in metres for terrain. Returns a label describing how it was
-        applied; raises :class:`CommandError` with every attempt's
-        reason if nothing worked.
+        ``mode`` is ``"terrain"``, ``"none"`` or ``"file"``. Those are
+        the only kinds STK has: a live 12.6 install reports
+        ``AgEAzElMaskType`` members ``eAzElMaskNone``, ``eMaskFile`` and
+        ``eTerrainData``, and nothing else.
 
-        Exists as a backend method rather than a Connect string in the
-        caller because Connect answers a rejected ``SetAzElMask`` with
-        "Command has failed." and nothing else, so the only way to learn
-        anything is to try the Object Model, which only backends/ may
-        reach.
+        In particular there is **no constant-elevation mask**. A minimum
+        elevation is an access *constraint*, a separate mechanism
+        reached through ``SetConstraint``, and conflating the two costs
+        a live run: the verifier spent one trying to apply a constant
+        mask as an experimental control, failing, and then having
+        nothing to compare terrain against.
+
+        Returns a label describing how it was applied; raises
+        :class:`CommandError` with every attempt's reason if nothing
+        worked.
         """
-        if mode == "terrain":
-            candidates = (
-                ("Connect SetAzElMask TerrainData",
-                 f"SetAzElMask {object_path} TerrainData"),
-                ("Connect SetAzElMask TerrainData (use + range)",
-                 f"SetAzElMask {object_path} TerrainData 1 {value!r}"),
-            )
-        else:
-            degrees = math.degrees(value)
-            candidates = (
-                ("Connect SetAzElMask Constant (degrees)",
-                 f"SetAzElMask {object_path} Constant {degrees!r}"),
-                ("Connect SetAzElMask Constant (radians)",
-                 f"SetAzElMask {object_path} Constant {value!r}"),
-            )
+        spelling = {"terrain": "TerrainData", "none": "None",
+                    "file": "File"}.get(mode)
+        if spelling is None:
+            raise CommandError("SetAzElMask", object_path,
+                               f"unknown mask mode {mode!r}; STK has "
+                               f"terrain, none and file")
 
         reasons = []
-        for label, command in candidates:
+        for label, command in (
+            (f"Connect SetAzElMask {spelling}",
+             f"SetAzElMask {object_path} {spelling}"),
+            (f"Connect SetAzElMask {spelling} (with range)",
+             f"SetAzElMask {object_path} {spelling} 1 {value!r}"),
+        ):
             try:
                 if self.execute_connect(command).ack:
                     return label
@@ -601,6 +601,16 @@ class StkBackend(abc.ABC):
             except Exception as exc:                      # noqa: BLE001
                 reasons.append(f"{label}: {type(exc).__name__}: {exc}")
         raise CommandError("SetAzElMask", object_path, "; ".join(reasons))
+
+    def get_az_el_mask(self, object_path: str) -> Optional[str]:
+        """The mask type STK currently holds, or None if unreadable.
+
+        Only backends with the Object Model can answer. Worth having:
+        it separates "the command did not apply" from "the mask applied
+        and made no difference", which are different problems with the
+        same symptom.
+        """
+        return None
 
     def get_sensor_cone_half_angle_rad(self, object_path: str
                                        ) -> Optional[float]:

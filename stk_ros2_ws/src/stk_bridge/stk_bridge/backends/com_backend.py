@@ -934,16 +934,24 @@ class ComBackend(StkBackend):
 
     def set_az_el_mask(self, object_path: str, mode: str,
                        value: float = 0.0) -> str:
-        """Object Model first, then Connect, then say what is available.
+        """Object Model first, then Connect.
 
         Every Connect ``SetAzElMask`` form is rejected on STK 12.6 with
-        the generic "Command has failed.", and the first typed attempt
-        failed with ``AttributeError: eAzElMaskTerrainData`` -- the enum
-        exists, that member name does not. Guessing further spellings
-        from documentation is what this project does not do, so on
-        failure the error carries the enum's **actual** members and the
-        object's mask-related attributes. One live run then settles it.
+        the generic "Command has failed."; the typed path works. Member
+        spellings are measured, not guessed -- a live install reports
+        ``eAzElMaskNone``, ``eMaskFile`` and ``eTerrainData``, and the
+        first attempt at ``eAzElMaskTerrainData`` failed with an
+        AttributeError that listed them.
         """
+        members = {
+            "terrain": ("eTerrainData", "eAzElMaskTerrainData"),
+            "none": ("eAzElMaskNone", "eNone"),
+            "file": ("eMaskFile", "eAzElMaskFile"),
+        }.get(mode)
+        if members is None:
+            raise CommandError("SetAzElMask", object_path,
+                               f"unknown mask mode {mode!r}")
+
         reasons: List[str] = []
         obj = enum_type = None
         try:
@@ -956,28 +964,16 @@ class ComBackend(StkBackend):
             reasons.append(f"AgEAzElMaskType unavailable: {exc}")
 
         if obj is not None and enum_type is not None:
-            members = (("eAzElMaskTerrainData", "eTerrainData",
-                        "eMaskTerrainData", "eAzElMaskTerrain")
-                       if mode == "terrain"
-                       else ("eAzElMaskConstant", "eConstantMask",
-                             "eConstant", "eMaskConstant"))
-            argument = value if mode == "terrain" else math.degrees(value)
             for member in members:
                 enum_value = getattr(enum_type, member, None)
                 if enum_value is None:
                     continue
-                for how, apply in (
-                    ("SetAzElMask(member, value)",
-                     lambda v=enum_value: obj.SetAzElMask(v, argument)),
-                    ("AzElMask = member",
-                     lambda v=enum_value: setattr(obj, "AzElMask", v)),
-                ):
-                    try:
-                        apply()
-                        return f"Object Model {how} [{member}]"
-                    except Exception as exc:              # noqa: BLE001
-                        reasons.append(f"{how} [{member}]: "
-                                       f"{type(exc).__name__}: {exc}")
+                try:
+                    obj.SetAzElMask(enum_value, value)
+                    return f"Object Model SetAzElMask [{member}]"
+                except Exception as exc:                  # noqa: BLE001
+                    reasons.append(f"SetAzElMask [{member}]: "
+                                   f"{type(exc).__name__}: {exc}")
 
         try:
             return super().set_az_el_mask(object_path, mode, value)
@@ -987,14 +983,18 @@ class ComBackend(StkBackend):
         reasons.append(self._describe_mask_api(obj, enum_type))
         raise CommandError("SetAzElMask", object_path, "; ".join(reasons))
 
+    def get_az_el_mask(self, object_path: str) -> Optional[str]:
+        try:
+            obj = self._get_object(object_path)
+            return str(obj.GetAzElMask())
+        except Exception as exc:                          # noqa: BLE001
+            LOGGER.debug("could not read the az-el mask on %s: %s",
+                         object_path, exc)
+            return None
+
     @staticmethod
     def _describe_mask_api(obj: Any, enum_type: Any) -> str:
-        """What this install actually offers, for the next attempt.
-
-        A rejected command that also tells you the available names turns
-        a round trip to the Windows machine into a single line of the
-        next report.
-        """
+        """What this install actually offers, for the next attempt."""
         parts = []
         if enum_type is not None:
             members = [name for name in dir(enum_type)

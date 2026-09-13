@@ -54,7 +54,7 @@ from acav.twin_reference import (
 #: Bumped whenever the meaning of a fixture changes, so a stale JSON is
 #: rejected loudly by the MATLAB side instead of silently passing
 #: against the wrong expectations.
-FIXTURE_VERSION = 1
+FIXTURE_VERSION = 2
 
 
 def _q(values) -> List[float]:
@@ -242,24 +242,31 @@ def _controller_cases(config: TwinConfig) -> List[Dict]:
 
 def _mode_cases(config: TwinConfig) -> List[Dict]:
     cases = []
-    for name, mode, error_deg, rate_deg_s, momentum, requested in (
-        ("nadir_to_slew", "NADIR", 30.0, 0.0, 0.0, True),
-        ("slew_holds_until_profile_done", "SLEW", 30.0, 1.0, 0.0, False),
-        ("settle_to_image", "SETTLE", 1.0, 0.1, 0.0, False),
-        ("settle_waits", "SETTLE", 3.0, 0.1, 0.0, False),
-        ("saturation_trips_safe_from_image", "IMAGE", 0.1, 0.0, 1.0, True),
-        ("rate_trips_safe", "SLEW", 5.0, 16.0, 0.0, False),
-        ("safe_latches", "SAFE", 0.0, 0.0, 0.0, True),
+    for name, mode, error_deg, rate_deg_s, momentum, requested, done in (
+        ("nadir_to_slew", "NADIR", 30.0, 0.0, 0.0, True, False),
+        ("slew_holds_until_profile_done", "SLEW", 30.0, 1.0, 0.0, False,
+         False),
+        ("slew_to_settle_when_profile_done", "SLEW", 30.0, 1.0, 0.0, False,
+         True),
+        ("settle_to_image", "SETTLE", 1.0, 0.1, 0.0, False, True),
+        ("settle_waits", "SETTLE", 3.0, 0.1, 0.0, False, True),
+        ("image_to_slew_on_request", "IMAGE", 30.0, 0.0, 0.0, True, True),
+        ("saturation_trips_safe_from_image", "IMAGE", 0.1, 0.0, 1.0, True,
+         True),
+        ("rate_trips_safe", "SLEW", 5.0, 16.0, 0.0, False, False),
+        ("safe_latches", "SAFE", 0.0, 0.0, 0.0, True, True),
     ):
         state = ModeState(mode=MissionMode(mode), entered_at_s=0.0)
         result = update_mode(state, config, 10.0, math.radians(error_deg),
-                             math.radians(rate_deg_s), momentum, requested)
+                             math.radians(rate_deg_s), momentum, requested,
+                             done)
         cases.append({
             "name": name, "mode_in": mode,
             "boresight_error_rad": math.radians(error_deg),
             "body_rate_rad_s": math.radians(rate_deg_s),
             "momentum_fraction": momentum,
             "slew_requested": requested,
+            "profile_done": done,
             "expected_mode": result.mode.value,
         })
     return cases

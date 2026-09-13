@@ -378,26 +378,49 @@ class TestMissionModeChart:
     def _state(self, mode):
         return ModeState(mode=mode, entered_at_s=0.0)
 
+    def _update(self, mode, config, *, error_deg=0.0, rate_deg_s=0.0,
+                momentum=0.0, requested=False, profile_done=False,
+                now=5.0):
+        return update_mode(self._state(mode), config, now,
+                           math.radians(error_deg), math.radians(rate_deg_s),
+                           momentum, requested, profile_done)
+
     def test_slew_request_moves_out_of_nadir(self, config):
-        state = update_mode(self._state(MissionMode.NADIR), config, 1.0,
-                            0.5, 0.0, 0.0, slew_requested=True)
+        state = self._update(MissionMode.NADIR, config, error_deg=30.0,
+                             requested=True)
         assert state.mode is MissionMode.SLEW
 
+    def test_slew_holds_until_the_profile_is_done(self, config):
+        """`profile_done` is an input, not something the chart infers.
+
+        The reference used to derive it from `state.profile is None`
+        while the MATLAB transcription took it as an argument, so the
+        two disagreed about a SLEW state with no profile -- caught by
+        the cross-check. Deriving it also hid a bug state: a SLEW with
+        no profile is a fault, and treating it as finished is the kind
+        of plausible recovery that makes a wrong run look normal.
+        """
+        assert self._update(MissionMode.SLEW, config, error_deg=30.0,
+                            profile_done=False).mode is MissionMode.SLEW
+        assert self._update(MissionMode.SLEW, config, error_deg=30.0,
+                            profile_done=True).mode is MissionMode.SETTLE
+
     def test_settle_waits_for_the_entry_threshold(self, config):
-        state = update_mode(self._state(MissionMode.SETTLE), config, 1.0,
-                            math.radians(3.0), 0.0, 0.0,
-                            slew_requested=False)
-        assert state.mode is MissionMode.SETTLE
-        state = update_mode(state, config, 2.0, math.radians(1.0), 0.0, 0.0,
-                            slew_requested=False)
-        assert state.mode is MissionMode.IMAGE
+        assert self._update(MissionMode.SETTLE, config, error_deg=3.0,
+                            profile_done=True).mode is MissionMode.SETTLE
+        assert self._update(MissionMode.SETTLE, config, error_deg=1.0,
+                            profile_done=True).mode is MissionMode.IMAGE
+
+    def test_image_returns_to_slew_for_the_next_target(self, config):
+        state = self._update(MissionMode.IMAGE, config, error_deg=30.0,
+                             requested=True, profile_done=True)
+        assert state.mode is MissionMode.SLEW
 
     def test_momentum_saturation_trips_safe_from_any_mode(self, config):
         for mode in (MissionMode.NADIR, MissionMode.SLEW,
                      MissionMode.SETTLE, MissionMode.IMAGE):
-            state = update_mode(self._state(mode), config, 5.0, 0.0, 0.0,
-                                1.0, slew_requested=False)
-            assert state.mode is MissionMode.SAFE, mode
+            assert self._update(mode, config, momentum=1.0).mode is \
+                MissionMode.SAFE, mode
 
     def test_safe_guards_are_evaluated_before_everything_else(self, config):
         """A wheel that saturates during IMAGE must trip SAFE, not be
@@ -405,13 +428,13 @@ class TestMissionModeChart:
         other way gives a chart that is correct in every nominal run and
         silently fails to protect the vehicle in exactly the campaign
         that exists to test it."""
-        state = update_mode(self._state(MissionMode.IMAGE), config, 5.0,
-                            0.0, 0.0, 1.0, slew_requested=True)
+        state = self._update(MissionMode.IMAGE, config, momentum=1.0,
+                             requested=True, profile_done=True)
         assert state.mode is MissionMode.SAFE
 
     def test_excess_body_rate_trips_safe(self, config):
-        state = update_mode(self._state(MissionMode.SLEW), config, 5.0, 1.0,
-                            math.radians(16.0), 0.0, slew_requested=False)
+        state = self._update(MissionMode.SLEW, config, error_deg=5.0,
+                             rate_deg_s=16.0)
         assert state.mode is MissionMode.SAFE
 
     def test_safe_latches(self, config):
@@ -420,7 +443,7 @@ class TestMissionModeChart:
         state = self._state(MissionMode.SAFE)
         for _ in range(10):
             state = update_mode(state, config, 9.0, 0.0, 0.0, 0.0,
-                                slew_requested=True)
+                                True, True)
         assert state.mode is MissionMode.SAFE
 
 

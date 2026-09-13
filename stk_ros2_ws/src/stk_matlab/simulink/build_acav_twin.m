@@ -53,25 +53,27 @@ function modelName = build_acav_twin(options)
     end
 
     modelName = char(options.ModelName);
+    requireMessages();
+
     if bdIsLoaded(modelName)
         close_system(modelName, 0);
     end
     new_system(modelName);
+    cleanup = onCleanup(@() discardIfUnsaved(modelName));
     load_system('ros2lib');
 
     set_param(modelName, 'SolverType', 'Fixed-step', ...
         'FixedStep', num2str(options.SampleTime), ...
         'StopTime', 'inf');
-    try
-        set_param(modelName, 'ROSTimeSource', 'ROSClock');
-    catch
-        warning('build_acav_twin:TimeSource', ...
-            ['could not set ROSTimeSource on this release. The twin ' ...
-             'MUST follow /clock in lockstep -- set it by hand under ' ...
-             'Model Configuration Parameters > ROS 2, or the barrier ' ...
-             'will run against wall-clock time and E3 will measure ' ...
-             'the mismatch rather than determinism.']);
-    end
+
+    % There is NO model-level ROS time-source parameter. Checked on
+    % R2023a: the model has none, and the ROS 2 Current Time block
+    % exposes only OutputFormat and SampleTime. Time follows /clock
+    % because the generated node runs with use_sim_time true, which is
+    % a launch-time setting, not a model one. An earlier version of this
+    % function set an invented 'ROSTimeSource' parameter and warned when
+    % it failed, which read as a release incompatibility rather than as
+    % a parameter that never existed.
 
     base = sprintf('/%s/%s', options.Prefix, options.Namespace);
 
@@ -84,7 +86,10 @@ function modelName = build_acav_twin(options)
         '/acav/setpoint', 'stk_msgs/AttitudeCommand');
 
     % -- mission mode chart ---------------------------------------------
-    buildMissionModeChart(modelName, [270 220 470 340]);
+    % In +adcs so it can be built and structurally checked without the
+    % ROS blocks, which need generated messages. test_acav_twin asserts
+    % that SAFE latches and that its guards run first.
+    adcs.build_mission_chart(modelName, 'MissionMode', [270 220 470 340]);
 
     % -- guidance and control -------------------------------------------
     controlBlock = [modelName '/GuidanceControl'];
@@ -119,10 +124,50 @@ function modelName = build_acav_twin(options)
 
     save_system(modelName, fullfile(fileparts(mfilename('fullpath')), ...
         [modelName '.slx']));
+    clear cleanup
     fprintf(['build_acav_twin: wrote %s.slx\n' ...
              '  Run test_acav_twin first -- it checks the algorithms ' ...
              'this model calls against the Python reference.\n'], ...
         modelName);
+end
+
+% -----------------------------------------------------------------------
+
+function requireMessages()
+%REQUIREMESSAGES Fail before building anything if stk_msgs is missing.
+%
+% Without this the build dies partway through adding blocks, leaving a
+% half-constructed model open, and the error names a mask callback
+% rather than the actual problem. Observed exactly that: "Error
+% evaluating 'MaskParameterCallback' ... Unrecognized message type
+% stk_msgs/AttitudeState", which does not tell a reader to run
+% setup_stk_ros.
+    needed = ["stk_msgs/AttitudeState", "stk_msgs/OrbitState", ...
+              "stk_msgs/AttitudeCommand"];
+    try
+        available = string(ros2("msg", "list"));
+    catch err
+        error('build_acav_twin:NoMessageList', ...
+            ['could not list ROS 2 message types (%s).\nRun ' ...
+             'setup_stk_ros first -- it generates stk_msgs for ' ...
+             'MATLAB.'], err.message);
+    end
+    missing = needed(~ismember(needed, available));
+    if ~isempty(missing)
+        error('build_acav_twin:MissingMessages', ...
+            ['%s is not registered with MATLAB.\n' ...
+             'Run setup_stk_ros first; it calls ros2genmsg on ' ...
+             'src/stk_msgs.\nOn Windows that needs MSVC Build Tools ' ...
+             '("Desktop development with C++"), and the failure ' ...
+             'message does not say so.'], strjoin(missing, ', '));
+    end
+end
+
+function discardIfUnsaved(modelName)
+%DISCARDIFUNSAVED Do not leave a half-built model open after an error.
+    if bdIsLoaded(modelName)
+        close_system(modelName, 0);
+    end
 end
 
 % -----------------------------------------------------------------------
@@ -180,69 +225,4 @@ function source = guidanceControlSource()
         '    err = out.boresightErrorRad;'
         'end'
         }, newline);
-end
-
-function buildMissionModeChart(model, position)
-    %BUILDMISSIONMODECHART NADIR -> SLEW -> SETTLE -> IMAGE, plus SAFE.
-    %
-    % Guards mirror adcs/mission_mode.m exactly. Two properties there are
-    % load-bearing and are reproduced here:
-    %
-    %   * the SAFE transitions have priority 1, so a wheel that saturates
-    %     during IMAGE trips SAFE rather than being masked by an
-    %     already-satisfied hold;
-    %   * SAFE has no outgoing transition. An ADCS that re-armed itself
-    %     the instant the trip cleared would oscillate in and out and
-    %     make E5's deterministic replay meaningless.
-    try
-        chartPath = [model '/MissionMode'];
-        add_block('sflib/Chart', chartPath, 'Position', position);
-        root = sfroot();
-        chart = root.find('-isa', 'Stateflow.Chart', '-and', ...
-            'Path', chartPath);
-
-        states = struct();
-        names = {'NADIR', 'SLEW', 'SETTLE', 'IMAGE', 'SAFE'};
-        for k = 1:numel(names)
-            s = Stateflow.State(chart);
-            s.Name = names{k};
-            s.Position = [40 + 130 * mod(k - 1, 3), ...
-                          40 + 110 * floor((k - 1) / 3), 100, 60];
-            states.(names{k}) = s;
-        end
-
-        entry = Stateflow.Transition(chart);
-        entry.Destination = states.NADIR;
-        entry.DestinationOClock = 0;
-        entry.SourceEndpoint = states.NADIR.Position(1:2) - [0 40];
-
-        addTransition(chart, states.NADIR, states.SLEW, ...
-            '[slewRequested]');
-        addTransition(chart, states.IMAGE, states.SLEW, ...
-            '[slewRequested]');
-        addTransition(chart, states.SLEW, states.SETTLE, ...
-            '[profileDone]');
-        addTransition(chart, states.SETTLE, states.IMAGE, ...
-            '[boresightError <= settleEntry]');
-
-        % Priority 1: evaluated before anything else leaving the state.
-        for k = 1:4
-            t = addTransition(chart, states.(names{k}), states.SAFE, ...
-                '[momentumFraction >= 1 || bodyRate > maxBodyRate]');
-            t.ExecutionOrder = 1;
-        end
-    catch err
-        warning('build_acav_twin:Stateflow', ...
-            ['could not build the Stateflow chart (%s). The model is ' ...
-             'still usable: adcs.twin_step calls adcs.mission_mode, ' ...
-             'which is the same logic. Add the chart by hand if the ' ...
-             'paper needs the figure.'], err.message);
-    end
-end
-
-function t = addTransition(chart, from, to, label)
-    t = Stateflow.Transition(chart);
-    t.Source = from;
-    t.Destination = to;
-    t.LabelString = label;
 end

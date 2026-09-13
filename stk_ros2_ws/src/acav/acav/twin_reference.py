@@ -445,9 +445,17 @@ class ModeState:
 
 def update_mode(state: ModeState, config: TwinConfig, now_s: float,
                 boresight_error_rad_value: float, body_rate_rad_s: float,
-                momentum_fraction: float,
-                slew_requested: bool) -> ModeState:
+                momentum_fraction: float, slew_requested: bool,
+                profile_done: bool) -> ModeState:
     """One transition evaluation. Mirrors the Stateflow chart exactly.
+
+    ``profile_done`` is an argument rather than being derived from
+    ``state.profile`` here. It was derived, and the MATLAB transcription
+    took it as an argument -- so the two disagreed about a SLEW state
+    with no profile, and the cross-check caught it. Deriving it also hid
+    a bug state: a SLEW with no profile is a fault, and silently
+    treating it as "finished" is the kind of plausible recovery that
+    makes a wrong run look like a normal one.
 
     Ordering matters and is asserted by tests: the SAFE guards are
     evaluated **first and unconditionally**, so a wheel that saturates
@@ -476,9 +484,6 @@ def update_mode(state: ModeState, config: TwinConfig, now_s: float,
                          profile=state.profile, slew_started_s=now_s)
 
     if state.mode is MissionMode.SLEW:
-        profile_done = (state.profile is None
-                        or now_s - state.slew_started_s
-                        >= state.profile.complete_at)
         if profile_done:
             return ModeState(mode=MissionMode.SETTLE, entered_at_s=now_s,
                              profile=state.profile,
@@ -554,7 +559,8 @@ def simulate_slew(config: TwinConfig, q_initial: Sequence[float],
         rate_magnitude = math.sqrt(dot(body.rate_rad_s, body.rate_rad_s))
 
         state = update_mode(state, config, now, error, rate_magnitude,
-                            wheels.momentum_fraction, slew_requested=False)
+                            wheels.momentum_fraction, slew_requested=False,
+                            profile_done=now >= profile.complete_at)
 
         torque = tracking_torque(config, body.quaternion, body.rate_rad_s,
                                  q_ref, omega_ref)

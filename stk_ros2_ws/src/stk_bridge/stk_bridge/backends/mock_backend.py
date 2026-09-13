@@ -664,9 +664,17 @@ class MockBackend(StkBackend):
 
     def set_az_el_mask(self, object_path: str, mode: str,
                        value: float = 0.0) -> str:
+        if mode not in ("terrain", "none", "file"):
+            raise CommandError("SetAzElMask", object_path,
+                               f"unknown mask mode {mode!r}; STK has "
+                               f"terrain, none and file")
         obj = self._obj(object_path)
         obj.az_el_mask = (mode, value)
         return f"mock (stored {mode})"
+
+    def get_az_el_mask(self, object_path: str) -> Optional[str]:
+        mask = self._obj(object_path).az_el_mask
+        return None if mask is None else mask[0]
 
     def set_sensor_cone(self, object_path: str, half_angle_rad: float,
                         angular_resolution_rad: float = 0.017453) -> str:
