@@ -77,13 +77,37 @@ function setup_stk_ros(varargin)
     end
     installFolder = fullfile(genFolder, 'install');
     % VersionInfo.mat is written after a successful build/registration.
-    alreadyBuilt = isfolder(installFolder) && ...
-        isfile(fullfile(genFolder, 'src', 'VersionInfo.mat'));
+    versionInfo = fullfile(genFolder, 'src', 'VersionInfo.mat');
+    alreadyBuilt = isfolder(installFolder) && isfile(versionInfo);
 
-    if alreadyBuilt && ~p.Results.Rebuild
-        fprintf(['  generated messages already built; skipping ros2genmsg ' ...
-                 '(pass ''Rebuild'', true to force).\n']);
+    % Existence is not enough. Editing a .msg and re-running this used
+    % to print "Setup complete" while leaving every generated class on
+    % the OLD definition -- so a Simulink model wired to a new field
+    % failed with "unable to find selected signal", naming the model
+    % rather than the stale package. Compare timestamps instead: any
+    % .msg newer than the build marker means the generated code no
+    % longer describes the messages in the tree.
+    staleMsgs = {};
+    if alreadyBuilt
+        built = dir(versionInfo);
+        definitions = dir(fullfile(msgRoot, '**', '*.msg'));
+        for k = 1:numel(definitions)
+            if definitions(k).datenum > built.datenum
+                staleMsgs{end+1} = definitions(k).name; %#ok<AGROW>
+            end
+        end
+    end
+
+    if alreadyBuilt && isempty(staleMsgs) && ~p.Results.Rebuild
+        fprintf(['  generated messages already built and up to date; ' ...
+                 'skipping ros2genmsg (pass ''Rebuild'', true to ' ...
+                 'force).\n']);
     else
+        if ~isempty(staleMsgs)
+            fprintf(['  %d message definition(s) changed since the last ' ...
+                     'build (%s); regenerating.\n'], numel(staleMsgs), ...
+                    strjoin(staleMsgs, ', '));
+        end
         fprintf('  running ros2genmsg on %s ...\n', msgRoot);
         fprintf(['  (this compiles C++ against your MATLAB-bundled ROS 2 ' ...
                  'client libraries; on Windows it requires MSVC -- see ' ...

@@ -60,7 +60,7 @@ publishes or subscribes to them:
 | Type | Used on (by convention) | Purpose |
 |---|---|---|
 | `TargetSetpoint` | `/acav/setpoint` | A guidance target: inertial position + a have-target flag. The ACAV scheduler (`acav_scheduler`) publishes it; a closed-loop twin subscribes and turns it into a commanded attitude itself. |
-| `TwinStatus` | `/acav/twin_status` | A twin's own mode name and boresight pointing error, streamed back so a scheduler can score captures without re-deriving the angle from raw telemetry. |
+| `TwinStatus` | `/acav/twin_status` | A twin's own mode name, boresight pointing error and reaction-wheel state (momentum, saturation, cumulative wheel energy), streamed back so a scheduler can score captures and report run-level quantities without re-deriving either from raw telemetry. |
 
 They live in `stk_msgs` rather than a separate package because that is
 where every other typed interface in this workspace already is, and

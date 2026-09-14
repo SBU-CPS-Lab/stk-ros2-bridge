@@ -562,6 +562,13 @@ class TwinState:
 
     mode_state: ModeState = field(default_factory=ModeState)
     wheel_momentum_Nms: Vector3 = (0.0, 0.0, 0.0)
+    #: Cumulative integral of |tau . omega|, joules -- a proxy for slew
+    #: cost, reported per run. Accumulated here rather than by whoever
+    #: reads the telemetry because this is the only place that holds the
+    #: delivered torque and the body rate at the same instant, and a
+    #: running total survives a dropped sample where a consumer-side
+    #: integration would silently lose that step's contribution.
+    wheel_energy_J: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -672,12 +679,21 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
                      rate_rad_s=tuple(inputs.omega_rad_s))
     body.step(delivered, wheels.momentum_Nms, config.step_s)
 
+    # Power against the rate the torque actually acted on -- the rate at
+    # the START of the step, not the integrated one, matching the
+    # left-hand rule the rest of the stepping uses. Taking the rate
+    # after integration would credit this step's torque with the motion
+    # it produced, which overstates the cost of every acceleration.
+    energy = state.wheel_energy_J + abs(
+        dot(delivered, inputs.omega_rad_s)) * config.step_s
+
     return TwinStepResult(
         torque_Nm=delivered,
         quaternion_cmd=body.quaternion,
         rate_next_rad_s=body.rate_rad_s,
         state=TwinState(mode_state=mode_state,
-                        wheel_momentum_Nms=wheels.momentum_Nms),
+                        wheel_momentum_Nms=wheels.momentum_Nms,
+                        wheel_energy_J=energy),
         boresight_error_rad=error,
         mode_changed=mode_changed,
         wheels_saturated=saturated)

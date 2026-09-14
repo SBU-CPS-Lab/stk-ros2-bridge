@@ -1,6 +1,6 @@
 # C5 — The experiment harness
 
-What turns the closed loop into experiments: run matrices for E2–E5,
+What turns the closed loop into experiments: run matrices for E1–E5,
 provenance that decides whether a number may be published, seeded faults
 that can be replayed exactly, and a campaign driver that survives being
 interrupted at run 73 of 100.
@@ -103,6 +103,7 @@ the fault made no difference rather than that the run was reproduced.
 
 | Builder | Runs | Shape |
 |---|---:|---|
+| `build_e1_convention` | 2 | validated read-back vs deliberately mis-paired |
 | `build_e2_scheduler_comparison` | 2 | kinematic vs dynamics-aware, same targets |
 | `build_e3_determinism` | 40 | 20 lockstep vs 20 free-run, identical config |
 | `build_e4_gain_sweep` | 49 | 7×7 over bandwidth × profile authority |
@@ -114,6 +115,17 @@ loop was deterministic and not because nothing in it varied. Its results
 are grouped by the mode the bridge *reported*, so a run that asked for
 lockstep and fell back belongs to the free-run group rather than
 inflating a determinism claim it does not support.
+
+E1's treatment sets `sensing.force_attitude_provider` on the bridge,
+pairing an inertial read-back provider against the central-body-fixed
+command form the actuation path uses. The result is wrong by the
+Earth-rotation angle and **nothing raises** — which is the finding, and
+also why the knob fails loudly on an unrecognised provider name rather
+than falling back to the validated one: a typo that silently produced
+the nominal pairing would yield a "treatment" that behaves like the
+control and reports that mis-pairing costs nothing. The forced provider
+is recorded in the run's provenance, so a mis-paired run is identifiable
+from the results rather than only from the launch command's history.
 
 E4 does not sweep damping: C3 fixed ζ = 0.707, and a third axis would
 take the campaign from an overnight run to a weekend one for a parameter
@@ -172,31 +184,57 @@ gains and fault as **configured** and the backend and execution mode as
 **observed** — a backend can silently differ from what was asked for and
 gains cannot.
 
-## 7. Open items
+## 7. What the record now carries from the twin
 
-- **E1 has no knob yet.** It needs the bridge to deliberately mis-pair
-  the attitude read-back (an inertial provider against a `CBFQuat`
-  command — the bug found during bridge bring-up). Today
-  `core/sensing.py` picks the provider from the validation report and
-  there is no way to force the wrong one, so E1 is not expressible as a
-  campaign variation. That is a small, deliberate change in `stk_bridge`
-  rather than in the harness, and it is not made here: shipping a
-  `RunSpec` field that nothing honours would look like support for an
-  experiment that cannot run.
-- **E6 is not a campaign.** Per-step latency comes from the bridge's own
-  diagnostics over a single run, not from a matrix.
-  `RunResult.mean_step_latency_ms` is carried through the record already;
-  what is missing is the scheduler populating it.
-- **`RunResult`'s run-level fields are still defaults.** Peak momentum,
-  saturation events, SAFE entry and wheel energy are serialised and
-  round-trip correctly, but the scheduler does not yet fill them in —
-  they need the twin to report momentum and saturation, which is a
-  `TwinStatus` field and a deliberate message change (see
-  `docs/C3_adcs_twin.md` section 7). Until then E5's `safe_mode_runs`
-  count reads as zero, and although `determinism_signature` does hash
-  those three quantities, they are constant across every run and so
-  contribute nothing that could distinguish one from another — E3's
-  comparison currently rests entirely on the per-target outcomes.
+`TwinStatus` carries the reaction-wheel state alongside mode and
+pointing error, so the run-level quantities in `RunResult` are populated
+rather than left at their defaults:
+
+| Quantity | How it is derived |
+|---|---|
+| `peak_momentum_fraction` | per-axis max of \|h\| / capacity, over the run |
+| `wheel_saturation_events` | count of wheels *entering* saturation |
+| `entered_safe_mode` | any sample reporting the SAFE mode name |
+| `wheel_energy_J` | max of the twin's own cumulative ∫\|τ·ω\| |
+
+Three of those decisions are load-bearing. A saturation **event** is an
+entry, not a step spent saturated: counting steps would make the number
+a function of the telemetry rate, so the same run sampled twice as often
+would report twice the faults and two runs at different rates could not
+be compared — which is exactly what E5 needs of them. Wheel energy is
+**accumulated by the twin**, because the twin is the only party holding
+the delivered torque and the body rate at the same instant, and a
+running total survives a dropped telemetry sample where a consumer-side
+integration would silently lose that step's contribution; the consumer
+takes the maximum rather than the last value so one late, stale message
+cannot under-report the run. Momentum crosses the wire in N·m·s rather
+than normalised, so a consumer that disagreed about the capacity cannot
+silently disagree about how close to saturation the vehicle was.
+
+These also give `determinism_signature` something to discriminate on: it
+already hashed all three, but while they were constant they contributed
+nothing, and E3's comparison rested entirely on per-target outcomes.
+
+## 8. Open items
+
+- **E6 needs a latency breakdown the bridge does not publish.**
+  `RunResult.mean_step_latency_ms` is now populated, but from the
+  scheduler's own tick-to-tick wall clock — which in lockstep is a real
+  measure of the achieved step rate, since the barrier does not release
+  until every participant has acked. It is *not* the sense/actuate/
+  barrier breakdown C1 section 9 asks E6 for; that has to come from the
+  bridge measuring its own phases and publishing them. The field is
+  labelled for what it actually is rather than filled with the backend
+  round-trip time, which would have mislabelled one component as the
+  whole.
+- **E5 can observe a fault but cannot yet inject one.** The twin has no
+  path for a wheel-health derate: `adcs.wheels` already takes `health`,
+  but `twin_step` does not pass one, and the fault would have to reach
+  the model as configuration evaluated against sim time
+  (`WheelFault.health_at`). Until then an E5 campaign runs, records its
+  planned fault, and replays deterministically — but every run is
+  nominal, so `safe_mode_runs` stays at zero for a reason that is not
+  the twin failing to report it.
 - **No campaign has been run against live STK.** Everything here is
   verified against an injected launcher. The first real campaign is the
   test of section 5's refusals.

@@ -14,6 +14,8 @@ from acav.campaign import (
     LOCKSTEP,
     Campaign,
     RunSpec,
+    MISPAIRED_ATTITUDE_PROVIDER,
+    build_e1_convention,
     build_e2_scheduler_comparison,
     build_e3_determinism,
     build_e4_gain_sweep,
@@ -131,6 +133,32 @@ class TestMatrices:
     def test_e5_needs_seeds(self):
         with pytest.raises(ValueError, match="seed"):
             build_e5_fault_campaign([], WINDOW)
+
+
+class TestE1Convention:
+    """E1 is expressible now that the bridge can be told to mis-pair."""
+
+    def test_it_is_a_control_and_a_treatment(self):
+        campaign = build_e1_convention()
+        providers = [r.attitude_provider for r in campaign.runs]
+        assert providers == ["", MISPAIRED_ATTITUDE_PROVIDER]
+
+    def test_only_the_read_back_provider_differs(self):
+        """Anything else varying between the two would confound the
+        measurement with whatever else changed."""
+        control, treatment = build_e1_convention().runs
+        assert control.scheduler == treatment.scheduler
+        assert control.execution_mode == treatment.execution_mode
+        assert control.seed == treatment.seed
+        assert control.gains == treatment.gains
+
+    def test_the_two_runs_write_to_different_files(self):
+        control, treatment = build_e1_convention().runs
+        assert control.output_name != treatment.output_name
+
+    def test_the_treatment_names_itself_in_its_run_id(self):
+        _, treatment = build_e1_convention().runs
+        assert "readback" in treatment.run_id
 
 
 class TestReplayMatrix:
@@ -353,6 +381,16 @@ class TestRecordValidation:
         record = _record(run.run_id, seed=1,
                          gains={"natural_frequency_rad_s": 1.0})
         assert check_record(run, record) == []
+
+    def test_a_run_that_forgot_to_mis_pair_is_caught(self):
+        """The E1 treatment's whole content is the forced provider. A
+        record without it is the control, and merging it would make E1
+        compare the nominal run against itself and report no effect."""
+        run = RunSpec(experiment="E1",
+                      attitude_provider="Attitude Quaternions")
+        record = _record(run.run_id)          # provenance has no override
+        assert any("attitude_provider" in m
+                   for m in check_record(run, record))
 
     def test_wrong_gains_are_caught(self):
         run = RunSpec(experiment="E4", gains={"profile_authority": 0.8})

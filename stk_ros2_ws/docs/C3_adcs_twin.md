@@ -299,8 +299,19 @@ recovered instead would be the more dangerous error — so the
 `safe_rate_damping` fixture deliberately runs through saturation rather
 than stopping short of it.
 
+The twin also accumulates a running integral of |τ·ω| in its state and
+publishes it on `TwinStatus`, alongside wheel momentum and a saturation
+flag. It is the only party holding the delivered torque and the body
+rate at the same instant, so integrating anywhere else would need both
+republished at the telemetry rate — and a running total survives a
+dropped sample where a consumer-side integration would silently lose
+that step's contribution. Those three fields are what let C5's run
+record report peak momentum, saturation events and wheel energy instead
+of leaving them at their defaults; see `docs/C5_experiment_harness.md`
+section 7.
+
 `twin_step` now has a fixture section of its own (`twin_step`, fixture
-version 3) that replays whole runs closed-loop — each step's command fed
+version 4) that replays whole runs closed-loop — each step's command fed
 back as the next step's measurement, exactly as the deployed loop does
 through STK. A twin that computes a torque without integrating it shows
 up there as a boresight error that refuses to decrease, which is the

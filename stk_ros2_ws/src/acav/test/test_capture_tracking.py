@@ -14,8 +14,9 @@ from acav.capture_tracking import (
     CaptureTracker,
     TelemetrySample,
     declined_result,
+    RunAggregate,
 )
-from acav.metrics import CaptureOutcome
+from acav.metrics import RunResult, CaptureOutcome
 from acav.scheduling import DeclinedEntry, ScheduleEntry
 from acav.spec import TargetSpec
 
@@ -147,3 +148,85 @@ class TestDeclinedResult:
         assert result.outcome is CaptureOutcome.NOT_ATTEMPTED
         assert result.target_id == "T5"
         assert result.image_time_s == pytest.approx(265.0)
+
+
+class TestRunAggregate:
+    """Run-scoped quantities, which belong to the run and not to a target.
+
+    Without these the record's peak momentum, saturation count, SAFE flag
+    and wheel energy all stayed at their defaults, so E5's SAFE count
+    read zero and E3's determinism signature hashed three constants.
+    """
+
+    def _sample(self, momentum=(0.0, 0.0, 0.0), saturated=False,
+                energy=0.0, mode="SLEW", time_s=0.0):
+        return TelemetrySample(time_s=time_s, error_deg=1.0, mode=mode,
+                               wheel_momentum_Nms=momentum,
+                               wheels_saturated=saturated,
+                               wheel_energy_J=energy)
+
+    def test_peak_momentum_is_per_axis_and_kept(self):
+        aggregate = RunAggregate(momentum_capacity_Nms=0.02)
+        aggregate.observe(self._sample(momentum=(0.01, 0.002, 0.0)))
+        aggregate.observe(self._sample(momentum=(0.004, 0.02, 0.0)))
+        assert aggregate.peak_momentum_fraction == pytest.approx(
+            [0.5, 1.0, 0.0])
+
+    def test_momentum_magnitude_counts_regardless_of_sign(self):
+        """A wheel at -h_max is exactly as saturated as one at +h_max."""
+        aggregate = RunAggregate(momentum_capacity_Nms=0.02)
+        aggregate.observe(self._sample(momentum=(-0.02, 0.0, 0.0)))
+        assert aggregate.peak_momentum_fraction[0] == pytest.approx(1.0)
+
+    def test_saturation_counts_entries_not_steps(self):
+        """Counting steps would make the number a function of the
+        telemetry rate: the same run sampled twice as often would report
+        twice the faults, and two runs at different rates could not be
+        compared -- which is exactly what E5 needs of them."""
+        aggregate = RunAggregate(momentum_capacity_Nms=0.02)
+        for saturated in (False, True, True, True, False, True, True):
+            aggregate.observe(self._sample(saturated=saturated))
+        assert aggregate.wheel_saturation_events == 2
+
+    def test_safe_mode_is_sticky(self):
+        aggregate = RunAggregate(momentum_capacity_Nms=0.02)
+        aggregate.observe(self._sample(mode="SLEW"))
+        aggregate.observe(self._sample(mode="SAFE"))
+        aggregate.observe(self._sample(mode="SAFE"))
+        assert aggregate.entered_safe_mode
+
+    def test_energy_takes_the_maximum_of_a_cumulative_series(self):
+        """The twin publishes a running integral. Taking the last value
+        instead would let one late-arriving stale message under-report
+        the whole run."""
+        aggregate = RunAggregate(momentum_capacity_Nms=0.02)
+        for energy in (0.1, 0.4, 0.9, 0.4):      # last one arrives late
+            aggregate.observe(self._sample(energy=energy))
+        assert aggregate.wheel_energy_J == pytest.approx(0.9)
+
+    def test_the_safe_mode_name_is_parameterised(self):
+        aggregate = RunAggregate(momentum_capacity_Nms=0.02,
+                                 safe_mode_name="HALT")
+        aggregate.observe(self._sample(mode="SAFE"))
+        assert not aggregate.entered_safe_mode
+        aggregate.observe(self._sample(mode="HALT"))
+        assert aggregate.entered_safe_mode
+
+    def test_it_writes_through_to_a_run_result(self):
+        aggregate = RunAggregate(momentum_capacity_Nms=0.02)
+        aggregate.observe(self._sample(momentum=(0.02, 0.0, 0.0),
+                                       saturated=True, energy=1.5,
+                                       mode="SAFE"))
+        result = RunResult(run_id="r", scheduler="dynamics_aware")
+        aggregate.apply_to(result)
+
+        assert result.peak_momentum_fraction == pytest.approx((1.0, 0.0, 0.0))
+        assert result.wheel_saturation_events == 1
+        assert result.entered_safe_mode
+        assert result.wheel_energy_J == pytest.approx(1.5)
+
+    def test_an_untouched_run_reports_zeroes_not_defaults_by_accident(self):
+        result = RunResult(run_id="r", scheduler="dynamics_aware")
+        RunAggregate(momentum_capacity_Nms=0.02).apply_to(result)
+        assert result.peak_momentum_fraction == (0.0, 0.0, 0.0)
+        assert not result.entered_safe_mode

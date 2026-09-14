@@ -49,7 +49,7 @@ from stk_bridge.core import conversions as conv
 from stk_bridge.core import data_providers as dp
 from stk_bridge.core.frames import FrameRegistry
 from stk_bridge.core.validation import ValidationReport
-from stk_bridge.exceptions import QueryError
+from stk_bridge.exceptions import ConventionValidationError, QueryError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +84,19 @@ class SensingConfig:
     enable_lighting: bool = True
     enable_access: bool = False
     enable_link_budget: bool = False
+    #: Force a specific attitude read-back provider, overriding the one
+    #: validation proved correct. Empty (the default) means "use the
+    #: validated one", which is the only setting a real run should use.
+    #:
+    #: This exists to make the ACAV case study's E1 runnable: it injects
+    #: the convention bug found during the bridge's own bring-up -- an
+    #: inertial read-back provider paired against a central-body-fixed
+    #: command form -- so the study can measure what that costs. The
+    #: mismatch differs by the Earth-rotation angle and nothing errors,
+    #: which is precisely why it is worth an experiment and precisely
+    #: why it must be impossible to switch on by accident. See
+    #: docs/C1_case_study_spec.md section 9.
+    force_attitude_provider: str = ""
 
     @classmethod
     def from_config(cls, config: Optional[Dict] = None) -> "SensingConfig":
@@ -104,7 +117,34 @@ class SensingConfig:
             enable_lighting=bool(section.get("enable_lighting", True)),
             enable_access=bool(section.get("enable_access", False)),
             enable_link_budget=bool(section.get("enable_link_budget", False)),
+            force_attitude_provider=str(
+                section.get("force_attitude_provider", "") or ""),
         )
+
+
+#: Attitude read-back providers, in the order they are preferred. ECF
+#: first: it is the counterpart of the ``CBFQuat`` command form the
+#: actuation path uses by default.
+_ATTITUDE_SPECS = (dp.ECF_ATTITUDE_QUATERNION, dp.ATTITUDE_QUATERNION,
+                   dp.ATTITUDE_SEGMENT)
+
+
+def _match_attitude_spec(name: str):
+    """The provider spec ``name`` refers to, or None.
+
+    Matches the canonical name or any of a spec's known alternatives,
+    case-insensitively, because STK's provider naming drifts by version
+    exactly like everything else in this project.
+    """
+    wanted = (name or "").strip().lower()
+    if not wanted:
+        return None
+    for spec in _ATTITUDE_SPECS:
+        candidates = {spec.provider_name.lower()}
+        candidates.update(a.lower() for a in spec.provider_alternatives)
+        if wanted in candidates:
+            return spec
+    return None
 
 
 class SensingPipeline:
@@ -138,16 +178,40 @@ class SensingPipeline:
         the ``CBFQuat`` command form the actuation path uses by default.
         Choosing arbitrarily would risk the ECI/ECF mismatch that reads
         back a plausible-but-wrong rotation.
+
+        ``force_attitude_provider`` overrides all of this, for E1 only --
+        see the field's own documentation.
         """
+        forced = (self._config.force_attitude_provider or "").strip()
+        if forced:
+            spec = _match_attitude_spec(forced)
+            if spec is None:
+                # Loudly, rather than falling back to the validated
+                # provider: a typo here would produce a run that looks
+                # like an E1 treatment, behaves like the nominal control,
+                # and reports that mis-pairing the provider costs
+                # nothing. A wrong finding is worse than a failed start.
+                raise ConventionValidationError(
+                    f"force_attitude_provider={forced!r} does not name a "
+                    f"known attitude read-back provider. Expected one of: "
+                    f"{[s.provider_name for s in _ATTITUDE_SPECS]}.")
+            LOGGER.warning(
+                "ATTITUDE READ-BACK PROVIDER FORCED to %r, overriding "
+                "validation. Attitude will be read back through a "
+                "provider that may not pair with the command form in "
+                "use, and the error is the Earth-rotation angle with "
+                "nothing raising. This is an E1 fault-injection setting: "
+                "if you did not set it deliberately, clear "
+                "sensing.force_attitude_provider.",
+                spec.provider_name)
+            return spec
+
         name = (self._report.attitude_provider or "").strip().lower()
-        for spec in (dp.ECF_ATTITUDE_QUATERNION, dp.ATTITUDE_QUATERNION,
-                     dp.ATTITUDE_SEGMENT):
-            candidates = {spec.provider_name.lower()}
-            candidates.update(a.lower() for a in spec.provider_alternatives)
-            if name in candidates:
-                LOGGER.info("attitude provider (validated): %s",
-                            self._report.attitude_provider)
-                return spec
+        spec = _match_attitude_spec(name)
+        if spec is not None:
+            LOGGER.info("attitude provider (validated): %s",
+                        self._report.attitude_provider)
+            return spec
         LOGGER.warning(
             "no validated attitude provider on the report; defaulting to "
             "%r. Run core/validation.py to confirm the command/read-back "

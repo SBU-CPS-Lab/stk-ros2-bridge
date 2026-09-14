@@ -64,7 +64,10 @@ from acav.twin_reference import (
 #:    could see. SAFE-mode torque also changed here (zero -> rate
 #:    damping) to match the MATLAB, so closed-loop runs that enter SAFE
 #:    have new expected values.
-FIXTURE_VERSION = 3
+#: 4: twin_step now accumulates |tau . omega| into the state, so the
+#:    twin can publish wheel energy on TwinStatus and the run record can
+#:    report it. The twin_step cases carry the running total.
+FIXTURE_VERSION = 4
 
 
 def _q(values) -> List[float]:
@@ -361,6 +364,8 @@ def _twin_step_cases(config: TwinConfig) -> List[Dict]:
                     "mode": result.state.mode_state.mode.value,
                     "torque_Nm": list(result.torque_Nm),
                     "boresight_error_rad": result.boresight_error_rad,
+                    "wheels_saturated": result.wheels_saturated,
+                    "wheel_energy_J": result.state.wheel_energy_J,
                 })
                 wanted.pop(0)
 

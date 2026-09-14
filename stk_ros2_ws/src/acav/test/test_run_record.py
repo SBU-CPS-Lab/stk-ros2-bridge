@@ -143,6 +143,33 @@ class TestReportability:
         assert offenders == ["b", "c"]
 
 
+class TestProvenanceFields:
+    def test_the_forced_attitude_provider_round_trips(self, tmp_path):
+        record = RunRecord(
+            result=_result(),
+            provenance=Provenance(backend_type="com",
+                                  attitude_provider="Attitude Quaternions"),
+            experiment="E1")
+        path = str(tmp_path / "run.json")
+        write_record(path, record)
+        assert read_record(path).provenance.attitude_provider == \
+            "Attitude Quaternions"
+
+    def test_a_record_written_before_the_field_existed_still_reads(
+            self, tmp_path):
+        """Absence has exactly one correct reading -- the validated
+        pairing every pre-E1 run used -- so the field was added without
+        a schema bump. This is the test that makes that claim safe."""
+        path = tmp_path / "run.json"
+        write_record(str(path), _record())
+
+        payload = json.loads(path.read_text())
+        del payload["provenance"]["attitude_provider"]
+        path.write_text(json.dumps(payload))
+
+        assert read_record(str(path)).provenance.attitude_provider == ""
+
+
 class TestTamperDetection:
     def test_an_edited_result_is_rejected(self, tmp_path):
         """The signature is recomputed on read. A record whose stored

@@ -69,6 +69,12 @@ class RunSpec:
     seed: Optional[int] = None
     fault: Optional[WheelFault] = None
     gains: Dict[str, float] = field(default_factory=dict)
+    #: E1's independent variable: force the bridge to read attitude back
+    #: through this provider instead of the validated one. Empty means
+    #: the validated pairing, which is what every other experiment uses.
+    #: The name is passed to the bridge as
+    #: ``sensing.force_attitude_provider``.
+    attitude_provider: str = ""
     #: Set on a run that re-executes an earlier one to test replay (E5).
     replay_of: str = ""
     notes: str = ""
@@ -93,6 +99,8 @@ class RunSpec:
         if self.fault is not None:
             parts.append(f"fault{self.fault.axis_name}"
                          f"{_tag(self.fault.at_s)}")
+        if self.attitude_provider:
+            parts.append("readback" + _slug(self.attitude_provider))
         if self.replay_of:
             parts.append("replay")
         return "-".join(parts)
@@ -106,6 +114,11 @@ def _abbreviate(gain_key: str) -> str:
     return {"natural_frequency_rad_s": "wn",
             "damping_ratio": "zeta",
             "profile_authority": "auth"}[gain_key]
+
+
+def _slug(text: str) -> str:
+    """A filename-safe token from a provider name."""
+    return "".join(c for c in text.title() if c.isalnum())
 
 
 def _tag(value: float) -> str:
@@ -157,6 +170,7 @@ class Campaign:
                     "seed": run.seed,
                     "gains": dict(run.gains),
                     "fault": None if run.fault is None else run.fault.to_dict(),
+                    "attitude_provider": run.attitude_provider,
                     "replay_of": run.replay_of,
                     "notes": run.notes,
                 }
@@ -168,6 +182,46 @@ class Campaign:
 # ---------------------------------------------------------------------------
 # The matrices
 # ---------------------------------------------------------------------------
+
+#: The inertial read-back provider. Paired against the central-body-
+#: fixed command form the actuation path uses, it is wrong by the
+#: Earth-rotation angle -- the bug found during the bridge's own
+#: bring-up, and the treatment E1 applies deliberately.
+MISPAIRED_ATTITUDE_PROVIDER = "Attitude Quaternions"
+
+
+def build_e1_convention(scenario_path: str = "", backend: str = "com",
+                        scheduler: str = "dynamics_aware") -> Campaign:
+    """E1: does convention validation matter?
+
+    Two runs, identical but for the attitude read-back provider. The
+    treatment pairs an inertial provider against a central-body-fixed
+    command, which is wrong by the Earth-rotation angle -- and which
+    raises nothing, reports no error and produces a plausible attitude.
+    That silence is the finding: the expected result is that capture
+    collapses while every component reports itself healthy.
+
+    Requires the bridge to honour ``sensing.force_attitude_provider``.
+    """
+    runs = (
+        RunSpec(experiment="E1", scheduler=scheduler,
+                execution_mode=LOCKSTEP,
+                notes="control: the validated command/read-back pairing"),
+        RunSpec(experiment="E1", scheduler=scheduler,
+                execution_mode=LOCKSTEP,
+                attitude_provider=MISPAIRED_ATTITUDE_PROVIDER,
+                notes="treatment: inertial read-back against a CBFQuat "
+                      "command -- wrong by the Earth-rotation angle, and "
+                      "nothing errors"),
+    )
+    return Campaign(
+        campaign_id="E1_convention_validation",
+        experiment="E1",
+        description=("Nominal run against one with the attitude read-back "
+                     "deliberately mis-paired. Expect capture to collapse "
+                     "with no component reporting a fault."),
+        runs=runs, scenario_path=scenario_path, backend=backend)
+
 
 def build_e2_scheduler_comparison(scenario_path: str = "",
                                   backend: str = "com",

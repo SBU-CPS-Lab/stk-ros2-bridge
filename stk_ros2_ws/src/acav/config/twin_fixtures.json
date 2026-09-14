@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "generated_from": "acav/twin_reference.py",
   "note": "Expected values produced by the Python reference. The MATLAB twin must reproduce them; see stk_matlab/test_acav_twin.m.",
   "config": {
@@ -934,7 +934,9 @@
             -0.0,
             -0.0
           ],
-          "boresight_error_rad": 0.41039546507736435
+          "boresight_error_rad": 0.41039546507736435,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.0
         },
         {
           "time_s": 4.0,
@@ -960,7 +962,9 @@
             0.00017492044536168908,
             -1.5545089416182515e-05
           ],
-          "boresight_error_rad": 0.3267178661514779
+          "boresight_error_rad": 0.3267178661514779,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.0001520104681225295
         },
         {
           "time_s": 8.0,
@@ -986,7 +990,9 @@
             -0.00019967266451039522,
             1.7783386388109424e-05
           ],
-          "boresight_error_rad": 0.06667902509523277
+          "boresight_error_rad": 0.06667902509523277,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.0005258502183336985
         },
         {
           "time_s": 12.0,
@@ -1012,7 +1018,9 @@
             -4.8078931261553965e-05,
             4.239915742275871e-06
           ],
-          "boresight_error_rad": 0.020246574625309988
+          "boresight_error_rad": 0.020246574625309988,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.000694881705271329
         },
         {
           "time_s": 16.0,
@@ -1038,7 +1046,9 @@
             1.113596694567809e-05,
             -9.867577284015809e-07
           ],
-          "boresight_error_rad": 0.003475571954191647
+          "boresight_error_rad": 0.003475571954191647,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.0006974168308777249
         },
         {
           "time_s": 20.0,
@@ -1064,7 +1074,9 @@
             1.4292135968661136e-06,
             -1.2667607320949808e-07
           ],
-          "boresight_error_rad": 0.00035708552406548457
+          "boresight_error_rad": 0.00035708552406548457,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.0006976149857509615
         }
       ]
     },
@@ -1123,7 +1135,9 @@
             5.828670879282072e-19,
             2.8449465006019638e-19
           ],
-          "boresight_error_rad": 0.026179938779914955
+          "boresight_error_rad": 0.026179938779914955,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.0
         },
         {
           "time_s": 1.0,
@@ -1149,7 +1163,9 @@
             -6.6700336750159345e-18,
             2.322942693646037e-19
           ],
-          "boresight_error_rad": 0.021830193585628866
+          "boresight_error_rad": 0.021830193585628866,
+          "wheels_saturated": false,
+          "wheel_energy_J": 2.5279122250890466e-06
         },
         {
           "time_s": 2.0,
@@ -1175,7 +1191,9 @@
             -4.416667360597547e-18,
             3.1748926308661284e-19
           ],
-          "boresight_error_rad": 0.015015188642155371
+          "boresight_error_rad": 0.015015188642155371,
+          "wheels_saturated": false,
+          "wheel_energy_J": 3.23625975709156e-06
         },
         {
           "time_s": 3.0,
@@ -1201,7 +1219,9 @@
             -1.225511777457934e-17,
             1.5404086522006478e-19
           ],
-          "boresight_error_rad": 0.009470712451283605
+          "boresight_error_rad": 0.009470712451283605,
+          "wheels_saturated": false,
+          "wheel_energy_J": 4.44491999437654e-06
         },
         {
           "time_s": 4.0,
@@ -1227,7 +1247,9 @@
             8.146170312536599e-18,
             -5.426022017815417e-19
           ],
-          "boresight_error_rad": 0.005694282081911378
+          "boresight_error_rad": 0.005694282081911378,
+          "wheels_saturated": false,
+          "wheel_energy_J": 5.177064710305392e-06
         },
         {
           "time_s": 5.0,
@@ -1253,7 +1275,9 @@
             -1.1884719525059305e-18,
             -3.252235582093308e-19
           ],
-          "boresight_error_rad": 0.0033244390654736354
+          "boresight_error_rad": 0.0033244390654736354,
+          "wheels_saturated": false,
+          "wheel_energy_J": 5.501186521337073e-06
         }
       ]
     },
@@ -1312,7 +1336,9 @@
             -0.0,
             -0.0
           ],
-          "boresight_error_rad": 0.0
+          "boresight_error_rad": 0.0,
+          "wheels_saturated": true,
+          "wheel_energy_J": 5.58e-05
         },
         {
           "time_s": 3.0,
@@ -1338,7 +1364,9 @@
             -0.0,
             -0.0
           ],
-          "boresight_error_rad": 0.7638292681203948
+          "boresight_error_rad": 0.7638292681203948,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.0015785804878048768
         },
         {
           "time_s": 6.0,
@@ -1364,7 +1392,9 @@
             -0.0,
             -0.0
           ],
-          "boresight_error_rad": 1.381317072938016
+          "boresight_error_rad": 1.381317072938016,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.002808678048780486
         },
         {
           "time_s": 9.0,
@@ -1390,7 +1420,9 @@
             -0.0,
             -0.0
           ],
-          "boresight_error_rad": 1.8524634143852987
+          "boresight_error_rad": 1.8524634143852987,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.0037460926829268283
         },
         {
           "time_s": 12.0,
@@ -1416,7 +1448,9 @@
             -0.0,
             -0.0
           ],
-          "boresight_error_rad": 2.2097886176335244
+          "boresight_error_rad": 2.2097886176335244,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.003970243902439025
         },
         {
           "time_s": 15.0,
@@ -1442,7 +1476,9 @@
             -0.0,
             -0.0
           ],
-          "boresight_error_rad": 2.5589837395814055
+          "boresight_error_rad": 2.5589837395814055,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.003970243902439025
         }
       ]
     }

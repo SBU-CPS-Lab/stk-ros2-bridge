@@ -40,7 +40,7 @@ function varargout = test_acav_twin(fixturePath)
     end
 
     fx = jsondecode(fileread(fixturePath));
-    EXPECTED_VERSION = 3;
+    EXPECTED_VERSION = 4;
     if fx.version ~= EXPECTED_VERSION
         error('test_acav_twin:StaleFixtures', ...
             ['fixture version %d, this test expects %d. Regenerate the ' ...
@@ -507,6 +507,20 @@ function [ok, detail] = compareTwinStep(cp, q, w, state, out, tol)
     [tauOk, tauDetail] = compareVec(out.torque, cp.torque_Nm, tol);
     if ~tauOk
         detail = sprintf('t=%.1f delivered torque: %s', cp.time_s, tauDetail);
+        return
+    end
+
+    if out.wheelsSaturated ~= logical(cp.wheels_saturated)
+        detail = sprintf('t=%.1f wheelsSaturated %d, expected %d', ...
+            cp.time_s, out.wheelsSaturated, cp.wheels_saturated);
+        return
+    end
+
+    if abs(out.state.wheelEnergyJ - cp.wheel_energy_J) > tol
+        detail = sprintf(['t=%.1f wheel energy %.9e J, expected %.9e -- ' ...
+            'a running integral, so a mismatch here means the two ' ...
+            'implementations disagree about some EARLIER step'], ...
+            cp.time_s, out.state.wheelEnergyJ, cp.wheel_energy_J);
         return
     end
 

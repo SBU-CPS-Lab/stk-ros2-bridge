@@ -7,6 +7,7 @@ from stk_bridge.backends.mock_backend import MockBackend
 from stk_bridge.core.frames import FrameRegistry
 from stk_bridge.core.sensing import SensingConfig, SensingPipeline
 from stk_bridge.core.validation import ValidationReport, ConventionValidator
+from stk_bridge.exceptions import ConventionValidationError
 
 SAT = "*/Satellite/SSS-1"
 
@@ -36,6 +37,49 @@ class TestProviderSelection:
                                    SensingConfig(satellites=[SAT]))
         assert pipeline._attitude_spec.provider_name == \
             "ECF Attitude Quaternions"
+
+
+class TestForcedAttitudeProvider:
+    """The E1 knob: deliberately mis-pair the read-back provider.
+
+    It exists so the ACAV case study can measure what the convention bug
+    found during this bridge's own bring-up actually costs. Everything
+    here guards the one property that matters for that: it must be
+    impossible to enable by accident, and impossible to enable *almost*.
+    """
+
+    def test_off_by_default(self, backend, report):
+        pipeline = SensingPipeline(backend, FrameRegistry(),
+                                   SensingConfig(satellites=[SAT]), report)
+        assert pipeline._attitude_spec.provider_name == report.attitude_provider
+
+    def test_the_override_wins_over_validation(self, backend, report):
+        pipeline = SensingPipeline(
+            backend, FrameRegistry(),
+            SensingConfig(satellites=[SAT],
+                          force_attitude_provider="Attitude Quaternions"),
+            report)
+        assert pipeline._attitude_spec.provider_name == "Attitude Quaternions"
+        assert pipeline._attitude_spec.provider_name != report.attitude_provider
+
+    def test_an_unknown_provider_name_raises(self, backend, report):
+        """Rather than falling back to the validated one. A typo that
+        silently produced the nominal pairing would yield an E1 run that
+        looks like a treatment, behaves like the control, and reports
+        that mis-pairing the provider costs nothing -- a wrong finding,
+        which is worse than a failed start."""
+        with pytest.raises(ConventionValidationError, match="does not name"):
+            SensingPipeline(
+                backend, FrameRegistry(),
+                SensingConfig(satellites=[SAT],
+                              force_attitude_provider="Inertial Quats"),
+                report)
+
+    def test_it_is_reachable_from_configuration(self):
+        config = SensingConfig.from_config(
+            {"sensing": {"force_attitude_provider": "Attitude Quaternions"}})
+        assert config.force_attitude_provider == "Attitude Quaternions"
+        assert SensingConfig.from_config({}).force_attitude_provider == ""
 
 
 class TestOrbitSensing:

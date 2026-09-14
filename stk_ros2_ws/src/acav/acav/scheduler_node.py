@@ -64,8 +64,8 @@ from stk_bridge.core import conversions as conv
 from stk_bridge.core import data_providers as dp
 from stk_bridge.exceptions import StkBridgeError
 
-from acav.capture_tracking import CaptureTracker, TelemetrySample, \
-    declined_result
+from acav.capture_tracking import CaptureTracker, RunAggregate, \
+    TelemetrySample, declined_result
 from acav.metrics import RunResult, TargetResult
 from acav.scheduling import ScheduleEntry, SchedulePlan, plan
 from acav.spec import AcavSpec
@@ -174,6 +174,9 @@ class SchedulerOptions:
     #: for and gains cannot.
     gains_json: str = ""
     fault_json: str = ""
+    #: E1's treatment, recorded so a mis-paired run is identifiable in
+    #: the results rather than only in the launch command's history.
+    attitude_provider: str = ""
 
 
 class SchedulerNode:
@@ -234,6 +237,20 @@ class SchedulerNode:
         self._execution_mode = "unknown"
         self._started_utc = _utc_now()
 
+        self._aggregate = RunAggregate(
+            momentum_capacity_Nms=spec.actuators.momentum_capacity_Nms)
+
+        # Wall-clock interval between scenario ticks, which in lockstep
+        # IS the closed-loop step time: the barrier does not release
+        # until every participant has acked, so tick-to-tick here spans
+        # a whole sense/actuate/barrier cycle. Measured from this node's
+        # vantage, so it includes its own scheduling jitter -- E6 should
+        # report it as an achieved step rate, not as a bridge-internal
+        # latency breakdown, which is a different measurement the bridge
+        # would have to publish itself.
+        self._last_tick_wall_s: Optional[float] = None
+        self._tick_intervals_ms: List[float] = []
+
         retention_s = spec.pointing.settle_hold_s + RETENTION_MARGIN_S
         self._tracker = CaptureTracker(
             capture_error_deg=spec.pointing.capture_error_deg,
@@ -291,7 +308,14 @@ class SchedulerNode:
         self._stk_version = message.stk_version_string or ""
 
     def _on_scenario_time(self, message) -> None:
+        import time
+
         self._execution_mode = _execution_mode_name(message.execution_mode)
+        now_wall = time.perf_counter()
+        if self._last_tick_wall_s is not None:
+            self._tick_intervals_ms.append(
+                (now_wall - self._last_tick_wall_s) * 1000.0)
+        self._last_tick_wall_s = now_wall
         stamp = conv.ros_time_to_stk(message.sim_time)
         epoch = conv.ros_time_to_stk(message.scenario_epoch)
 
@@ -359,10 +383,21 @@ class SchedulerNode:
             return
         time_s = conv.ros_time_to_stk(message.header.stamp) - self._epoch
         try:
-            self._tracker.observe(TelemetrySample(
+            sample = TelemetrySample(
                 time_s=time_s,
                 error_deg=math.degrees(message.boresight_error_rad),
-                mode=str(message.mode)))
+                mode=str(message.mode),
+                wheel_momentum_Nms=(message.wheel_momentum_nms.x,
+                                    message.wheel_momentum_nms.y,
+                                    message.wheel_momentum_nms.z),
+                wheels_saturated=bool(message.wheels_saturated),
+                wheel_energy_J=float(message.wheel_energy_j))
+            self._tracker.observe(sample)
+            # Accumulated even for samples the tracker would discard as
+            # outside every hold window: peak momentum and saturation are
+            # properties of the run, and a wheel that saturated between
+            # two targets saturated.
+            self._aggregate.observe(sample)
         except ValueError as exc:
             # Out-of-order telemetry is a harness/transport problem, not
             # something to crash the node over mid-run; log loudly and
@@ -559,12 +594,17 @@ class SchedulerNode:
                        sorted(self._spec.targets, key=lambda t: t.t_image_s)]
         targets = [self._results[target_id] for target_id in ordered_ids
                   if target_id in self._results]
-        return RunResult(
+        result = RunResult(
             run_id=self._options.run_id,
             scheduler=self._plan.scheduler_type.value,
             targets=targets,
             seed=self._options.seed,
         )
+        self._aggregate.apply_to(result)
+        if self._tick_intervals_ms:
+            result.mean_step_latency_ms = (
+                sum(self._tick_intervals_ms) / len(self._tick_intervals_ms))
+        return result
 
     def _write_output(self, result: RunResult) -> None:
         """Write the run as a C5 record: the result plus its provenance.
@@ -600,6 +640,7 @@ class SchedulerNode:
                 execution_mode=self._execution_mode,
                 scenario_sha256=digest,
                 gains=_parse_json_object(self._options.gains_json, "gains"),
+                attitude_provider=self._options.attitude_provider,
                 fault=_parse_json_value(self._options.fault_json, "fault"),
                 started_utc=self._started_utc,
                 finished_utc=_utc_now()))
@@ -684,6 +725,7 @@ def main(args=None) -> None:
     node.declare_parameter("experiment", "")
     node.declare_parameter("gains_json", "")
     node.declare_parameter("fault_json", "")
+    node.declare_parameter("attitude_provider", "")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -707,6 +749,8 @@ def main(args=None) -> None:
         scenario_path=str(node.get_parameter("scenario_config").value),
         gains_json=str(node.get_parameter("gains_json").value),
         fault_json=str(node.get_parameter("fault_json").value),
+        attitude_provider=str(
+            node.get_parameter("attitude_provider").value),
     )
 
     scheduler = SchedulerNode(node, spec, options)

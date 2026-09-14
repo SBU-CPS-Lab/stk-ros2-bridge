@@ -97,6 +97,12 @@ class Provenance:
     gains: Dict[str, float] = field(default_factory=dict)
     #: The injected fault for this run, if any (see acav.fault_injection).
     fault: Optional[Dict[str, Any]] = None
+    #: E1's treatment: the attitude read-back provider forced for this
+    #: run, empty for the validated pairing every other run uses. Added
+    #: after RECORD_VERSION 1 without a bump, because its absence in an
+    #: older record has exactly one correct reading -- the validated
+    #: pairing -- so nothing can be misinterpreted.
+    attitude_provider: str = ""
     started_utc: str = ""
     finished_utc: str = ""
     #: Free-text, e.g. which machine, which STK licence features.
@@ -110,6 +116,7 @@ class Provenance:
             "scenario_sha256": self.scenario_sha256,
             "gains": dict(self.gains),
             "fault": self.fault,
+            "attitude_provider": self.attitude_provider,
             "started_utc": self.started_utc,
             "finished_utc": self.finished_utc,
             "notes": self.notes,
@@ -125,6 +132,7 @@ class Provenance:
             gains={str(k): float(v)
                    for k, v in (raw.get("gains") or {}).items()},
             fault=raw.get("fault"),
+            attitude_provider=str(raw.get("attitude_provider", "") or ""),
             started_utc=str(raw.get("started_utc", "")),
             finished_utc=str(raw.get("finished_utc", "")),
             notes=str(raw.get("notes", "")),

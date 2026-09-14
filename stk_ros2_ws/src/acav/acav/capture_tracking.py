@@ -32,7 +32,7 @@ data and reusable by both the scheduler node and any offline harness.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional
 
 from acav.metrics import (
@@ -58,6 +58,76 @@ class TelemetrySample:
     time_s: float
     error_deg: float
     mode: str = ""
+    #: Reaction wheel state from the same TwinStatus message, carried
+    #: here so :class:`RunAggregate` can accumulate the run-level
+    #: quantities without a second subscription to the same topic.
+    #: Defaulted because the per-target capture criterion does not use
+    #: them: a caller that only cares about capture need not supply them.
+    wheel_momentum_Nms: tuple = (0.0, 0.0, 0.0)
+    wheels_saturated: bool = False
+    wheel_energy_J: float = 0.0
+
+
+
+@dataclass
+class RunAggregate:
+    """Run-scoped quantities accumulated from the twin's telemetry.
+
+    Separate from :class:`CaptureTracker` because these are properties
+    of the *run*, not of any target's hold window -- peak momentum does
+    not belong to whichever target happened to be active when it
+    occurred, and attributing it to one would be an invented finding.
+
+    Everything here is a running extremum or count rather than a value
+    carried from the last sample, so a dropped or late telemetry message
+    degrades the result rather than corrupting it.
+    """
+
+    momentum_capacity_Nms: float
+    #: Parameterised rather than hardcoded, matching CaptureTracker --
+    #: the Stateflow mode name is the chart's to define, and two places
+    #: spelling it differently would make SAFE detectable in one of them.
+    safe_mode_name: str = "SAFE"
+    peak_momentum_fraction: List[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0])
+    wheel_saturation_events: int = 0
+    entered_safe_mode: bool = False
+    wheel_energy_J: float = 0.0
+    _saturated_previously: bool = False
+
+    def observe(self, sample: TelemetrySample) -> None:
+        for axis in range(3):
+            fraction = abs(sample.wheel_momentum_Nms[axis]) \
+                / self.momentum_capacity_Nms
+            self.peak_momentum_fraction[axis] = max(
+                self.peak_momentum_fraction[axis], fraction)
+
+        # A saturation EVENT is a wheel entering saturation, not a step
+        # spent in it. Counting steps would make the number a function of
+        # the telemetry rate -- a run sampled twice as often would report
+        # twice the faults -- and two runs at different rates would not
+        # be comparable, which is exactly what E5 needs them to be.
+        if sample.wheels_saturated and not self._saturated_previously:
+            self.wheel_saturation_events += 1
+        self._saturated_previously = sample.wheels_saturated
+
+        if sample.mode == self.safe_mode_name:
+            self.entered_safe_mode = True
+
+        # The twin publishes a cumulative integral, so the maximum seen
+        # is the total. Taking the last sample's value instead would let
+        # one late-arriving stale message under-report the whole run.
+        self.wheel_energy_J = max(self.wheel_energy_J, sample.wheel_energy_J)
+
+    def apply_to(self, result) -> None:
+        """Write the accumulated quantities onto a :class:`RunResult`."""
+        result.peak_momentum_fraction = (
+            self.peak_momentum_fraction[0],
+            self.peak_momentum_fraction[1],
+            self.peak_momentum_fraction[2])
+        result.wheel_saturation_events = self.wheel_saturation_events
+        result.entered_safe_mode = self.entered_safe_mode
+        result.wheel_energy_J = self.wheel_energy_J
 
 
 def declined_result(entry: DeclinedEntry) -> TargetResult:

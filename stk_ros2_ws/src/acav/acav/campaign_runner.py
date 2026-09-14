@@ -230,6 +230,11 @@ def check_record(run: RunSpec, record: RunRecord) -> List[str]:
         problems.append(
             f"scheduler {result.scheduler!r}, expected {run.scheduler!r}")
 
+    if provenance.attitude_provider != run.attitude_provider:
+        problems.append(
+            f"attitude_provider {provenance.attitude_provider!r}, expected "
+            f"{run.attitude_provider!r}")
+
     expected_fault = None if run.fault is None else run.fault.to_dict()
     if provenance.fault != expected_fault:
         problems.append(
@@ -297,6 +302,7 @@ class CommandLauncher:
             "output": output_path,
             "scenario": campaign.scenario_path,
             "backend": campaign.backend,
+            "attitude_provider": run.attitude_provider,
             "gains_json": json.dumps(run.gains, sort_keys=True),
             "fault_json": json.dumps(
                 None if run.fault is None else run.fault.to_dict(),

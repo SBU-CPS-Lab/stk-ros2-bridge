@@ -642,3 +642,22 @@ class TestTwinStepClosesTheLoop:
             after = history[index].state.wheel_momentum_Nms
             assert max(abs(h) for h in before) > 0.0
             assert after != (0.0, 0.0, 0.0)
+
+    def test_wheel_energy_accumulates_monotonically(self, config):
+        """A running integral of |tau . omega|, carried in the state so
+        the twin can publish it -- it is the only party holding both the
+        delivered torque and the body rate at the same instant."""
+        history = self._fly(config, 12.0, target=self._target_at(2.0))
+        energies = [r.state.wheel_energy_J for r in history]
+
+        assert energies[0] == pytest.approx(0.0)   # at rest, no power
+        assert all(b >= a for a, b in zip(energies, energies[1:]))
+        assert energies[-1] > 0.0
+
+    def test_a_tumble_damped_in_safe_costs_more_than_a_slew(self, config):
+        """Sanity on the magnitude rather than the sign: damping a
+        17 deg/s tumble runs the wheels at saturation against a large
+        rate, which is far more work than acquiring a target from rest."""
+        slew = self._fly(config, 15.0, target=self._target_at(2.0))
+        safe = self._fly(config, 15.0, initial_rate=(0.279, 0.0, 0.0))
+        assert safe[-1].state.wheel_energy_J > slew[-1].state.wheel_energy_J

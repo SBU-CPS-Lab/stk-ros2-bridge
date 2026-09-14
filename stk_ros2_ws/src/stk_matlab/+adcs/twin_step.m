@@ -23,6 +23,7 @@ function out = twin_step(in, cfg, state)
 % state  .mode         'NADIR' | 'SLEW' | 'SETTLE' | 'IMAGE' | 'SAFE'
 %        .enteredAt    seconds
 %        .wheelMomentum [3]
+%        .wheelEnergyJ running integral of |tau . omega|, joules
 %        .profile      [] or a struct from adcs.slew_profile
 %        .slewStarted  seconds
 %
@@ -36,7 +37,8 @@ function out = twin_step(in, cfg, state)
 %                       reinstate the perfect-pointing assumption the
 %                       paper exists to challenge.
 %        .omegaNext    body rates after this step, rad/s
-%        .state        updated state, including wheel momentum
+%        .state        updated state: wheel momentum and the running
+%                       wheel-energy integral as well as the mode
 %        .boresightErrorRad
 %        .modeChanged
 %        .wheelsSaturated
@@ -141,6 +143,14 @@ function out = twin_step(in, cfg, state)
 
     [quaternionCmd, omegaNext] = adcs.rigid_body_step(in.quaternion, ...
         in.omega, torque, state.wheelMomentum, cfg.inertia, cfg.stepS);
+
+    % Power against the rate the torque actually acted on -- the rate at
+    % the START of the step, not the integrated one, matching the
+    % left-hand rule the rest of the stepping uses. Using the rate after
+    % integration would credit this step's torque with the motion it
+    % produced and overstate the cost of every acceleration.
+    state.wheelEnergyJ = state.wheelEnergyJ ...
+        + abs(dot(torque, in.omega(:).')) * cfg.stepS;
 
     out = struct( ...
         'torque', torque, ...

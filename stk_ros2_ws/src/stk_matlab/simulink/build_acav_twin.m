@@ -218,9 +218,12 @@ function modelName = build_acav_twin(options)
     % STK is sent an attitude and the scheduler is sent a TwinStatus.
     % Terminate it rather than leave an unconnected output, which the
     % diagram-update check below would otherwise flag as an error
-    % indistinguishable from a real wiring mistake. If C5 wants torque
-    % or wheel momentum in the campaign record, that is a TwinStatus
-    % field and a deliberate message change, not a loose wire.
+    % indistinguishable from a real wiring mistake. Wheel momentum,
+    % saturation and the energy integral DO reach the campaign record --
+    % they are TwinStatus fields, published below. The torque itself is
+    % not, because nothing downstream uses it: the energy integral is
+    % the quantity the study reports, and the twin computes that itself
+    % since it is the only party holding torque and rate together.
     add_block('simulink/Sinks/Terminator', [modelName '/TorqueSink'], ...
         'Position', [720 40 750 60]);
     add_line(modelName, 'GuidanceControl/1', 'TorqueSink/1');
@@ -258,13 +261,30 @@ function modelName = build_acav_twin(options)
     add_line(modelName, 'AttitudeCmdStamp/1', 'AttitudeCmdPub/1');
 
     % -- status out: stk_msgs/TwinStatus ---------------------------------
+    % Carries the wheel state as well as mode and pointing error, because
+    % the run-level quantities acav/metrics.py reports (peak momentum,
+    % saturation events, wheel energy) have no other route out of the
+    % twin -- and the scheduler must not re-derive them, for the same
+    % reason it does not re-derive the pointing error.
+    add_block('simulink/Signal Routing/Demux', [modelName '/DemuxMomentum'], ...
+        'Position', [720 250 730 310], 'Outputs', '3');
+    add_line(modelName, 'GuidanceControl/5', 'DemuxMomentum/1');
+
     addBlankMessage(modelName, 'TwinStatusBlank', [790 260 940 280], ...
         'stk_msgs/TwinStatus');
     addBusAssignment(modelName, 'TwinStatusAssign', [790 300 940 380], ...
-        {'mode', 'boresight_error_rad'});
+        {'mode', 'boresight_error_rad', 'wheel_momentum_nms.x', ...
+         'wheel_momentum_nms.y', 'wheel_momentum_nms.z', ...
+         'wheels_saturated', 'wheel_energy_j'});
     add_line(modelName, 'TwinStatusBlank/1', 'TwinStatusAssign/1');
     add_line(modelName, 'GuidanceControl/3', 'TwinStatusAssign/2');
     add_line(modelName, 'GuidanceControl/4', 'TwinStatusAssign/3');
+    for k = 1:3
+        add_line(modelName, sprintf('DemuxMomentum/%d', k), ...
+            sprintf('TwinStatusAssign/%d', k + 3));
+    end
+    add_line(modelName, 'GuidanceControl/6', 'TwinStatusAssign/7');
+    add_line(modelName, 'GuidanceControl/7', 'TwinStatusAssign/8');
 
     addHeaderAssignment(modelName, 'TwinStatusStamp', [980 300 1090 340]);
     add_line(modelName, 'TwinStatusAssign/1', 'TwinStatusStamp/1');
@@ -462,7 +482,8 @@ function source = guidanceControlSource()
     % where test_acav_twin.m can reach it; a block full of algebra is a
     % block nothing can test.
     source = strjoin({
-        'function [torque, qCmd, mode, err] = fcn(qMeas, omega, pos, vel, targetEci, haveTarget, t)'
+        'function [torque, qCmd, mode, err, momentum, saturated, energy] = ...'
+        '        fcn(qMeas, omega, pos, vel, targetEci, haveTarget, t)'
         '%#codegen'
         '    persistent cfg state'
         '    if isempty(cfg)'
@@ -479,6 +500,9 @@ function source = guidanceControlSource()
         '    qCmd = out.quaternionCmd;'
         '    mode = out.state.mode;'
         '    err = out.boresightErrorRad;'
+        '    momentum = out.state.wheelMomentum;'
+        '    saturated = out.wheelsSaturated;'
+        '    energy = out.state.wheelEnergyJ;'
         'end'
         }, newline);
 end

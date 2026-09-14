@@ -42,6 +42,7 @@ from typing import List, Optional
 from acav.campaign import (
     LOCKSTEP,
     Campaign,
+    build_e1_convention,
     build_e2_scheduler_comparison,
     build_e3_determinism,
     build_e4_gain_sweep,
@@ -60,12 +61,14 @@ from acav.spec import AcavSpec
 
 LOGGER = logging.getLogger(__name__)
 
-EXPERIMENTS = ("E2", "E3", "E4", "E5")
+EXPERIMENTS = ("E1", "E2", "E3", "E4", "E5")
 
 
 def build_campaign(experiment: str, spec: AcavSpec, scenario_path: str,
                    backend: str, repeats: int, seeds: int) -> Campaign:
     """The matrix for ``experiment``, sized from the scenario."""
+    if experiment == "E1":
+        return build_e1_convention(scenario_path, backend)
     if experiment == "E2":
         return build_e2_scheduler_comparison(scenario_path, backend)
     if experiment == "E3":
@@ -122,6 +125,13 @@ def analyse(experiment: str, records: List[RunRecord],
         report["claim_holds"] = {"kinematic", "dynamics_aware"} <= set(
             report["schedulers"])
         report["claim"] = "both schedulers ran over the same target set"
+    elif experiment == "E1":
+        forced = [r for r in records if r.provenance.attitude_provider]
+        report["mispaired_runs"] = [r.result.run_id for r in forced]
+        report["claim_holds"] = len(forced) > 0 and len(records) > len(forced)
+        report["claim"] = ("a control and a mis-paired treatment both ran; "
+                           "compare their capture rates")
+        report["schedulers"] = compare_schedulers(records, total_targets)
     elif experiment == "E5":
         report["safe_mode_runs"] = sum(
             1 for r in records if r.result.entered_safe_mode)
