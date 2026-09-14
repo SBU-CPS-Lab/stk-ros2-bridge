@@ -43,7 +43,7 @@ remains.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import List, Optional, Sequence, Tuple
 
@@ -117,6 +117,11 @@ class TwinConfig:
     #: stops asking. Holding back 20% costs ~12% on the slew itself and
     #: buys back several seconds of settling.
     profile_authority: float = 0.8
+    #: Control step, seconds. The same ``scenario.step_s`` the bridge
+    #: steps STK with, because the twin runs exactly one control cycle
+    #: per lockstep tick. Mirrors ``cfg.stepS`` in ``+adcs/config.m``;
+    #: ``twin_step`` integrates over it.
+    step_s: float = 0.1
 
     @classmethod
     def from_spec(cls, spec) -> "TwinConfig":
@@ -131,6 +136,7 @@ class TwinConfig:
             settle_hold_s=spec.pointing.settle_hold_s,
             max_body_rate_rad_s=math.radians(
                 spec.pointing.max_body_rate_deg_s),
+            step_s=spec.step_s,
         )
 
     def gains(self) -> Tuple[Vector3, Vector3]:
@@ -399,6 +405,31 @@ def tracking_torque(config: TwinConfig, q: Sequence[float],
         for k in range(3))
 
 
+def control_torque(config: TwinConfig, mode: MissionMode,
+                   q: Sequence[float], omega: Sequence[float],
+                   q_reference: Sequence[float],
+                   omega_reference: Sequence[float]) -> Vector3:
+    """The torque the controller asks for, given the mode.
+
+    SAFE is **rate damping only** -- ``-Kd * omega``, with no attitude
+    term. The purpose of SAFE is to stop the vehicle tumbling and stop
+    pointing at anything; commanding zero torque instead would leave
+    whatever rate tripped the guard exactly where it was, and E5 is the
+    campaign that exists to exercise precisely that recovery.
+
+    This function exists because the two implementations disagreed about
+    it. ``simulate_slew`` here zeroed the torque, ``+adcs/twin_step.m``
+    applied rate damping, and no fixture could see the disagreement
+    because the per-step orchestration had no counterpart in this module
+    to generate one from. One decision, one place, used by both
+    ``simulate_slew`` and ``twin_step``.
+    """
+    if mode is MissionMode.SAFE:
+        _, kd = config.gains()
+        return tuple(-kd[k] * omega[k] for k in range(3))
+    return tracking_torque(config, q, omega, q_reference, omega_reference)
+
+
 def nadir_attitude(position_inertial: Sequence[float],
                    velocity_inertial: Sequence[float],
                    boresight_body: Sequence[float] = (0.0, 0.0, 1.0)
@@ -501,6 +532,158 @@ def update_mode(state: ModeState, config: TwinConfig, now_s: float,
 
 
 # ---------------------------------------------------------------------------
+# One control cycle: telemetry in, attitude command out
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class TwinInputs:
+    """One tick of telemetry. Mirrors ``in`` in ``+adcs/twin_step.m``."""
+
+    quaternion: Quaternion
+    omega_rad_s: Vector3
+    position_m: Vector3
+    velocity_m_s: Vector3
+    time_s: float
+    target_eci_m: Vector3 = (0.0, 0.0, 0.0)
+    have_target: bool = False
+
+
+@dataclass
+class TwinState:
+    """What the twin carries between steps. Mirrors ``initial_state.m``.
+
+    Wheel momentum lives here rather than on :class:`ModeState` because
+    ``update_mode`` constructs a *fresh* ``ModeState`` on every
+    transition. A momentum field there would be silently zeroed each
+    time the mode changed -- which is not only physically impossible but
+    self-concealing, since entering SAFE would clear the very saturation
+    that tripped it and the vehicle would look recovered.
+    """
+
+    mode_state: ModeState = field(default_factory=ModeState)
+    wheel_momentum_Nms: Vector3 = (0.0, 0.0, 0.0)
+
+
+@dataclass(frozen=True)
+class TwinStepResult:
+    """Mirrors ``out`` in ``+adcs/twin_step.m``."""
+
+    torque_Nm: Vector3
+    quaternion_cmd: Quaternion
+    rate_next_rad_s: Vector3
+    state: TwinState
+    boresight_error_rad: float
+    mode_changed: bool
+    wheels_saturated: bool
+
+
+def twin_step(config: TwinConfig, inputs: TwinInputs,
+              state: TwinState) -> TwinStepResult:
+    """One guidance-and-control cycle: guidance, mode, control, dynamics.
+
+    The counterpart of ``+adcs/twin_step.m``, and the reason it exists:
+    that function was the *only* part of the twin with nothing on this
+    side to generate fixtures from, so the cross-check never exercised
+    the orchestration, and two defects lived in it undetected until the
+    Simulink signal wiring was finally built.
+
+    The one that mattered: ``quaternionCmd`` was the input attitude,
+    returned verbatim. The twin read an attitude from STK, computed a
+    torque, and published back the attitude it had just read -- nothing
+    anywhere integrated that torque. The loop had no integrator at all,
+    so the vehicle could never slew and every capture would have been
+    decided by wherever it already happened to point. The design note
+    that justified it ("in the closed loop STK is the truth, the
+    dynamics are bypassed") rested on a misreading of what STK does with
+    injected attitude: ``AddAttitude CBFQuat`` stores and interpolates
+    samples, it does not propagate attitude dynamics. STK is the truth
+    for orbit, geometry and access; the vehicle's attitude *response* is
+    the twin's to compute, and this is where it is computed.
+
+    What the command published still is: the ACHIEVED attitude, not the
+    reference. That part of the original intent was right and the whole
+    study turns on it -- publishing the reference would quietly
+    reinstate the perfect-pointing assumption the paper exists to
+    challenge. "Achieved" now means integrated one step forward under
+    the torque the wheels actually delivered, starting from the state
+    STK reported.
+    """
+    if inputs.have_target:
+        q_desired = target_attitude(inputs.position_m, inputs.velocity_m_s,
+                                    inputs.target_eci_m,
+                                    config.boresight_body)
+    else:
+        q_desired = nadir_attitude(inputs.position_m, inputs.velocity_m_s,
+                                   config.boresight_body)
+
+    error = boresight_error_rad(inputs.quaternion, q_desired,
+                                config.boresight_body)
+    rate_magnitude = math.sqrt(dot(inputs.omega_rad_s, inputs.omega_rad_s))
+    momentum_fraction = max(abs(h) for h in state.wheel_momentum_Nms) \
+        / config.momentum_capacity_Nms
+
+    mode_state = state.mode_state
+
+    # A slew is requested when the desired attitude has moved further
+    # than the settle-entry threshold: below that the tracking loop
+    # absorbs it without a profile, and re-planning every step would
+    # restart the ramp continuously and never converge.
+    slew_requested = (inputs.have_target
+                      and error > config.settle_entry_rad
+                      and mode_state.mode is not MissionMode.SLEW)
+    profile_done = (mode_state.profile is None
+                    or (inputs.time_s - mode_state.slew_started_s)
+                    >= mode_state.profile.duration_s)
+
+    previous_mode = mode_state.mode
+    mode_state = update_mode(mode_state, config, inputs.time_s, error,
+                             rate_magnitude, momentum_fraction,
+                             slew_requested, profile_done)
+    mode_changed = mode_state.mode is not previous_mode
+
+    if mode_changed and mode_state.mode is MissionMode.SLEW:
+        mode_state = replace(
+            mode_state,
+            profile=SlewProfile.between(inputs.quaternion, q_desired,
+                                        config.profile_limits()),
+            slew_started_s=inputs.time_s)
+
+    if mode_state.mode is MissionMode.SLEW:
+        q_ref, omega_ref = mode_state.profile.reference_at(
+            inputs.time_s - mode_state.slew_started_s)
+    elif mode_state.mode is MissionMode.SAFE:
+        # Stop pointing at anything. Holding the last reference would
+        # keep the wheels loaded against a target they cannot reach.
+        q_ref, omega_ref = inputs.quaternion, (0.0, 0.0, 0.0)
+    else:
+        q_ref, omega_ref = q_desired, (0.0, 0.0, 0.0)
+
+    torque = control_torque(config, mode_state.mode, inputs.quaternion,
+                            inputs.omega_rad_s, q_ref, omega_ref)
+
+    wheels = ReactionWheels(
+        max_torque_Nm=config.max_torque_Nm,
+        momentum_capacity_Nms=config.momentum_capacity_Nms,
+        momentum_Nms=state.wheel_momentum_Nms)
+    delivered, saturated = wheels.command(torque, config.step_s)
+
+    body = RigidBody(inertia_kg_m2=config.inertia_kg_m2,
+                     quaternion=quat_normalize(inputs.quaternion),
+                     rate_rad_s=tuple(inputs.omega_rad_s))
+    body.step(delivered, wheels.momentum_Nms, config.step_s)
+
+    return TwinStepResult(
+        torque_Nm=delivered,
+        quaternion_cmd=body.quaternion,
+        rate_next_rad_s=body.rate_rad_s,
+        state=TwinState(mode_state=mode_state,
+                        wheel_momentum_Nms=wheels.momentum_Nms),
+        boresight_error_rad=error,
+        mode_changed=mode_changed,
+        wheels_saturated=saturated)
+
+
+# ---------------------------------------------------------------------------
 # A whole closed-loop run, for fixtures and offline checks
 # ---------------------------------------------------------------------------
 
@@ -562,10 +745,8 @@ def simulate_slew(config: TwinConfig, q_initial: Sequence[float],
                             wheels.momentum_fraction, slew_requested=False,
                             profile_done=now >= profile.complete_at)
 
-        torque = tracking_torque(config, body.quaternion, body.rate_rad_s,
-                                 q_ref, omega_ref)
-        if state.mode is MissionMode.SAFE:
-            torque = (0.0, 0.0, 0.0)
+        torque = control_torque(config, state.mode, body.quaternion,
+                                body.rate_rad_s, q_ref, omega_ref)
         delivered, _ = wheels.command(torque, dt)
 
         run.samples.append(TwinSample(

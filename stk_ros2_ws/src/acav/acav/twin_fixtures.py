@@ -43,18 +43,28 @@ from acav.twin_reference import (
     RigidBody,
     SlewProfile,
     TwinConfig,
+    TwinInputs,
+    TwinState,
     nadir_attitude,
     settling_time_s,
     simulate_slew,
     target_attitude,
     tracking_torque,
+    twin_step,
     update_mode,
 )
 
 #: Bumped whenever the meaning of a fixture changes, so a stale JSON is
 #: rejected loudly by the MATLAB side instead of silently passing
 #: against the wrong expectations.
-FIXTURE_VERSION = 2
+#:
+#: 3: added the ``twin_step`` section -- the per-step orchestration had
+#:    no counterpart in the reference, so nothing generated fixtures for
+#:    it and two defects survived C3 in the one function no cross-check
+#:    could see. SAFE-mode torque also changed here (zero -> rate
+#:    damping) to match the MATLAB, so closed-loop runs that enter SAFE
+#:    have new expected values.
+FIXTURE_VERSION = 3
 
 
 def _q(values) -> List[float]:
@@ -81,6 +91,7 @@ def build_fixtures(spec: AcavSpec) -> Dict:
             "capture_error_rad": config.capture_error_rad,
             "settle_hold_s": config.settle_hold_s,
             "max_body_rate_rad_s": config.max_body_rate_rad_s,
+            "step_s": config.step_s,
         },
         "quaternion_algebra": _quaternion_cases(),
         "attitude_construction": _attitude_cases(config),
@@ -89,6 +100,7 @@ def build_fixtures(spec: AcavSpec) -> Dict:
         "profile": _profile_cases(config),
         "controller": _controller_cases(config),
         "mode_chart": _mode_cases(config),
+        "twin_step": _twin_step_cases(config),
         "closed_loop": _closed_loop_cases(config),
     }
 
@@ -268,6 +280,106 @@ def _mode_cases(config: TwinConfig) -> List[Dict]:
             "slew_requested": requested,
             "profile_done": done,
             "expected_mode": result.mode.value,
+        })
+    return cases
+
+
+def _twin_step_cases(config: TwinConfig) -> List[Dict]:
+    """Per-step orchestration, run closed-loop through the command.
+
+    The section that exercises ``twin_step``: guidance, the mode
+    transitions, profile creation, the control law, the actuators and
+    the dynamics, in the order and carrying the state that the deployed
+    loop does. Each step feeds the previous step's *commanded* attitude
+    back in as the next step's measurement -- which is exactly what the
+    real loop does via STK -- so a twin that computes a torque but never
+    integrates it shows up here as a boresight error that refuses to
+    decrease, rather than as nothing at all.
+
+    Recording convention, so the MATLAB replay is unambiguous: at each
+    checkpoint ``quaternion``/``rate_rad_s``/``wheel_momentum_Nms`` are
+    the state going INTO that step, and ``mode``/``torque_Nm``/
+    ``boresight_error_rad`` are what the step produced from it.
+
+    Position and velocity are held fixed for the run. This is the
+    reference implementation, and orbital motion belongs to the real
+    loop -- the same simplification ``simulate_slew`` makes and for the
+    same reason.
+    """
+    position = (6_878_137.0, 0.0, 0.0)
+    velocity = (0.0, 1_000.0, 7_500.0)
+    # A 2 deg geocentric offset puts the target ~23.5 deg off nadir --
+    # inside the scenario's 30 deg limit, and a cross-track slew about
+    # the x axis, which is the axis every slew in this study turns
+    # about and the one the profile limits are computed for.
+    offset = math.radians(2.0)
+    target = (6_371_000.0 * math.cos(offset),
+              6_371_000.0 * math.sin(offset), 0.0)
+    nadir = nadir_attitude(position, velocity, config.boresight_body)
+
+    cases = []
+    for (name, have_target, tilt_deg, rate, duration_s, times) in (
+        # Acquire an off-nadir target: NADIR -> SLEW -> SETTLE -> IMAGE,
+        # and the case that proves the vehicle moves at all.
+        ("acquire_target", True, 0.0, (0.0, 0.0, 0.0), 20.0,
+         (0.0, 4.0, 8.0, 12.0, 16.0, 20.0)),
+        # Held at nadir, started 1.5 deg off: inside settle_entry, so no
+        # profile is planned and the tracking loop absorbs it directly.
+        ("nadir_hold", False, 1.5, (0.0, 0.0, 0.0), 5.0,
+         (0.0, 1.0, 2.0, 3.0, 4.0, 5.0)),
+        # Tumbling above the rate guard: SAFE trips on the first step and
+        # latches, and rate damping runs the wheels into their momentum
+        # limit. Both phases are pinned deliberately -- a wheels-only
+        # ADCS cannot dump momentum, so it can only remove about
+        # h_max/J = 9.3 deg/s of tumble and the rest persists. That is
+        # the vehicle E5 injects faults into, and a fixture that stopped
+        # before saturation would hide it.
+        ("safe_rate_damping", False, 0.0, (0.279, 0.0, 0.0), 15.0,
+         (0.0, 3.0, 6.0, 9.0, 12.0, 15.0)),
+    ):
+        q = quat_multiply(nadir, quat_from_axis_angle(
+            (1.0, 0.0, 0.0), math.radians(tilt_deg)))
+        omega = rate
+        state = TwinState()
+
+        wanted = list(times)
+        checkpoints = []
+        steps = int(round(duration_s / config.step_s))
+        for index in range(steps + 1):
+            now = index * config.step_s
+            result = twin_step(config, TwinInputs(
+                quaternion=q, omega_rad_s=omega, position_m=position,
+                velocity_m_s=velocity, time_s=now, target_eci_m=target,
+                have_target=have_target), state)
+
+            if wanted and abs(now - wanted[0]) < config.step_s / 2.0:
+                checkpoints.append({
+                    "time_s": now,
+                    "quaternion": _q(q),
+                    "rate_rad_s": list(omega),
+                    "wheel_momentum_Nms": list(state.wheel_momentum_Nms),
+                    "mode": result.state.mode_state.mode.value,
+                    "torque_Nm": list(result.torque_Nm),
+                    "boresight_error_rad": result.boresight_error_rad,
+                })
+                wanted.pop(0)
+
+            state = result.state
+            q = result.quaternion_cmd
+            omega = result.rate_next_rad_s
+
+        cases.append({
+            "name": name,
+            "have_target": have_target,
+            "position_m": list(position),
+            "velocity_m_s": list(velocity),
+            "target_eci_m": list(target),
+            "initial_quaternion": _q(quat_multiply(
+                nadir, quat_from_axis_angle((1.0, 0.0, 0.0),
+                                            math.radians(tilt_deg)))),
+            "initial_rate_rad_s": list(rate),
+            "duration_s": duration_s,
+            "checkpoints": checkpoints,
         })
     return cases
 

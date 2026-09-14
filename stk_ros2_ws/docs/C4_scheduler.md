@@ -257,10 +257,11 @@ repeatedly.
 
 - **The twin's signal wiring is built** (`docs/C3_adcs_twin.md`
   section 7), turning `/acav/setpoint` and `/acav/twin_status` from
-  declared topics into a working loop — but not diagram-update-verified
-  on this dev box, for the tooling reason in section 2, and it still
-  commands the ACHIEVED attitude verbatim rather than a genuinely new
-  one (the `quaternionCmd` gap, same section).
+  declared topics into a working loop — though not diagram-update
+  -verified on this dev box, for the tooling reason in section 2. The
+  `quaternionCmd` defect that wiring exposed (the twin computed a torque
+  but never integrated it, so the vehicle could not slew) is fixed and
+  now fixture-covered; see `docs/C3_adcs_twin.md` section 8.
 - **No live-STK run yet.** Everything above is verified against the
   mock/free-run combination this environment can reach. The first real
   E2 run is the actual test of sections 2–4's design.

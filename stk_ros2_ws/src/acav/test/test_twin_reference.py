@@ -29,11 +29,14 @@ from acav.twin_reference import (
     RigidBody,
     SlewProfile,
     TwinConfig,
+    TwinInputs,
+    TwinState,
     nadir_attitude,
     settling_time_s,
     simulate_slew,
     target_attitude,
     tracking_torque,
+    twin_step,
     update_mode,
 )
 
@@ -477,3 +480,165 @@ class TestSettlingTime:
         """Conflating the two would quietly bias any campaign average."""
         assert settling_time_s(self._run_with([5.0] * 50),
                                math.radians(0.5), 2.0) is None
+
+
+class TestTwinStepClosesTheLoop:
+    """The per-step orchestration, which had no reference until now.
+
+    ``twin_step`` was the one part of the twin with no counterpart in
+    this module, so no fixture could cross-check it and two defects
+    survived the whole of C3 inside it. These are the regression
+    boundary for both: that the vehicle actually moves, and that SAFE
+    damps rather than coasts.
+    """
+
+    POSITION = (6_878_137.0, 0.0, 0.0)
+    VELOCITY = (0.0, 1_000.0, 7_500.0)
+
+    @staticmethod
+    def _target_at(offset_deg):
+        """A surface point ``offset_deg`` of geocentric arc downtrack."""
+        offset = math.radians(offset_deg)
+        return (6_371_000.0 * math.cos(offset),
+                6_371_000.0 * math.sin(offset), 0.0)
+
+    def _fly(self, config, duration_s, target=None,
+             initial_rate=(0.0, 0.0, 0.0)):
+        """Run the loop the way the deployment runs it.
+
+        Each step's *command* becomes the next step's measurement, which
+        is what happens in the real loop via STK. That is what makes a
+        twin that computes a torque without integrating it observable
+        here rather than merely absent.
+        """
+        quaternion = nadir_attitude(self.POSITION, self.VELOCITY,
+                                    config.boresight_body)
+        omega = initial_rate
+        state = TwinState()
+        history = []
+        for index in range(int(round(duration_s / config.step_s)) + 1):
+            result = twin_step(config, TwinInputs(
+                quaternion=quaternion, omega_rad_s=omega,
+                position_m=self.POSITION, velocity_m_s=self.VELOCITY,
+                time_s=index * config.step_s,
+                target_eci_m=target or (0.0, 0.0, 0.0),
+                have_target=target is not None), state)
+            history.append(result)
+            state = result.state
+            quaternion = result.quaternion_cmd
+            omega = result.rate_next_rad_s
+        return history
+
+    @staticmethod
+    def _rate(result):
+        return math.sqrt(dot(result.rate_next_rad_s, result.rate_next_rad_s))
+
+    def test_the_vehicle_actually_slews_towards_the_target(self, config):
+        """The defect this exists to catch.
+
+        ``quaternionCmd`` used to be the input attitude returned
+        verbatim: the twin read an attitude from STK, computed a torque,
+        and published back what it had just read. Nothing anywhere
+        integrated the torque, so the loop had no integrator at all and
+        the pointing error never moved -- which looks entirely healthy
+        in isolation, and quietly decides every capture by wherever the
+        vehicle already happened to point.
+        """
+        history = self._fly(config, 20.0, target=self._target_at(2.0))
+        started = history[0].boresight_error_rad
+        finished = history[-1].boresight_error_rad
+
+        assert started > math.radians(20.0)
+        assert finished < config.settle_entry_rad
+        assert finished < started / 10.0
+
+    def test_it_reaches_image_through_slew_and_settle(self, config):
+        history = self._fly(config, 20.0, target=self._target_at(2.0))
+        modes = [r.state.mode_state.mode for r in history]
+
+        assert modes[0] is MissionMode.SLEW
+        assert MissionMode.SETTLE in modes
+        assert modes[-1] is MissionMode.IMAGE
+        assert MissionMode.SAFE not in modes
+
+    def test_the_first_second_moves_only_as_far_as_the_wheels_allow(
+            self, config):
+        """The command is the ACHIEVED attitude, not the reference.
+
+        Publishing the reference would close the loop instantly and
+        reinstate exactly the perfect-pointing assumption the study
+        exists to challenge, so early steps must make only the progress
+        the actuators can actually deliver against a ~23 deg error.
+
+        The profile starts at rest from the current attitude, so the
+        very first step commands zero torque and the vehicle genuinely
+        does not move -- the motion has to be measured over a window
+        rather than a single step.
+        """
+        start = nadir_attitude(self.POSITION, self.VELOCITY,
+                               config.boresight_body)
+        history = self._fly(config, 1.0, target=self._target_at(2.0))
+        moved = pointing_error_rad(history[-1].quaternion_cmd, start)
+
+        # alpha = max_torque/J * authority puts the ceiling near 0.4 deg
+        # after a second from rest; the point is that it is neither zero
+        # nor the whole 23 deg error.
+        assert 0.0 < moved < math.radians(1.0)
+        assert history[-1].boresight_error_rad > math.radians(20.0)
+
+    def test_safe_damps_the_rate_rather_than_coasting(self, config):
+        """The second divergence the missing reference hid.
+
+        This module commanded zero torque in SAFE while
+        ``+adcs/twin_step.m`` applied rate damping, and nothing could
+        see the disagreement. A safe mode that commands no torque leaves
+        the tumble that tripped it exactly where it was, so E5 would be
+        measuring a recovery that never happens.
+        """
+        history = self._fly(config, 8.0, initial_rate=(0.279, 0.0, 0.0))
+
+        assert history[0].state.mode_state.mode is MissionMode.SAFE
+        # Torque opposes the rate rather than being zero.
+        assert history[0].torque_Nm[0] < 0.0
+        assert self._rate(history[-1]) < self._rate(history[0])
+
+    def test_safe_latches_once_tripped(self, config):
+        """Recovery is an operator action. An ADCS that re-armed itself
+        the instant the trip cleared would oscillate in and out of SAFE
+        and make E5's deterministic replay meaningless."""
+        history = self._fly(config, 12.0, initial_rate=(0.279, 0.0, 0.0))
+        assert all(r.state.mode_state.mode is MissionMode.SAFE
+                   for r in history)
+
+    def test_safe_cannot_null_a_tumble_the_wheels_cannot_absorb(self, config):
+        """An honest limit of this vehicle, not a defect, and E5 rests
+        on it: with reaction wheels and no desaturation path the twin
+        can only remove ``h_max / J`` of body rate. Start above that and
+        a residual tumble persists with the wheels pinned at capacity --
+        which is the failure E5 has to be able to observe, so a model
+        that quietly recovered would be the worse error.
+        """
+        authority = config.momentum_capacity_Nms / config.inertia_kg_m2[0]
+        history = self._fly(config, 20.0, initial_rate=(0.279, 0.0, 0.0))
+
+        assert self._rate(history[-1]) == pytest.approx(0.279 - authority,
+                                                        abs=1e-6)
+        assert abs(history[-1].state.wheel_momentum_Nms[0]) == \
+            pytest.approx(config.momentum_capacity_Nms)
+        assert history[-1].wheels_saturated
+
+    def test_wheel_momentum_survives_a_mode_change(self, config):
+        """It is carried on ``TwinState`` rather than ``ModeState``
+        because ``update_mode`` builds a fresh ``ModeState`` on every
+        transition. A momentum field there would be silently zeroed each
+        time the mode changed, and entering SAFE would clear the very
+        saturation that tripped it."""
+        history = self._fly(config, 20.0, target=self._target_at(2.0))
+        changes = [i for i, r in enumerate(history) if r.mode_changed and i]
+        assert changes
+
+        for index in changes:
+            before = history[index - 1].state.wheel_momentum_Nms
+            after = history[index].state.wheel_momentum_Nms
+            assert max(abs(h) for h in before) > 0.0
+            assert after != (0.0, 0.0, 0.0)

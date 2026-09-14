@@ -40,7 +40,7 @@ function varargout = test_acav_twin(fixturePath)
     end
 
     fx = jsondecode(fileread(fixturePath));
-    EXPECTED_VERSION = 2;
+    EXPECTED_VERSION = 3;
     if fx.version ~= EXPECTED_VERSION
         error('test_acav_twin:StaleFixtures', ...
             ['fixture version %d, this test expects %d. Regenerate the ' ...
@@ -62,6 +62,7 @@ function varargout = test_acav_twin(fixturePath)
     results = profileCases(results, fx, tol);
     results = controllerCases(results, fx, tol);
     results = modeCases(results, fx);
+    results = twinStepCases(results, fx, 1e-6);
     results = closedLoopCases(results, fx);
     results = missionChart(results);
 
@@ -375,6 +376,156 @@ function results = modeCases(results, fx)
         results = record(results, ['mode: ' c.name], ok, ...
             sprintf('got %s, expected %s', got, c.expected_mode));
     end
+end
+
+function cfg = twinCfgFromFixture(fx)
+%TWINCFGFROMFIXTURE The cfg adcs.twin_step needs, from the fixture file.
+%
+% Built from the fixture rather than from adcs.config() on purpose: the
+% expectations were generated against these values, and reading the YAML
+% here would let a scenario edit silently change what the test compares
+% against instead of failing loudly as a stale fixture.
+    c = fx.config;
+    inertia = c.inertia_kg_m2(:).';
+    wn = c.natural_frequency_rad_s;
+
+    cfg = struct();
+    cfg.inertia = inertia;
+    cfg.maxTorqueNm = c.max_torque_Nm;
+    cfg.momentumCapacityNms = c.momentum_capacity_Nms;
+    cfg.boresightBody = c.boresight_body(:).';
+    cfg.settleEntryRad = c.settle_entry_rad;
+    cfg.captureErrorRad = c.capture_error_rad;
+    cfg.settleHoldS = c.settle_hold_s;
+    cfg.maxBodyRateRadS = c.max_body_rate_rad_s;
+    cfg.stepS = c.step_s;
+    cfg.kp = inertia * wn^2;
+    cfg.kd = 2 * c.damping_ratio * wn * inertia;
+    cfg.profileAlphaRadS2 = c.max_torque_Nm / inertia(1) ...
+        * c.profile_authority;
+    cfg.profileOmegaMaxRadS = c.momentum_capacity_Nms / inertia(1) ...
+        * c.profile_authority;
+end
+
+function results = twinStepCases(results, fx, tol)
+%TWINSTEPCASES The per-step orchestration, replayed closed-loop.
+%
+% adcs.twin_step was the one function with no counterpart in the Python
+% reference, so until these fixtures existed nothing cross-checked it --
+% and two defects lived there through all of C3. The worse one was that
+% quaternionCmd returned the input attitude verbatim: the twin computed
+% a torque and published back the attitude it had just read, so the
+% vehicle could never slew. This section exists so that cannot recur.
+%
+% Each step feeds the previous step's COMMANDED attitude back in as the
+% next step's measurement, which is what the deployed loop does via STK.
+% A twin that computes a torque without integrating it therefore shows
+% up here as a boresight error that refuses to decrease.
+%
+% Checkpoint convention: quaternion/rate/wheel momentum are the state
+% going INTO that step; mode/torque/boresight error are what the step
+% produced from it.
+%
+% Tolerance is looser than the 1e-9 used for single-function cases, for
+% the same reason closedLoopCases is: this accumulates a couple of
+% hundred RK4 steps, and libm's last bit differs between platforms.
+    cfg = twinCfgFromFixture(fx);
+    cases = fixtureCases(fx.twin_step);
+
+    for k = 1:numel(cases)
+        c = cases{k};
+        q = c.initial_quaternion(:).';
+        w = c.initial_rate_rad_s(:).';
+        state = adcs.initial_state();
+        haveTarget = logical(c.have_target);
+        position = c.position_m(:).';
+        velocity = c.velocity_m_s(:).';
+        targetEci = c.target_eci_m(:).';
+
+        checkpoints = fixtureCases(c.checkpoints);
+        next = 1;
+        ok = true;
+        detail = '';
+        steps = round(c.duration_s / cfg.stepS);
+
+        for index = 0:steps
+            t = index * cfg.stepS;
+            in = struct('quaternion', q, 'omega', w, ...
+                        'position', position, 'velocity', velocity, ...
+                        'targetEci', targetEci, 'haveTarget', haveTarget, ...
+                        't', t);
+            out = adcs.twin_step(in, cfg, state);
+
+            if next <= numel(checkpoints) && ...
+                    abs(t - checkpoints{next}.time_s) < cfg.stepS / 2
+                [ok, detail] = compareTwinStep(checkpoints{next}, q, w, ...
+                    state, out, tol);
+                if ~ok
+                    break
+                end
+                next = next + 1;
+            end
+
+            state = out.state;
+            q = out.quaternionCmd;
+            w = out.omegaNext;
+        end
+
+        if ok && next <= numel(checkpoints)
+            ok = false;
+            detail = sprintf('reached %d of %d checkpoints', ...
+                next - 1, numel(checkpoints));
+        end
+        results = record(results, ['twin step: ' c.name], ok, detail);
+    end
+end
+
+function [ok, detail] = compareTwinStep(cp, q, w, state, out, tol)
+%COMPARETWINSTEP One checkpoint of a twin_step replay.
+    ok = false;
+
+    angle = adcs.quat.pointingError(q, cp.quaternion(:).');
+    if angle > tol
+        detail = sprintf('t=%.1f attitude differs by %.3e rad (%.5f deg)', ...
+            cp.time_s, angle, rad2deg(angle));
+        return
+    end
+
+    [rateOk, rateDetail] = compareVec(w, cp.rate_rad_s, tol);
+    if ~rateOk
+        detail = sprintf('t=%.1f body rate: %s', cp.time_s, rateDetail);
+        return
+    end
+
+    [hOk, hDetail] = compareVec(state.wheelMomentum, ...
+        cp.wheel_momentum_Nms, tol);
+    if ~hOk
+        detail = sprintf('t=%.1f wheel momentum: %s', cp.time_s, hDetail);
+        return
+    end
+
+    [tauOk, tauDetail] = compareVec(out.torque, cp.torque_Nm, tol);
+    if ~tauOk
+        detail = sprintf('t=%.1f delivered torque: %s', cp.time_s, tauDetail);
+        return
+    end
+
+    if abs(out.boresightErrorRad - cp.boresight_error_rad) > tol
+        detail = sprintf(['t=%.1f boresight error %.9e, expected %.9e ' ...
+            '-- if this grows rather than shrinks, the step is not ' ...
+            'integrating the torque'], cp.time_s, ...
+            out.boresightErrorRad, cp.boresight_error_rad);
+        return
+    end
+
+    if ~strcmp(out.state.mode, cp.mode)
+        detail = sprintf('t=%.1f mode %s, expected %s', cp.time_s, ...
+            out.state.mode, cp.mode);
+        return
+    end
+
+    ok = true;
+    detail = '';
 end
 
 function results = closedLoopCases(results, fx)

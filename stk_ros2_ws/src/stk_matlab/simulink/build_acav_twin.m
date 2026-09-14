@@ -103,20 +103,15 @@ function modelName = build_acav_twin(options)
 % cannot currently pass here regardless of whether the wiring is right,
 % so treating its failure as fatal would block every build on this box.
 %
-% A design gap this exposed, not a wiring gap: adcs.twin_step's
-% quaternionCmd is currently `in.quaternion` verbatim -- the SAME value
-% AttitudeSub just received. Wired as designed, the published command
-% equals the last reported state every tick, so nothing would move.
-% torque and mode/settling ARE computed correctly (the same tested
-% tracking_torque/mission_mode/slew_profile the Python reference uses),
-% but nothing yet integrates that torque into a genuinely new commanded
-% attitude -- adcs.wheels/adcs.rigid_body_step exist and are unit-tested
-% but are not called from twin_step at all. Fixing this changes
-% validated, fixture-covered control semantics and deserves the same
-% rigor C3 gave the rest of this design (a Python reference update,
-% new fixtures, re-verification) -- deliberately NOT done as a side
-% effect of a wiring pass. torque is wired to a Terminator for now so
-% the model has no dangling output; see docs/C3_adcs_twin.md section 7.
+% Building this wiring is what exposed a real defect in adcs.twin_step,
+% since fixed: quaternionCmd was `in.quaternion` verbatim -- the same
+% value AttitudeSub had just received -- so the published command
+% equalled the last reported state every tick and nothing in the loop
+% ever integrated the computed torque. twin_step now runs the torque
+% through adcs.wheels and adcs.rigid_body_step and publishes the
+% attitude that results, and a twin_step section in the fixtures covers
+% the orchestration that previously had no counterpart in the Python
+% reference to be cross-checked against.
 
     arguments
         options.ModelName (1,1) string = "acav_twin"
@@ -216,11 +211,16 @@ function modelName = build_acav_twin(options)
             sprintf('GuidanceControl/%d', k));
     end
 
-    % torque is computed (adcs.tracking_torque, unit-tested) but nothing
-    % in this model integrates it into a new attitude -- see the header
-    % comment. Terminate it rather than leave an unconnected output,
-    % which Simulink's diagram-update check below would otherwise flag
-    % as an error indistinguishable from an actual wiring mistake.
+    % The torque IS integrated -- inside adcs.twin_step, which runs it
+    % through the wheels and the rigid-body step to produce qCmd. What
+    % comes out of the block here is the DELIVERED torque, and it is
+    % diagnostic: nothing downstream of this model consumes it, since
+    % STK is sent an attitude and the scheduler is sent a TwinStatus.
+    % Terminate it rather than leave an unconnected output, which the
+    % diagram-update check below would otherwise flag as an error
+    % indistinguishable from a real wiring mistake. If C5 wants torque
+    % or wheel momentum in the campaign record, that is a TwinStatus
+    % field and a deliberate message change, not a loose wire.
     add_block('simulink/Sinks/Terminator', [modelName '/TorqueSink'], ...
         'Position', [720 40 750 60]);
     add_line(modelName, 'GuidanceControl/1', 'TorqueSink/1');

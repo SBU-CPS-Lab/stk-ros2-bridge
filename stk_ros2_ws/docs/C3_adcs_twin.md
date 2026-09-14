@@ -22,7 +22,13 @@ So the semantics are fixed once, in Python, where they are tested:
 |---|---|---|
 | `acav/attitude.py` | `+adcs/quat.m` | quaternion algebra, conventions |
 | `acav/twin_reference.py` | `+adcs/wheels.m`, `rigid_body_step.m`, `slew_profile.m`, `tracking_torque.m`, `mission_mode.m` | dynamics, actuators, guidance, control, modes |
+| `twin_reference.twin_step` | `+adcs/twin_step.m` | the per-step orchestration that ties those together |
 | `acav/twin_fixtures.py` | `test_acav_twin.m` | the contract between them |
+
+That third row was missing until the wiring pass, and its absence is
+exactly where two defects lived undetected — see section 8. Every row of
+this table has to exist, or the part with no counterpart is the part
+nothing checks.
 
 `export_twin_fixtures` writes input/expected-output pairs from the
 reference; `test_acav_twin.m` replays them through the MATLAB and
@@ -149,7 +155,7 @@ Run against MATLAB R2023a on the development machine:
 
 | | |
 |---|---|
-| `test_acav_twin` | **35/35 pass** — the MATLAB reproduces every fixture, closed-loop trajectories included |
+| `test_acav_twin` | **38/38 pass** — the MATLAB reproduces every fixture, closed-loop trajectories and the per-step orchestration included |
 | `adcs.build_mission_chart` | builds; SAFE latches (0 outgoing), reachable from all four nominal states, all guards at execution order 1 |
 | `build_acav_twin` | writes a real, fully wired `.slx` (R2024a, with `ros2genmsg` run first) |
 | `ros2genmsg` | **succeeds**, R2024a, given a Python 3.8-3.11 interpreter and a `-include cstdint` compile flag the dev box needs but the deploy machine should not (see `docs/C4_scheduler.md` section 2) |
@@ -232,21 +238,9 @@ one is unresolvable. Edit the builder, not the model.
   Publish block. See `docs/C4_scheduler.md` section 2 for a dev-box
   tooling limitation that keeps this from being diagram-update-verified
   here specifically (not a defect in the wiring itself).
-- **A design gap the wiring pass exposed, not a wiring gap.**
-  `adcs.twin_step`'s `quaternionCmd` is currently `in.quaternion`
-  verbatim — the same attitude value just received from STK. Wired as
-  designed, the published command equals the last reported state every
-  tick, so the vehicle would never actually move in the closed loop.
-  `torque` and the mode/settling logic ARE computed correctly (the same
-  tested `tracking_torque`/`mission_mode`/`slew_profile` the Python
-  reference uses), but nothing yet integrates that torque into a new
-  commanded attitude — `adcs.wheels`/`adcs.rigid_body_step` exist and
-  are unit-tested but are never called from `twin_step`. `torque` is
-  wired to a Terminator for now so the model has no dangling output.
-  Fixing this changes validated, fixture-covered control semantics and
-  deserves the same rigor C3 gave the rest of this design (a Python
-  reference update, new fixtures, re-verification) — deliberately not
-  done as a side effect of a wiring pass.
+- **The twin now closes its own loop.** See section 8: building the
+  wiring exposed that `twin_step` never integrated the torque it
+  computed, and that is fixed.
 - **The `MissionMode` chart is built but deliberately not wired into the
   signal path.** `adcs.twin_step` already calls `adcs.mission_mode`
   directly as a function to decide `state.mode`, entangled with
@@ -255,3 +249,59 @@ one is unresolvable. Edit the builder, not the model.
   no consumer, or need restructuring `GuidanceControl` to take the
   chart's mode as an input — a control-flow change, not a wiring one. It
   stays in the model as the paper's hybrid-model figure.
+
+## 8. The defect the wiring pass found, and what closed it
+
+Building the model's signal wiring turned up two real defects, both in
+`+adcs/twin_step.m`, and both for the same structural reason: it was the
+**only** part of the twin with no counterpart in `twin_reference.py`, so
+no fixture could be generated for it and the cross-check that caught
+`quat.align`'s transposed matrix had nothing to say about it. The table
+in section 1 had a hole in it and the hole is where the bugs were.
+
+**The vehicle could not move.** `quaternionCmd` was `in.quaternion`
+returned verbatim: the twin read an attitude from STK, computed a
+torque, and published back the attitude it had just read. Nothing
+anywhere integrated that torque — `adcs.wheels` and
+`adcs.rigid_body_step` existed and were fixture-covered, but `twin_step`
+never called them. The loop had no integrator at all, so every capture
+would have been decided by wherever the vehicle already happened to
+point, and E2's whole comparison would have been degenerate while
+looking perfectly self-consistent.
+
+The design note that justified it — "in the closed loop STK is the truth
+and the dynamics are bypassed" — rested on a misreading of what STK does
+with injected attitude. `AddAttitude CBFQuat` stores and interpolates
+samples; it does **not** propagate attitude dynamics. STK is the truth
+for orbit, geometry and access. The vehicle's attitude *response* is the
+twin's to compute. `twin_step` now runs the commanded torque through the
+wheels, integrates one step from the state STK reported, and publishes
+the result — still the ACHIEVED attitude rather than the reference,
+which was the part of the original intent that was right.
+
+**SAFE-mode torque disagreed between the two implementations.** The
+reference zeroed the torque; the MATLAB applied rate damping. Rate
+damping is correct — the point of SAFE is to stop the vehicle tumbling,
+and a safe mode that commands nothing leaves the rate that tripped it
+exactly where it was — so the reference was corrected to match, and the
+decision now lives in one place (`twin_reference.control_torque`) used by
+both `simulate_slew` and `twin_step`. No nominal slew enters SAFE, so no
+existing expected value changed: the regenerated fixture diff touches
+only the version, the new `step_s` field and the new section.
+
+**An honest limit this pinned, which is not a defect.** With reaction
+wheels and no desaturation path, SAFE can only remove about
+`h_max / J_xx` ≈ 9.3 °/s of body rate before the wheels saturate. A
+tumble larger than that is damped down to a residual and then persists
+with the wheels pinned at capacity. That is what this vehicle really
+does, it is what E5 injects faults into, and a model that quietly
+recovered instead would be the more dangerous error — so the
+`safe_rate_damping` fixture deliberately runs through saturation rather
+than stopping short of it.
+
+`twin_step` now has a fixture section of its own (`twin_step`, fixture
+version 3) that replays whole runs closed-loop — each step's command fed
+back as the next step's measurement, exactly as the deployed loop does
+through STK. A twin that computes a torque without integrating it shows
+up there as a boresight error that refuses to decrease, which is the
+regression boundary that was missing.
