@@ -56,6 +56,76 @@ built — see `docs/C3_adcs_twin.md` section 7), so nothing had yet
 depended on the wrong type. Fixed as part of defining this contract,
 since C4 is where it is produced.
 
+**`ros2genmsg` now runs in this development environment (2026-09-14),
+which is how the two messages above got verified beyond a `colcon
+build`.** Two independent blockers, both worked around without
+touching the MATLAB installation itself:
+
+1. R2024a's (and R2023a's) ROS Toolbox needs a Python interpreter in
+   [3.8, 3.11); the dev box's only system Python is 3.14. Fixed by
+   extracting a Python 3.10 (with `venv`/`pip` support — the base
+   `osrf/ros:humble-desktop-full` image needs `python3.10-venv` and
+   `python3-pip` installed into it first) from that same container and
+   pointing MATLAB's ROS Toolbox at it via
+   `setpref('ROSToolbox', 'ROS2_PYTHON_EXECUTABLE', <path>)` — an
+   internal but stable preference key.
+2. This host's GCC 15.2.0 exposes a missing `#include <cstdint>` in
+   ~53 of MATLAB's own bundled ROS 2 headers (they relied on a
+   transitive include older GCCs provided). Fixed with
+   `setenv('CXXFLAGS', '-include cstdint')` /
+   `setenv('CPPFLAGS', '-include cstdint')` before calling
+   `ros2genmsg` — colcon's CMake invocation picks both up, so no
+   vendor file needs editing.
+
+With both set, `setup_stk_ros` completes, `ros2genmsg` builds `stk_msgs`
+(including these two new messages) cleanly, and `build_acav_twin`
+proceeds past `requireMessages()` to a real, fully wired `.slx`. The
+full recipe is in the local (untracked) working notes, since neither
+workaround belongs in this repository — the DEPLOY machine has a Python
+in range already and should never need the `cstdint` flag at all if its
+toolchain is the one MATLAB was built against.
+
+**A third, unrelated dev-box limitation this surfaced while wiring the
+model.** Getting `ros2genmsg` to run here was necessary but not
+sufficient for verifying the wiring: in this same R2024a-on-Linux setup,
+no block that needs ELEMENT-LEVEL bus introspection — a MATLAB Function
+reading a field, or a Bus Selector — can resolve a Subscribe block's
+output for ANY custom `stk_msgs` type. Confirmed identically for
+`AttitudeState`, `AngularRate` and `ScenarioTime`, each in total
+isolation (a single Subscribe feeding a one-line MATLAB Function): all
+three fail Simulink's diagram-update check with "cannot determine sizes
+and/or types of the outputs" / a port-width mismatch that names nothing
+actually wrong. Blocks that do NOT need introspection (a Terminator; a
+Blank-Message-sourced bus feeding a Bus Assignment) work without
+complaint, and the identical MATLAB-Function pattern against
+`builtin_interfaces/Time` (a BUILT-IN, not custom-generated, type, via
+the ROS2 Current Time block) also works cleanly — so the fault is
+specific to introspecting a Subscribe block's output for a
+ros2genmsg-custom type here, not to MATLAB Function blocks, Bus
+Selectors, or any one message's shape.
+
+Most likely the same root cause as blocker 2 above, one layer deeper: a
+live subscriber handshake that this dev box's generated libraries and
+MATLAB's bundled ROS runtime disagree on. Confirmed via `feval(model,
+[],[],[],'compile')` that Subscribe blocks DO start a live ROS2 server
+subprocess and a real subscription during type resolution, which for at
+least one type crashed outright with the same `GLIBCXX_3.4.32 not
+found` signature as blocker 2 — but unlike blocker 2, prefixing the
+system's newer `libstdc++` onto `LD_LIBRARY_PATH` for the calling MATLAB
+process did not fix the MATLAB-Function/Bus-Selector case, only a bare
+Subscribe-to-Terminator one, which suggests the ROS2 server subprocess
+(`libmwros2server`) does not inherit that environment variable from its
+parent. Not chased further: it would mean either patching MATLAB's own
+launcher scripts (the same `/opt/matlab` boundary blocker 1 and 2
+already respect) or another environment-level trick with an unclear
+blast radius, for a problem that is very unlikely to reproduce on the
+deploy machine at all, since Windows MATLAB there needs neither of the
+first two workarounds in the first place.
+
+`build_acav_twin`'s own diagram-update check is a WARNING rather than a
+hard failure for exactly this reason — see `docs/C3_adcs_twin.md`
+section 7 for what the wiring itself now looks like.
+
 **Who computes the pointing error, and why not the scheduler.** The
 twin does, in `TwinStatus.boresight_error_rad`. It already has the
 freshest (satellite state, target) pair at the instant it computes that
@@ -185,10 +255,12 @@ repeatedly.
 
 ## 7. Open items
 
-- **The twin's signal wiring** (`docs/C3_adcs_twin.md` section 7) is
-  what turns `/acav/setpoint` and `/acav/twin_status` from declared
-  topics into a working loop. Needs `ros2genmsg` to have run on the
-  deploy machine first.
+- **The twin's signal wiring is built** (`docs/C3_adcs_twin.md`
+  section 7), turning `/acav/setpoint` and `/acav/twin_status` from
+  declared topics into a working loop — but not diagram-update-verified
+  on this dev box, for the tooling reason in section 2, and it still
+  commands the ACHIEVED attitude verbatim rather than a genuinely new
+  one (the `quaternionCmd` gap, same section).
 - **No live-STK run yet.** Everything above is verified against the
   mock/free-run combination this environment can reach. The first real
   E2 run is the actual test of sections 2–4's design.

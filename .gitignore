@@ -1,4 +1,5 @@
 # Physical models (Matlab)
+*.slx
 *.slxc
 *.autosave
 *.asv
