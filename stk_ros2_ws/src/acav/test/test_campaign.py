@@ -5,6 +5,7 @@ overnight thing on one machine and cannot be iterated on. Everything
 that can be established before it starts is established here.
 """
 
+import json
 import os
 
 import pytest
@@ -429,3 +430,66 @@ class TestCommandLauncher:
     def test_an_empty_command_is_refused(self):
         with pytest.raises(ValueError, match="launch command"):
             CommandLauncher([])
+
+
+class TestRunConfigDelivery:
+    """E4's gains and E5's fault have to cross into MATLAB.
+
+    They are not scenario properties -- the scenario is identical in
+    every run of both -- so they travel as a per-run file the twin reads
+    through ``adcs.config``. Without this the fault was planned,
+    recorded and replayed while never reaching the vehicle.
+    """
+
+    def test_a_run_config_is_written_beside_each_result(self, tmp_path):
+        campaign = Campaign("c", "E5", "", runs=(
+            RunSpec(experiment="E5", seed=4,
+                    fault=WheelFault(axis=1, at_s=61.5, seed=4)),))
+        run_campaign(campaign, _writing_launcher(),
+                     RunnerOptions(output_dir=str(tmp_path)))
+
+        written = sorted(p.name for p in tmp_path.glob("*.runconfig.json"))
+        assert len(written) == 1
+        payload = json.loads((tmp_path / written[0]).read_text())
+        assert payload["fault"]["axis"] == 1
+        assert payload["fault"]["at_s"] == 61.5
+        assert payload["fault"]["kind"] == "saturation"
+
+    def test_gains_travel_under_the_records_own_field_names(self, tmp_path):
+        """One spelling from the campaign through the twin and back into
+        the record. Two spellings for one quantity is how a sweep ends
+        up flat."""
+        campaign = Campaign("c", "E4", "", runs=(
+            RunSpec(experiment="E4",
+                    gains={"natural_frequency_rad_s": 1.2}),))
+        run_campaign(campaign, _writing_launcher(),
+                     RunnerOptions(output_dir=str(tmp_path)))
+
+        payload = json.loads(
+            next(tmp_path.glob("*.runconfig.json")).read_text())
+        assert payload["gains"] == {"natural_frequency_rad_s": 1.2}
+
+    def test_a_healthy_run_writes_a_null_fault(self, tmp_path):
+        campaign = Campaign("c", "E2", "", runs=(
+            RunSpec(experiment="E2"),))
+        run_campaign(campaign, _writing_launcher(),
+                     RunnerOptions(output_dir=str(tmp_path)))
+        payload = json.loads(
+            next(tmp_path.glob("*.runconfig.json")).read_text())
+        assert payload["fault"] is None
+
+    def test_the_launcher_can_reach_it_by_placeholder(self, tmp_path):
+        """``{run_config}`` resolves beside whatever output path the run
+        was given, so it stays paired with the record it produced even
+        if the caller names the output something of its own."""
+        launcher = CommandLauncher([
+            "python", "-c",
+            "import sys, pathlib; pathlib.Path(sys.argv[1]).write_text("
+            "sys.argv[2])",
+            "{output}", "{run_config}"])
+        run = RunSpec(experiment="E5", seed=1,
+                      fault=WheelFault(axis=0, at_s=3.0, seed=1))
+        target = tmp_path / "out.json"
+        launcher(run, Campaign("c", "E5", "", runs=(run,)), str(target))
+
+        assert target.read_text() == str(tmp_path / "out.runconfig.json")

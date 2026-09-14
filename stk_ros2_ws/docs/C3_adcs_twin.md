@@ -151,11 +151,14 @@ They must agree, and a change belongs in both.
 
 ## 5. What has actually been executed
 
-Run against MATLAB R2023a on the development machine:
+Run against MATLAB **R2023a and R2024a** on the development
+machine -- both, deliberately: the cross-check used to run only on
+R2023a while message generation and model builds happened on R2024a, so
+no single version had seen both halves.
 
 | | |
 |---|---|
-| `test_acav_twin` | **38/38 pass** — the MATLAB reproduces every fixture, closed-loop trajectories and the per-step orchestration included |
+| `test_acav_twin` | **47/47 pass** — the MATLAB reproduces every fixture, closed-loop trajectories and the per-step orchestration included |
 | `adcs.build_mission_chart` | builds; SAFE latches (0 outgoing), reachable from all four nominal states, all guards at execution order 1 |
 | `build_acav_twin` | writes a real, fully wired `.slx` (R2024a, with `ros2genmsg` run first) |
 | `ros2genmsg` | **succeeds**, R2024a, given a Python 3.8-3.11 interpreter and a `-include cstdint` compile flag the dev box needs but the deploy machine should not (see `docs/C4_scheduler.md` section 2) |
@@ -310,8 +313,18 @@ record report peak momentum, saturation events and wheel energy instead
 of leaving them at their defaults; see `docs/C5_experiment_harness.md`
 section 7.
 
+E5's wheel fault also enters through `twin_step` and nowhere else: the
+health schedule is evaluated against the step's own time and handed to
+the actuator model, so a dead axis simply stops delivering torque and a
+saturated one starts full. The controller is never told, and that is the
+point — it keeps commanding torque the vehicle cannot produce. A twin
+that reconfigured itself around the failure would be measuring
+fault-tolerant control rather than what E5 asks about. See
+`docs/C5_experiment_harness.md` section 3 for the two fault kinds and
+which one actually trips SAFE.
+
 `twin_step` now has a fixture section of its own (`twin_step`, fixture
-version 4) that replays whole runs closed-loop — each step's command fed
+version 5) that replays whole runs closed-loop — each step's command fed
 back as the next step's measurement, exactly as the deployed loop does
 through STK. A twin that computes a torque without integrating it shows
 up there as a boresight error that refuses to decrease, which is the

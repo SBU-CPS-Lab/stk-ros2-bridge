@@ -152,9 +152,43 @@ def run_campaign(campaign: Campaign, launcher: Launcher,
     return outcome
 
 
+def run_config_path(output_path: str) -> str:
+    """Where a run's gain/fault overrides live, given its output path."""
+    return f"{os.path.splitext(output_path)[0]}.runconfig.json"
+
+
+def write_run_config(run: RunSpec, output_path: str) -> str:
+    """Write the per-run gain and fault overrides beside the result.
+
+    These are the two things a campaign varies about the *twin* rather
+    than about the scenario -- E4's gains and E5's fault -- and the twin
+    is MATLAB, so they have to cross a process boundary. A file beats
+    stuffing JSON through a shell argument: it survives quoting, it is
+    inspectable afterwards next to the record it produced, and the
+    operator's launch script only has to pass a path along.
+
+    Field names are the run record's, so one spelling travels from the
+    campaign through the twin and back into the record. Two spellings
+    for one quantity is how a gain sweep ends up flat.
+    """
+    import json
+
+    path = run_config_path(output_path)
+    payload = {
+        "run_id": run.run_id,
+        "gains": dict(run.gains),
+        "fault": None if run.fault is None else run.fault.to_dict(),
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.write("\n")
+    return path
+
+
 def _execute(run: RunSpec, campaign: Campaign, launcher: Launcher,
              path: str) -> RunOutcome:
     LOGGER.info("running %s", run.run_id)
+    write_run_config(run, path)
     try:
         launcher(run, campaign, path)
     except Exception as error:                      # noqa: BLE001
@@ -272,7 +306,13 @@ class CommandLauncher:
     to the machine with STK on it. Placeholders available in the
     template: ``{run_id}``, ``{experiment}``, ``{scheduler}``,
     ``{execution_mode}``, ``{seed}``, ``{output}``, ``{scenario}``,
-    ``{backend}``, ``{gains_json}``, ``{fault_json}``.
+    ``{backend}``, ``{attitude_provider}``, ``{run_config}``,
+    ``{gains_json}``, ``{fault_json}``.
+
+    ``{run_config}`` is the file the runner wrote with this run's gain
+    and fault overrides; hand it to the twin build, which reads it via
+    ``adcs.config``. The ``_json`` placeholders carry the same values
+    inline for the scheduler's own parameters.
 
     Passed as a list of arguments rather than a shell string: a
     scenario path with a space in it is otherwise an injection waiting
@@ -303,6 +343,7 @@ class CommandLauncher:
             "scenario": campaign.scenario_path,
             "backend": campaign.backend,
             "attitude_provider": run.attitude_provider,
+            "run_config": run_config_path(output_path),
             "gains_json": json.dumps(run.gains, sort_keys=True),
             "fault_json": json.dumps(
                 None if run.fault is None else run.fault.to_dict(),

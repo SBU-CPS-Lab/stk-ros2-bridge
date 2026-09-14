@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "generated_from": "acav/twin_reference.py",
   "note": "Expected values produced by the Python reference. The MATLAB twin must reproduce them; see stk_matlab/test_acav_twin.m.",
   "config": {
@@ -878,6 +878,134 @@
       "expected_mode": "SAFE"
     }
   ],
+  "wheel_fault": [
+    {
+      "name": "saturation_before_epoch",
+      "fault": {
+        "axis": 0,
+        "axis_name": "x",
+        "at_s": 10.0,
+        "health": 0.0,
+        "seed": null,
+        "kind": "saturation"
+      },
+      "time_s": 9.9,
+      "expected_health": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "expected_saturates": false
+    },
+    {
+      "name": "saturation_at_epoch",
+      "fault": {
+        "axis": 0,
+        "axis_name": "x",
+        "at_s": 10.0,
+        "health": 0.0,
+        "seed": null,
+        "kind": "saturation"
+      },
+      "time_s": 10.0,
+      "expected_health": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "expected_saturates": true
+    },
+    {
+      "name": "saturation_leaves_health_alone",
+      "fault": {
+        "axis": 2,
+        "axis_name": "z",
+        "at_s": 1.0,
+        "health": 0.0,
+        "seed": null,
+        "kind": "saturation"
+      },
+      "time_s": 5.0,
+      "expected_health": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "expected_saturates": true
+    },
+    {
+      "name": "failure_before_epoch",
+      "fault": {
+        "axis": 1,
+        "axis_name": "y",
+        "at_s": 10.0,
+        "health": 0.0,
+        "seed": null,
+        "kind": "failure"
+      },
+      "time_s": 9.9,
+      "expected_health": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "expected_saturates": false
+    },
+    {
+      "name": "failure_at_epoch",
+      "fault": {
+        "axis": 1,
+        "axis_name": "y",
+        "at_s": 10.0,
+        "health": 0.0,
+        "seed": null,
+        "kind": "failure"
+      },
+      "time_s": 10.0,
+      "expected_health": [
+        1.0,
+        0.0,
+        1.0
+      ],
+      "expected_saturates": false
+    },
+    {
+      "name": "failure_on_z_axis",
+      "fault": {
+        "axis": 2,
+        "axis_name": "z",
+        "at_s": 0.0,
+        "health": 0.0,
+        "seed": null,
+        "kind": "failure"
+      },
+      "time_s": 3.0,
+      "expected_health": [
+        1.0,
+        1.0,
+        0.0
+      ],
+      "expected_saturates": false
+    },
+    {
+      "name": "partial_derate",
+      "fault": {
+        "axis": 0,
+        "axis_name": "x",
+        "at_s": 0.0,
+        "health": 0.5,
+        "seed": null,
+        "kind": "failure"
+      },
+      "time_s": 1.0,
+      "expected_health": [
+        0.5,
+        1.0,
+        1.0
+      ],
+      "expected_saturates": false
+    }
+  ],
   "twin_step": [
     {
       "name": "acquire_target",
@@ -909,6 +1037,7 @@
         0.0
       ],
       "duration_s": 20.0,
+      "fault": null,
       "checkpoints": [
         {
           "time_s": 0.0,
@@ -1110,6 +1239,7 @@
         0.0
       ],
       "duration_s": 5.0,
+      "fault": null,
       "checkpoints": [
         {
           "time_s": 0.0,
@@ -1311,6 +1441,7 @@
         0.0
       ],
       "duration_s": 15.0,
+      "fault": null,
       "checkpoints": [
         {
           "time_s": 0.0,
@@ -1479,6 +1610,424 @@
           "boresight_error_rad": 2.5589837395814055,
           "wheels_saturated": true,
           "wheel_energy_J": 0.003970243902439025
+        }
+      ]
+    },
+    {
+      "name": "wheel_saturates_mid_slew",
+      "have_target": true,
+      "position_m": [
+        6878137.0,
+        0.0,
+        0.0
+      ],
+      "velocity_m_s": [
+        0.0,
+        1000.0,
+        7500.0
+      ],
+      "target_eci_m": [
+        6367118.958938659,
+        222344.69349163366,
+        0.0
+      ],
+      "initial_quaternion": [
+        -0.04682974299888196,
+        -0.7055543743544213,
+        0.04682974299888196,
+        0.7055543743544213
+      ],
+      "initial_rate_rad_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "duration_s": 12.0,
+      "fault": {
+        "axis": 0,
+        "axis_name": "x",
+        "at_s": 5.0,
+        "health": 0.0,
+        "seed": 7,
+        "kind": "saturation"
+      },
+      "checkpoints": [
+        {
+          "time_s": 0.0,
+          "quaternion": [
+            -0.04682974299888196,
+            -0.7055543743544213,
+            0.04682974299888196,
+            0.7055543743544213
+          ],
+          "rate_rad_s": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "wheel_momentum_Nms": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "SLEW",
+          "torque_Nm": [
+            -0.0,
+            -0.0,
+            -0.0
+          ],
+          "boresight_error_rad": 0.41039546507736435,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.0
+        },
+        {
+          "time_s": 4.0,
+          "quaternion": [
+            -0.0755386540255652,
+            -0.7031895379902862,
+            0.01649565023040733,
+            0.7067858791264083
+          ],
+          "rate_rad_s": [
+            -0.04864611632400932,
+            0.006216968443951794,
+            -0.0012821768051247274
+          ],
+          "wheel_momentum_Nms": [
+            0.005983481904768303,
+            -0.0005967110833853441,
+            5.277674488755223e-05
+          ],
+          "mode": "SLEW",
+          "torque_Nm": [
+            -0.0017543564221418678,
+            0.00017492044536168908,
+            -1.5545089416182515e-05
+          ],
+          "boresight_error_rad": 0.3267178661514779,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.0001520104681225295
+        },
+        {
+          "time_s": 5.0,
+          "quaternion": [
+            -0.09473602062959788,
+            -0.7009112966441652,
+            -0.003883059354873881,
+            0.7069182148466044
+          ],
+          "rate_rad_s": [
+            -0.06269550784573556,
+            0.008012410906042116,
+            -0.0016526515526729963
+          ],
+          "wheel_momentum_Nms": [
+            0.007711561987665791,
+            -0.0007690054704319391,
+            6.810947249719749e-05
+          ],
+          "mode": "SAFE",
+          "torque_Nm": [
+            0.002,
+            -0.001087636706029781,
+            9.581082111466429e-05
+          ],
+          "boresight_error_rad": 0.2705559851764106,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.0002530140155464375
+        },
+        {
+          "time_s": 6.0,
+          "quaternion": [
+            -0.11386913321279991,
+            -0.6990924422303186,
+            -0.023306901239992118,
+            0.7055213434563149
+          ],
+          "rate_rad_s": [
+            -0.04643632207193249,
+            0.0017426862712733118,
+            0.00022493779065485304
+          ],
+          "wheel_momentum_Nms": [
+            0.018000000000000013,
+            -0.00016475423974450623,
+            4.3451060702775896e-05
+          ],
+          "mode": "SAFE",
+          "torque_Nm": [
+            0.002,
+            -0.00023655920520772444,
+            -1.304054347542445e-05
+          ],
+          "boresight_error_rad": 0.21593527165756285,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.00036288610882251614
+        },
+        {
+          "time_s": 9.0,
+          "quaternion": [
+            -0.13781886096787282,
+            -0.697501292694512,
+            -0.04689799504902578,
+            0.7016398551332332
+          ],
+          "rate_rad_s": [
+            -0.0031496850509306717,
+            9.234267004985443e-06,
+            1.6019502164521557e-05
+          ],
+          "wheel_momentum_Nms": [
+            0.012675680174830022,
+            -7.030781508850789e-06,
+            6.528791626461023e-05
+          ],
+          "mode": "SAFE",
+          "torque_Nm": [
+            0.0005477995234279642,
+            -1.253496340324744e-06,
+            -9.287146184859727e-07
+          ],
+          "boresight_error_rad": 0.14898155312405711,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.0004899550671010443
+        },
+        {
+          "time_s": 12.0,
+          "quaternion": [
+            -0.1385412600787644,
+            -0.6974506857895287,
+            -0.04760883964870066,
+            0.7015000060832562
+          ],
+          "rate_rad_s": [
+            -3.250832312618779e-05,
+            -5.198772162746164e-08,
+            1.7035100644027564e-07
+          ],
+          "wheel_momentum_Nms": [
+            0.01229226709733324,
+            -6.4103178695731395e-06,
+            6.597527302972431e-05
+          ],
+          "mode": "SAFE",
+          "torque_Nm": [
+            5.653912574752832e-06,
+            7.0570212845981535e-09,
+            -9.87592924736854e-09
+          ],
+          "boresight_error_rad": 0.14697417838706323,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.0004904390116465477
+        }
+      ]
+    },
+    {
+      "name": "wheel_fails_mid_slew",
+      "have_target": true,
+      "position_m": [
+        6878137.0,
+        0.0,
+        0.0
+      ],
+      "velocity_m_s": [
+        0.0,
+        1000.0,
+        7500.0
+      ],
+      "target_eci_m": [
+        6367118.958938659,
+        222344.69349163366,
+        0.0
+      ],
+      "initial_quaternion": [
+        -0.04682974299888196,
+        -0.7055543743544213,
+        0.04682974299888196,
+        0.7055543743544213
+      ],
+      "initial_rate_rad_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "duration_s": 12.0,
+      "fault": {
+        "axis": 0,
+        "axis_name": "x",
+        "at_s": 5.0,
+        "health": 0.0,
+        "seed": 7,
+        "kind": "failure"
+      },
+      "checkpoints": [
+        {
+          "time_s": 0.0,
+          "quaternion": [
+            -0.04682974299888196,
+            -0.7055543743544213,
+            0.04682974299888196,
+            0.7055543743544213
+          ],
+          "rate_rad_s": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "wheel_momentum_Nms": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "SLEW",
+          "torque_Nm": [
+            -0.0,
+            -0.0,
+            -0.0
+          ],
+          "boresight_error_rad": 0.41039546507736435,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.0
+        },
+        {
+          "time_s": 4.0,
+          "quaternion": [
+            -0.0755386540255652,
+            -0.7031895379902862,
+            0.01649565023040733,
+            0.7067858791264083
+          ],
+          "rate_rad_s": [
+            -0.04864611632400932,
+            0.006216968443951794,
+            -0.0012821768051247274
+          ],
+          "wheel_momentum_Nms": [
+            0.005983481904768303,
+            -0.0005967110833853441,
+            5.277674488755223e-05
+          ],
+          "mode": "SLEW",
+          "torque_Nm": [
+            -0.0017543564221418678,
+            0.00017492044536168908,
+            -1.5545089416182515e-05
+          ],
+          "boresight_error_rad": 0.3267178661514779,
+          "wheels_saturated": false,
+          "wheel_energy_J": 0.0001520104681225295
+        },
+        {
+          "time_s": 5.0,
+          "quaternion": [
+            -0.09473602062959788,
+            -0.7009112966441652,
+            -0.003883059354873881,
+            0.7069182148466044
+          ],
+          "rate_rad_s": [
+            -0.06269550784573556,
+            0.008012410906042116,
+            -0.0016526515526729963
+          ],
+          "wheel_momentum_Nms": [
+            0.007711561987665791,
+            -0.0007690054704319391,
+            6.810947249719749e-05
+          ],
+          "mode": "SLEW",
+          "torque_Nm": [
+            -0.0,
+            0.00016927468543962617,
+            -1.5089168078554073e-05
+          ],
+          "boresight_error_rad": 0.2705559851764106,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.00023972574411382079
+        },
+        {
+          "time_s": 6.0,
+          "quaternion": [
+            -0.1161824546304635,
+            -0.6973951912432722,
+            -0.02691987712572991,
+            0.7066943502549995
+          ],
+          "rate_rad_s": [
+            -0.06269545553314718,
+            0.009512679532410874,
+            -0.001972389789832849
+          ],
+          "wheel_momentum_Nms": [
+            0.007711561987665791,
+            -0.0009130768075318879,
+            8.077714303660654e-05
+          ],
+          "mode": "SLEW",
+          "torque_Nm": [
+            -0.0,
+            1.6475913729962116e-05,
+            -1.5895433580983995e-06
+          ],
+          "boresight_error_rad": 0.20724257989109435,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.00024087711650613082
+        },
+        {
+          "time_s": 9.0,
+          "quaternion": [
+            -0.18013707926116204,
+            -0.6839881030149145,
+            -0.09520455701117891,
+            0.7004619903560947
+          ],
+          "rate_rad_s": [
+            -0.06269571894616338,
+            0.004647989792305454,
+            -0.0010228588109223132
+          ],
+          "wheel_momentum_Nms": [
+            0.007711561987665791,
+            -0.0004460472962151595,
+            4.334152799135245e-05
+          ],
+          "mode": "SLEW",
+          "torque_Nm": [
+            -0.0,
+            -0.00019714934622115752,
+            1.6817175744735366e-05
+          ],
+          "boresight_error_rad": 0.017800423568867185,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.0002443937644136672
+        },
+        {
+          "time_s": 12.0,
+          "quaternion": [
+            -0.24453644889944162,
+            -0.670232781668451,
+            -0.15982956250189295,
+            0.6822348968552361
+          ],
+          "rate_rad_s": [
+            -0.06269585839938449,
+            -0.0005509748981458175,
+            8.83647599404138e-05
+          ],
+          "wheel_momentum_Nms": [
+            0.007711561987665791,
+            5.2760880684074484e-05,
+            -6.460671057708809e-07
+          ],
+          "mode": "SETTLE",
+          "torque_Nm": [
+            -0.0,
+            -4.8344185966959615e-05,
+            3.140207467302982e-06
+          ],
+          "boresight_error_rad": 0.17051880065312883,
+          "wheels_saturated": true,
+          "wheel_energy_J": 0.0002454163551668721
         }
       ]
     }

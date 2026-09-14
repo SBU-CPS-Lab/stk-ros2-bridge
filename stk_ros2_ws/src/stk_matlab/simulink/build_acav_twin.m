@@ -121,6 +121,13 @@ function modelName = build_acav_twin(options)
         options.SampleTime (1,1) double = 0.1
         options.SetpointTopic (1,1) string = "/acav/setpoint"
         options.TwinStatusTopic (1,1) string = "/acav/twin_status"
+        %#ok<*STRNU>
+        % Per-run gain and fault overrides (E4, E5), baked into the
+        % GuidanceControl block so the generated model carries them.
+        % Empty is the nominal vehicle, which is every other experiment.
+        % A campaign writes one of these per run next to the run's
+        % output; see adcs.config's own help for the format.
+        options.RunConfigPath (1,1) string = ""
     end
 
     modelName = char(options.ModelName);
@@ -199,7 +206,8 @@ function modelName = build_acav_twin(options)
     controlBlock = [modelName '/GuidanceControl'];
     add_block('simulink/User-Defined Functions/MATLAB Function', ...
         controlBlock, 'Position', [480 40 680 320]);
-    setMatlabFunctionBody(controlBlock, guidanceControlSource());
+    setMatlabFunctionBody(controlBlock, ...
+        guidanceControlSource(options.RunConfigPath));
 
     % UnpackTelemetry outputs, in order: qMeas, omega, pos, vel,
     % targetEci, haveTarget, t, objectPath, stepIndex. The first seven
@@ -475,19 +483,33 @@ function setMatlabFunctionBody(blockPath, source)
     block.Script = source;
 end
 
-function source = guidanceControlSource()
+function source = guidanceControlSource(runConfigPath)
     %GUIDANCECONTROLSOURCE The block body: a thin call into +adcs.
     %
     % Thin on purpose. Everything of substance lives in adcs.twin_step,
     % where test_acav_twin.m can reach it; a block full of algebra is a
     % block nothing can test.
+    %
+    % runConfigPath is baked in as a literal rather than read from a
+    % workspace variable at run time: the model is a build artifact
+    % regenerated per run anyway, and a model whose behaviour depended
+    % on whatever happened to be in the base workspace would make two
+    % runs of the same .slx mean different things -- which is precisely
+    % what E3 exists to rule out.
+    if nargin < 1
+        runConfigPath = "";
+    end
+    configCall = 'adcs.config()';
+    if strlength(runConfigPath) > 0
+        configCall = sprintf('adcs.config([], ''%s'')', runConfigPath);
+    end
     source = strjoin({
         'function [torque, qCmd, mode, err, momentum, saturated, energy] = ...'
         '        fcn(qMeas, omega, pos, vel, targetEci, haveTarget, t)'
         '%#codegen'
         '    persistent cfg state'
         '    if isempty(cfg)'
-        '        cfg = adcs.config();'
+        ['        cfg = ' configCall ';']
         '        state = adcs.initial_state();'
         '    end'
         '    in = struct(''quaternion'', qMeas, ''omega'', omega, ...'

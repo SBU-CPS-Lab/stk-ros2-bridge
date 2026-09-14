@@ -40,7 +40,7 @@ function varargout = test_acav_twin(fixturePath)
     end
 
     fx = jsondecode(fileread(fixturePath));
-    EXPECTED_VERSION = 4;
+    EXPECTED_VERSION = 5;
     if fx.version ~= EXPECTED_VERSION
         error('test_acav_twin:StaleFixtures', ...
             ['fixture version %d, this test expects %d. Regenerate the ' ...
@@ -62,6 +62,7 @@ function varargout = test_acav_twin(fixturePath)
     results = profileCases(results, fx, tol);
     results = controllerCases(results, fx, tol);
     results = modeCases(results, fx);
+    results = wheelFaultCases(results, fx, tol);
     results = twinStepCases(results, fx, 1e-6);
     results = closedLoopCases(results, fx);
     results = missionChart(results);
@@ -378,6 +379,31 @@ function results = modeCases(results, fx)
     end
 end
 
+function results = wheelFaultCases(results, fx, tol)
+%WHEELFAULTCASES E5's fault schedule, including the axis convention.
+%
+% ``axis`` is ZERO-based in the fixture because that is what the Python
+% record writes; MATLAB indexes from one. Getting that wrong faults the
+% wrong wheel while every other number in the run still looks right,
+% which is why it is asserted rather than reviewed.
+    cases = fixtureCases(fx.wheel_fault);
+    for k = 1:numel(cases)
+        c = cases{k};
+        fault = struct('axis', c.fault.axis, 'atS', c.fault.at_s, ...
+                       'health', c.fault.health, ...
+                       'kind', char(c.fault.kind));
+        [health, saturates] = adcs.wheel_fault(fault, c.time_s);
+
+        [ok, detail] = compareVec(health, c.expected_health, tol);
+        if ok && saturates ~= logical(c.expected_saturates)
+            ok = false;
+            detail = sprintf('saturates %d, expected %d', ...
+                saturates, c.expected_saturates);
+        end
+        results = record(results, ['wheel fault: ' c.name], ok, detail);
+    end
+end
+
 function cfg = twinCfgFromFixture(fx)
 %TWINCFGFROMFIXTURE The cfg adcs.twin_step needs, from the fixture file.
 %
@@ -429,11 +455,18 @@ function results = twinStepCases(results, fx, tol)
 % Tolerance is looser than the 1e-9 used for single-function cases, for
 % the same reason closedLoopCases is: this accumulates a couple of
 % hundred RK4 steps, and libm's last bit differs between platforms.
-    cfg = twinCfgFromFixture(fx);
+    baseCfg = twinCfgFromFixture(fx);
     cases = fixtureCases(fx.twin_step);
 
     for k = 1:numel(cases)
         c = cases{k};
+        cfg = baseCfg;
+        cfg.wheelFault = [];
+        if isfield(c, 'fault') && ~isempty(c.fault) && isstruct(c.fault)
+            cfg.wheelFault = struct( ...
+                'axis', c.fault.axis, 'atS', c.fault.at_s, ...
+                'health', c.fault.health, 'kind', char(c.fault.kind));
+        end
         q = c.initial_quaternion(:).';
         w = c.initial_rate_rad_s(:).';
         state = adcs.initial_state();

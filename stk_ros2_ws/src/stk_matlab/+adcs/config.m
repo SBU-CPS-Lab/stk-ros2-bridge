@@ -1,8 +1,26 @@
-function cfg = config(scenarioPath)
+function cfg = config(scenarioPath, runConfigPath)
 %CONFIG Load the twin's parameters from acav_scenario.yaml.
 %
 %   cfg = adcs.config()                    % the shipped scenario
 %   cfg = adcs.config('path/to/file.yaml')
+%   cfg = adcs.config([], 'run.json')      % with per-run overrides
+%
+% The second argument is how a CAMPAIGN varies the twin between runs.
+% E4 sweeps the gains and E5 injects a wheel fault, and neither is a
+% property of the scenario -- the scenario is the same in every run of
+% both. So they arrive as a small JSON written per run by
+% acav/campaign_runner.py:
+%
+%   {"gains": {"natural_frequency_rad_s": 1.2,
+%              "damping_ratio": 0.707,
+%              "profile_authority": 0.8},
+%    "fault": {"axis": 0, "at_s": 123.456, "health": 0.0,
+%              "kind": "saturation", "seed": 5}}
+%
+% Both keys are optional. The field names are the RECORD's, not this
+% struct's, because that file is written from the run record and read
+% back by it -- translating names at the boundary once is better than
+% two spellings drifting apart.
 %
 % The YAML is THE contract (C1). Nothing in the twin may carry its own
 % copy of a value the scheduler also uses: a quantity that can drift
@@ -48,6 +66,12 @@ function cfg = config(scenarioPath)
     cfg.dampingRatio = 0.707;
     cfg.profileAuthority = 0.8;
 
+    % -- per-run overrides (E4's gains, E5's fault) -------------------
+    cfg.wheelFault = [];
+    if nargin >= 2 && ~isempty(runConfigPath)
+        cfg = applyRunConfig(cfg, runConfigPath);
+    end
+
     % -- derived ------------------------------------------------------
     wn = cfg.naturalFrequencyRadS;
     cfg.kp = cfg.inertia * wn^2;
@@ -61,4 +85,51 @@ function cfg = config(scenarioPath)
     % Derated limits for the reference profile -- see slew_profile.m.
     cfg.profileAlphaRadS2 = cfg.alphaRadS2 * cfg.profileAuthority;
     cfg.profileOmegaMaxRadS = cfg.omegaMaxRadS * cfg.profileAuthority;
+end
+
+function cfg = applyRunConfig(cfg, runConfigPath)
+%APPLYRUNCONFIG Merge one run's gain and fault overrides into cfg.
+%
+% Missing file is an ERROR, not a silent default. A campaign that asked
+% for a gain sweep and got the nominal gains on every point would
+% produce a perfectly flat surface and read as a finding -- and the run
+% record would claim gains the twin never used. Failing to start is the
+% cheaper outcome by a wide margin.
+    if ~isfile(runConfigPath)
+        error('adcs:config:NoRunConfig', ...
+            ['run config not found at %s. This file carries the ' ...
+             'per-run gain and fault overrides; a run that silently ' ...
+             'fell back to the nominal values would be recorded as ' ...
+             'the treatment it was asked to be.'], runConfigPath);
+    end
+
+    raw = jsondecode(fileread(runConfigPath));
+
+    if isfield(raw, 'gains') && ~isempty(raw.gains)
+        gains = raw.gains;
+        if isfield(gains, 'natural_frequency_rad_s')
+            cfg.naturalFrequencyRadS = gains.natural_frequency_rad_s;
+        end
+        if isfield(gains, 'damping_ratio')
+            cfg.dampingRatio = gains.damping_ratio;
+        end
+        if isfield(gains, 'profile_authority')
+            cfg.profileAuthority = gains.profile_authority;
+        end
+    end
+
+    if isfield(raw, 'fault') && ~isempty(raw.fault)
+        fault = raw.fault;
+        cfg.wheelFault = struct( ...
+            'axis', fault.axis, ...          % zero-based; see wheel_fault.m
+            'atS', fault.at_s, ...
+            'health', 0, ...
+            'kind', 'saturation');
+        if isfield(fault, 'health')
+            cfg.wheelFault.health = fault.health;
+        end
+        if isfield(fault, 'kind')
+            cfg.wheelFault.kind = char(fault.kind);
+        end
+    end
 end

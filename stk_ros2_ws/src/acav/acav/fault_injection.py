@@ -27,14 +27,31 @@ the difference is where this kind of harness usually goes wrong:
 
 What is injected
 ----------------
-A single reaction wheel degrading at one epoch, because that is the
-fault the twin already models end to end: ``adcs.wheels`` takes a
-per-axis ``health`` derate, a dead axis makes the controller unable to
-deliver commanded torque about it, momentum builds on the remaining
-axes, and the Stateflow chart trips SAFE on the momentum guard. Nothing
-new has to be modelled for E5, which is deliberate -- a fault that
-needed its own physics would be measuring the fault model rather than
-the loop's ability to replay it.
+One reaction wheel, at one epoch, in one of two ways. Both reuse
+machinery the twin already has, deliberately: a fault needing its own
+physics would measure the fault model rather than the loop's ability to
+replay it.
+
+``SATURATION`` (the default, and what C1 section 9 specifies for E5)
+drives the wheel's stored momentum to capacity. The momentum guard sees
+a full wheel on the next mode evaluation and the chart trips SAFE. The
+wheel is not jammed there -- the actuator model lets a saturated wheel
+torque back towards zero, so this stays a fault injection rather than a
+termination.
+
+``FAILURE`` derates the wheel instead, via the per-axis ``health``
+``adcs.wheels`` already takes, so the axis delivers no torque at all.
+
+**Measured, because the obvious reasoning is wrong.** This module used
+to claim that a dead wheel makes momentum build on the remaining axes
+until the momentum guard trips SAFE. It does not. Flying it shows the
+pointing error growing without bound -- 23 deg to 178 deg over a minute
+-- while the healthy wheels stay near zero momentum and *no guard ever
+fires*, because the error is about the dead axis and the controller
+asks the other two for almost nothing. That is a real gap in the
+vehicle's fault detection and worth reporting as one; it is not,
+however, what E5 was specified to inject, which is why SATURATION is
+the default.
 """
 
 from __future__ import annotations
@@ -53,6 +70,16 @@ AXIS_NAMES = ("x", "y", "z")
 #: which is the same reasoning that made wheel saturation a hard clamp.
 DEAD = 0.0
 
+#: Drive the wheel's stored momentum to capacity, tripping the chart's
+#: momentum guard. What C1 section 9 specifies for E5.
+SATURATION = "saturation"
+
+#: Derate the wheel so it delivers no torque. Degrades pointing badly
+#: and trips nothing -- see this module's own docstring.
+FAILURE = "failure"
+
+KINDS = (SATURATION, FAILURE)
+
 
 @dataclass(frozen=True)
 class WheelFault:
@@ -68,10 +95,16 @@ class WheelFault:
     at_s: float
     health: float = DEAD
     seed: Optional[int] = None
+    #: ``SATURATION`` or ``FAILURE``; see the module docstring for what
+    #: each one actually does to the vehicle, as measured.
+    kind: str = SATURATION
 
     def __post_init__(self) -> None:
         if self.axis not in (0, 1, 2):
             raise ValueError(f"axis must be 0, 1 or 2; got {self.axis!r}")
+        if self.kind not in KINDS:
+            raise ValueError(
+                f"kind must be one of {list(KINDS)}; got {self.kind!r}")
         if not 0.0 <= self.health <= 1.0:
             raise ValueError(
                 f"health is a derate in [0, 1]; got {self.health!r}")
@@ -85,6 +118,10 @@ class WheelFault:
     def health_at(self, time_s: float) -> Tuple[float, float, float]:
         """Per-axis health at ``time_s``, for ``adcs.wheels``.
 
+        Always healthy for a ``SATURATION`` fault: that one fills the
+        wheel rather than breaking it, and a wheel at capacity can still
+        deliver torque that unloads it.
+
         A step rather than a ramp, and applied from ``at_s`` *inclusive*
         so that a fault scheduled exactly on a step boundary is applied
         on that step. Leaving it exclusive would make the injection
@@ -93,9 +130,18 @@ class WheelFault:
         supposedly identical replays diverge.
         """
         healthy = [1.0, 1.0, 1.0]
-        if time_s >= self.at_s:
+        if self.kind == FAILURE and time_s >= self.at_s:
             healthy[self.axis] = self.health
         return (healthy[0], healthy[1], healthy[2])
+
+    def saturates_at(self, time_s: float) -> bool:
+        """Whether a SATURATION fault is due by ``time_s``.
+
+        The caller applies it once, tracking that in its own state --
+        this only answers whether the epoch has arrived, so the answer
+        stays a pure function of (fault, time).
+        """
+        return self.kind == SATURATION and time_s >= self.at_s
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -104,6 +150,7 @@ class WheelFault:
             "at_s": self.at_s,
             "health": self.health,
             "seed": self.seed,
+            "kind": self.kind,
         }
 
 
@@ -124,14 +171,16 @@ def fault_from_dict(raw: Optional[Dict[str, Any]]) -> Optional[WheelFault]:
         axis=int(raw["axis"]),
         at_s=float(raw["at_s"]),
         health=float(raw.get("health", DEAD)),
-        seed=None if seed is None else int(seed))
+        seed=None if seed is None else int(seed),
+        kind=str(raw.get("kind", SATURATION)))
 
 
 def plan_fault(seed: int, window_duration_s: float,
                earliest_s: float = 0.0,
                latest_s: Optional[float] = None,
                health: float = DEAD,
-               axes: Sequence[int] = (0, 1, 2)) -> WheelFault:
+               axes: Sequence[int] = (0, 1, 2),
+               kind: str = SATURATION) -> WheelFault:
     """The fault for ``seed``, drawn from a private generator.
 
     Uses ``random.Random(seed)`` rather than the module-level functions
@@ -162,7 +211,8 @@ def plan_fault(seed: int, window_duration_s: float,
     rng = random.Random(seed)
     axis = rng.choice(list(axes))
     at_s = round(rng.uniform(earliest_s, end), 3)
-    return WheelFault(axis=axis, at_s=at_s, health=health, seed=seed)
+    return WheelFault(axis=axis, at_s=at_s, health=health, seed=seed,
+                      kind=kind)
 
 
 def plan_campaign_faults(seeds: Sequence[int], window_duration_s: float,

@@ -20,6 +20,7 @@ from acav.attitude import (
     quat_multiply,
     rotate_to_inertial,
 )
+from acav.fault_injection import FAILURE, WheelFault
 from acav.slew_model import slew_time_s
 from acav.spec import AcavSpec
 from acav.twin_reference import (
@@ -661,3 +662,60 @@ class TestTwinStepClosesTheLoop:
         slew = self._fly(config, 15.0, target=self._target_at(2.0))
         safe = self._fly(config, 15.0, initial_rate=(0.279, 0.0, 0.0))
         assert safe[-1].state.wheel_energy_J > slew[-1].state.wheel_energy_J
+
+    def _fly_with_fault(self, config, fault, duration_s=15.0):
+        import dataclasses
+        return self._fly(dataclasses.replace(config, wheel_fault=fault),
+                         duration_s, target=self._target_at(2.0))
+
+    def test_a_saturating_wheel_trips_safe_on_the_injection_step(self, config):
+        """E5's treatment, and C1 section 9's stated expectation. The
+        fault is applied to the state going INTO the step, before the
+        momentum guard runs, so SAFE trips on the very step the fault
+        lands -- a one-step lag would make the epoch in the record
+        disagree with the epoch the run reacted to."""
+        fault = WheelFault(axis=0, at_s=5.0)
+        history = self._fly_with_fault(config, fault)
+        modes = [r.state.mode_state.mode for r in history]
+        step = int(round(fault.at_s / config.step_s))
+
+        assert modes[step - 1] is not MissionMode.SAFE
+        assert modes[step] is MissionMode.SAFE
+        assert modes[-1] is MissionMode.SAFE            # and latches
+
+    def test_a_dead_wheel_wrecks_pointing_and_trips_nothing(self, config):
+        """Measured, and the reason saturation is E5's default. The
+        error is about the dead axis, so the controller asks the healthy
+        wheels for almost nothing, their momentum stays near zero, and
+        no guard ever fires while pointing collapses. A real gap in the
+        vehicle's fault detection -- worth reporting, not papering
+        over."""
+        history = self._fly_with_fault(
+            config, WheelFault(axis=0, at_s=5.0, kind=FAILURE), 40.0)
+
+        assert all(r.state.mode_state.mode is not MissionMode.SAFE
+                   for r in history)
+        assert history[-1].boresight_error_rad > math.radians(45.0)
+
+    def test_the_fault_is_applied_once_not_every_step(self, config):
+        """Re-filling the wheel each step would pin it at capacity and
+        make E5 a termination rather than an injection -- the same
+        reasoning that lets a saturated wheel torque back towards
+        zero."""
+        history = self._fly_with_fault(config, WheelFault(axis=0, at_s=5.0))
+        step = int(round(5.0 / config.step_s))
+        filled = abs(history[step].state.wheel_momentum_Nms[0])
+        later = abs(history[-1].state.wheel_momentum_Nms[0])
+
+        # The recorded state is AFTER that step's wheel command, which
+        # has already unloaded one step's worth of torque -- so the
+        # tolerance is exactly that, not an arbitrary epsilon.
+        one_step = config.max_torque_Nm * config.step_s
+        assert filled >= config.momentum_capacity_Nms - one_step
+        assert later < 0.9 * filled          # and it kept unloading
+
+    def test_a_healthy_vehicle_is_unaffected_by_the_fault_machinery(
+            self, config):
+        assert config.wheel_fault is None
+        history = self._fly(config, 20.0, target=self._target_at(2.0))
+        assert history[-1].state.mode_state.mode is MissionMode.IMAGE

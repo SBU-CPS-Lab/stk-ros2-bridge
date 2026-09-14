@@ -133,11 +133,20 @@ def analyse(experiment: str, records: List[RunRecord],
                            "compare their capture rates")
         report["schedulers"] = compare_schedulers(records, total_targets)
     elif experiment == "E5":
-        report["safe_mode_runs"] = sum(
-            1 for r in records if r.result.entered_safe_mode)
-        report["claim_holds"] = len(records) > 0
-        report["claim"] = ("each seeded fault produced a run; use the "
-                           "replay verb to test reproduction")
+        faulted = [r for r in records if r.provenance.fault]
+        safe = [r for r in faulted if r.result.entered_safe_mode]
+        report["faulted_runs"] = len(faulted)
+        report["safe_mode_runs"] = len(safe)
+        report["did_not_trip"] = [r.result.run_id for r in faulted
+                                  if not r.result.entered_safe_mode]
+        # A saturation fault must trip the momentum guard. A faulted run
+        # that stayed nominal means the fault did not reach the twin --
+        # which looks like a clean run rather than a broken experiment,
+        # so it is called out rather than averaged over.
+        report["claim_holds"] = bool(faulted) and not report["did_not_trip"]
+        report["claim"] = ("every seeded fault reached the twin and "
+                           "tripped SAFE; use the replay verb for "
+                           "reproduction")
     return report
 
 

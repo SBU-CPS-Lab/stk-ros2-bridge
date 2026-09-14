@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import replace
 from typing import Dict, List
 
 from acav.attitude import (
@@ -35,6 +36,7 @@ from acav.attitude import (
     quat_normalize,
     rotate_to_body,
 )
+from acav.fault_injection import FAILURE, SATURATION, WheelFault
 from acav.spec import AcavSpec
 from acav.twin_reference import (
     MissionMode,
@@ -67,7 +69,11 @@ from acav.twin_reference import (
 #: 4: twin_step now accumulates |tau . omega| into the state, so the
 #:    twin can publish wheel energy on TwinStatus and the run record can
 #:    report it. The twin_step cases carry the running total.
-FIXTURE_VERSION = 4
+#: 5: E5's wheel fault reaches the twin. Adds a wheel_fault section
+#:    (the health/saturation schedule) and a faulted twin_step case, so
+#:    the MATLAB's zero-based axis handling and its one-shot saturation
+#:    are both pinned rather than assumed.
+FIXTURE_VERSION = 5
 
 
 def _q(values) -> List[float]:
@@ -103,6 +109,7 @@ def build_fixtures(spec: AcavSpec) -> Dict:
         "profile": _profile_cases(config),
         "controller": _controller_cases(config),
         "mode_chart": _mode_cases(config),
+        "wheel_fault": _wheel_fault_cases(),
         "twin_step": _twin_step_cases(config),
         "closed_loop": _closed_loop_cases(config),
     }
@@ -287,6 +294,38 @@ def _mode_cases(config: TwinConfig) -> List[Dict]:
     return cases
 
 
+def _wheel_fault_cases() -> List[Dict]:
+    """E5's fault schedule, including the axis convention.
+
+    ``axis`` is ZERO-based in the record, because that is what Python
+    wrote; MATLAB indexes from one. That off-by-one would fault the
+    wrong wheel while every other number in the run looked right, so it
+    is pinned here rather than left to a code review.
+    """
+    cases = []
+    for name, fault, time_s in (
+        ("saturation_before_epoch", WheelFault(axis=0, at_s=10.0), 9.9),
+        ("saturation_at_epoch", WheelFault(axis=0, at_s=10.0), 10.0),
+        ("saturation_leaves_health_alone", WheelFault(axis=2, at_s=1.0), 5.0),
+        ("failure_before_epoch",
+         WheelFault(axis=1, at_s=10.0, kind=FAILURE), 9.9),
+        ("failure_at_epoch",
+         WheelFault(axis=1, at_s=10.0, kind=FAILURE), 10.0),
+        ("failure_on_z_axis",
+         WheelFault(axis=2, at_s=0.0, kind=FAILURE), 3.0),
+        ("partial_derate",
+         WheelFault(axis=0, at_s=0.0, health=0.5, kind=FAILURE), 1.0),
+    ):
+        cases.append({
+            "name": name,
+            "fault": fault.to_dict(),
+            "time_s": time_s,
+            "expected_health": list(fault.health_at(time_s)),
+            "expected_saturates": fault.saturates_at(time_s),
+        })
+    return cases
+
+
 def _twin_step_cases(config: TwinConfig) -> List[Dict]:
     """Per-step orchestration, run closed-loop through the command.
 
@@ -321,15 +360,16 @@ def _twin_step_cases(config: TwinConfig) -> List[Dict]:
     nadir = nadir_attitude(position, velocity, config.boresight_body)
 
     cases = []
-    for (name, have_target, tilt_deg, rate, duration_s, times) in (
+    for (name, have_target, tilt_deg, rate, duration_s, times,
+         fault) in (
         # Acquire an off-nadir target: NADIR -> SLEW -> SETTLE -> IMAGE,
         # and the case that proves the vehicle moves at all.
         ("acquire_target", True, 0.0, (0.0, 0.0, 0.0), 20.0,
-         (0.0, 4.0, 8.0, 12.0, 16.0, 20.0)),
+         (0.0, 4.0, 8.0, 12.0, 16.0, 20.0), None),
         # Held at nadir, started 1.5 deg off: inside settle_entry, so no
         # profile is planned and the tracking loop absorbs it directly.
         ("nadir_hold", False, 1.5, (0.0, 0.0, 0.0), 5.0,
-         (0.0, 1.0, 2.0, 3.0, 4.0, 5.0)),
+         (0.0, 1.0, 2.0, 3.0, 4.0, 5.0), None),
         # Tumbling above the rate guard: SAFE trips on the first step and
         # latches, and rate damping runs the wheels into their momentum
         # limit. Both phases are pinned deliberately -- a wheels-only
@@ -338,19 +378,34 @@ def _twin_step_cases(config: TwinConfig) -> List[Dict]:
         # the vehicle E5 injects faults into, and a fixture that stopped
         # before saturation would hide it.
         ("safe_rate_damping", False, 0.0, (0.279, 0.0, 0.0), 15.0,
-         (0.0, 3.0, 6.0, 9.0, 12.0, 15.0)),
+         (0.0, 3.0, 6.0, 9.0, 12.0, 15.0), None),
+        # E5's treatment: a wheel saturates mid-slew. The momentum guard
+        # sees a full wheel on the very step the fault lands and the
+        # chart trips SAFE, which is what C1 section 9 asks E5 to
+        # produce. Checkpoints straddle the epoch deliberately, so a
+        # one-step lag in applying it shows up as a mode mismatch.
+        ("wheel_saturates_mid_slew", True, 0.0, (0.0, 0.0, 0.0), 12.0,
+         (0.0, 4.0, 5.0, 6.0, 9.0, 12.0),
+         WheelFault(axis=0, at_s=5.0, seed=7)),
+        # The same epoch, the other fault kind: the wheel dies instead.
+        # Pointing degrades and NOTHING trips -- measured, not assumed,
+        # and the reason SATURATION is E5's default.
+        ("wheel_fails_mid_slew", True, 0.0, (0.0, 0.0, 0.0), 12.0,
+         (0.0, 4.0, 5.0, 6.0, 9.0, 12.0),
+         WheelFault(axis=0, at_s=5.0, seed=7, kind=FAILURE)),
     ):
         q = quat_multiply(nadir, quat_from_axis_angle(
             (1.0, 0.0, 0.0), math.radians(tilt_deg)))
         omega = rate
         state = TwinState()
+        run_config = replace(config, wheel_fault=fault)
 
         wanted = list(times)
         checkpoints = []
         steps = int(round(duration_s / config.step_s))
         for index in range(steps + 1):
             now = index * config.step_s
-            result = twin_step(config, TwinInputs(
+            result = twin_step(run_config, TwinInputs(
                 quaternion=q, omega_rad_s=omega, position_m=position,
                 velocity_m_s=velocity, time_s=now, target_eci_m=target,
                 have_target=have_target), state)
@@ -384,6 +439,7 @@ def _twin_step_cases(config: TwinConfig) -> List[Dict]:
                                             math.radians(tilt_deg)))),
             "initial_rate_rad_s": list(rate),
             "duration_s": duration_s,
+            "fault": None if fault is None else fault.to_dict(),
             "checkpoints": checkpoints,
         })
     return cases

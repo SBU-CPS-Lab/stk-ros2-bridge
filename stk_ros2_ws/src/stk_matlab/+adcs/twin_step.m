@@ -24,6 +24,7 @@ function out = twin_step(in, cfg, state)
 %        .enteredAt    seconds
 %        .wheelMomentum [3]
 %        .wheelEnergyJ running integral of |tau . omega|, joules
+%        .faultApplied whether E5's one-shot saturation has been applied
 %        .profile      [] or a struct from adcs.slew_profile
 %        .slewStarted  seconds
 %
@@ -60,6 +61,39 @@ function out = twin_step(in, cfg, state)
 % not propagate attitude dynamics. STK is the truth for orbit, geometry
 % and access; the vehicle's attitude RESPONSE is the twin's to compute,
 % and it is computed here.
+
+    % -- E5's injected fault -------------------------------------------
+    % Applied to the state going INTO this step, before the momentum
+    % guard is evaluated below, so the chart trips SAFE on the very step
+    % the fault lands rather than one step later. A one-step lag would
+    % be invisible in a plot and would make the injection epoch in the
+    % record disagree with the epoch the run actually reacted to.
+    %
+    % One-shot: the wheel is filled once and ordinary physics takes over,
+    % so it can still unload. Re-filling it every step would pin it at
+    % capacity forever -- a termination rather than a fault injection,
+    % which is the same reasoning behind adcs.wheels letting a saturated
+    % wheel torque back towards zero.
+    wheelFault = [];
+    if isfield(cfg, 'wheelFault')
+        wheelFault = cfg.wheelFault;
+    end
+    [wheelHealth, saturates] = adcs.wheel_fault(wheelFault, in.t);
+    if saturates && ~state.faultApplied
+        axisIndex = wheelFault.axis + 1;
+        % Follow whichever way the wheel was already spinning, so one
+        % that is unloading is not abruptly reversed; at rest it fills
+        % positive. Either way the choice follows the trajectory, so a
+        % replay makes it identically.
+        if state.wheelMomentum(axisIndex) >= 0
+            direction = 1;
+        else
+            direction = -1;
+        end
+        state.wheelMomentum(axisIndex) = ...
+            direction * cfg.momentumCapacityNms;
+        state.faultApplied = true;
+    end
 
     % -- guidance: where should the boresight be pointing right now? ---
     if in.haveTarget
@@ -139,7 +173,7 @@ function out = twin_step(in, cfg, state)
     % E5's saturation faults invisible.
     [torque, state.wheelMomentum, wheelsSaturated] = adcs.wheels( ...
         torqueRequest, cfg.stepS, state.wheelMomentum, cfg.maxTorqueNm, ...
-        cfg.momentumCapacityNms);
+        cfg.momentumCapacityNms, wheelHealth);
 
     [quaternionCmd, omegaNext] = adcs.rigid_body_step(in.quaternion, ...
         in.omega, torque, state.wheelMomentum, cfg.inertia, cfg.stepS);

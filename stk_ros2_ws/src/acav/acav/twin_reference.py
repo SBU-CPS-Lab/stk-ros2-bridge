@@ -64,6 +64,7 @@ from acav.attitude import (
     rotate_to_inertial,
     scale,
 )
+from acav.fault_injection import WheelFault
 from acav.slew_model import SlewLimits, slew_time_s
 
 
@@ -122,6 +123,16 @@ class TwinConfig:
     #: per lockstep tick. Mirrors ``cfg.stepS`` in ``+adcs/config.m``;
     #: ``twin_step`` integrates over it.
     step_s: float = 0.1
+    #: A reaction wheel degrading partway through the run -- E5's
+    #: injected fault. ``None`` is a healthy vehicle, which is every
+    #: other experiment.
+    #:
+    #: Carried on the config rather than arriving as an event because
+    #: the fault is decided before the run and written into its record;
+    #: see :mod:`acav.fault_injection`. That makes the health at any
+    #: instant a pure function of (fault, time), so a replay reproduces
+    #: the degradation exactly rather than re-rolling it.
+    wheel_fault: Optional[WheelFault] = None
 
     @classmethod
     def from_spec(cls, spec) -> "TwinConfig":
@@ -562,6 +573,13 @@ class TwinState:
 
     mode_state: ModeState = field(default_factory=ModeState)
     wheel_momentum_Nms: Vector3 = (0.0, 0.0, 0.0)
+    #: Whether a SATURATION fault has already been applied. It is a
+    #: one-shot: the wheel is filled once, and ordinary physics takes
+    #: over afterwards so it can still unload. Re-applying it every step
+    #: would pin the wheel at capacity forever, which is a termination
+    #: rather than a fault injection -- the same reasoning that made
+    #: ReactionWheels let a saturated wheel torque back towards zero.
+    fault_applied: bool = False
     #: Cumulative integral of |tau . omega|, joules -- a proxy for slew
     #: cost, reported per run. Accumulated here rather than by whoever
     #: reads the telemetry because this is the only place that holds the
@@ -582,6 +600,34 @@ class TwinStepResult:
     boresight_error_rad: float
     mode_changed: bool
     wheels_saturated: bool
+
+
+def _apply_saturation_fault(config: TwinConfig, inputs: TwinInputs,
+                            state: TwinState) -> TwinState:
+    """Fill the faulted wheel, once, at or after its epoch.
+
+    Applied to the state going INTO the step, before the momentum guard
+    is evaluated, so the chart trips SAFE on the very step the fault
+    lands rather than one step later. A one-step lag there would be
+    invisible in a plot and would make the injection epoch in the record
+    disagree with the epoch the run actually reacted to.
+
+    The sign follows whichever way the wheel was already spinning, so a
+    wheel unloading in one direction is not abruptly reversed; with no
+    momentum yet it fills positive. Either way the choice is a function
+    of the trajectory, so a replay makes it identically.
+    """
+    fault = config.wheel_fault
+    if (fault is None or state.fault_applied
+            or not fault.saturates_at(inputs.time_s)):
+        return state
+
+    momentum = list(state.wheel_momentum_Nms)
+    sign = 1.0 if momentum[fault.axis] >= 0.0 else -1.0
+    momentum[fault.axis] = sign * config.momentum_capacity_Nms
+    return replace(state,
+                   wheel_momentum_Nms=(momentum[0], momentum[1], momentum[2]),
+                   fault_applied=True)
 
 
 def twin_step(config: TwinConfig, inputs: TwinInputs,
@@ -607,6 +653,15 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
     for orbit, geometry and access; the vehicle's attitude *response* is
     the twin's to compute, and this is where it is computed.
 
+    A failed wheel enters here and nowhere else: the health schedule is
+    evaluated against this step's time and handed to the actuator model,
+    so a dead axis simply stops delivering torque. The controller is not
+    told, and that is the point -- it keeps commanding torque the
+    vehicle cannot produce, momentum builds on the remaining axes, and
+    the mode logic trips SAFE on the momentum guard. A twin that
+    reconfigured its controller around the failure would be measuring
+    fault-tolerant control rather than what E5 asks about.
+
     What the command published still is: the ACHIEVED attitude, not the
     reference. That part of the original intent was right and the whole
     study turns on it -- publishing the reference would quietly
@@ -615,6 +670,8 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
     the torque the wheels actually delivered, starting from the state
     STK reported.
     """
+    state = _apply_saturation_fault(config, inputs, state)
+
     if inputs.have_target:
         q_desired = target_attitude(inputs.position_m, inputs.velocity_m_s,
                                     inputs.target_eci_m,
@@ -668,10 +725,13 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
     torque = control_torque(config, mode_state.mode, inputs.quaternion,
                             inputs.omega_rad_s, q_ref, omega_ref)
 
+    health = ((1.0, 1.0, 1.0) if config.wheel_fault is None
+              else config.wheel_fault.health_at(inputs.time_s))
     wheels = ReactionWheels(
         max_torque_Nm=config.max_torque_Nm,
         momentum_capacity_Nms=config.momentum_capacity_Nms,
-        momentum_Nms=state.wheel_momentum_Nms)
+        momentum_Nms=state.wheel_momentum_Nms,
+        health=health)
     delivered, saturated = wheels.command(torque, config.step_s)
 
     body = RigidBody(inertia_kg_m2=config.inertia_kg_m2,
@@ -693,7 +753,8 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
         rate_next_rad_s=body.rate_rad_s,
         state=TwinState(mode_state=mode_state,
                         wheel_momentum_Nms=wheels.momentum_Nms,
-                        wheel_energy_J=energy),
+                        wheel_energy_J=energy,
+                        fault_applied=state.fault_applied),
         boresight_error_rad=error,
         mode_changed=mode_changed,
         wheels_saturated=saturated)

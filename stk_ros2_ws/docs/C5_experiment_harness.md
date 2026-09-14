@@ -93,6 +93,59 @@ Seeds are also planned independently of one another, so inserting a seed
 cannot renumber anyone else's fault — otherwise "re-run the seed that
 failed" would reproduce a different fault than the one that failed.
 
+### The two kinds, and which one E5 uses
+
+| Kind | What it does | What happens |
+|---|---|---|
+| `saturation` (default) | fills the wheel to capacity, once | momentum guard trips **SAFE** on that step |
+| `failure` | derates the wheel so it delivers no torque | pointing collapses and **nothing trips** |
+
+`saturation` is the default because C1 section 9 specifies "inject wheel
+saturation … Stateflow → SAFE". The wheel is not jammed there: the
+actuator model lets a saturated wheel torque back towards zero, and the
+reference confirms it unloads from 0.0198 to 0.0123 N·m·s over the ten
+seconds after injection. That is what keeps E5 a fault injection rather
+than a termination.
+
+**`failure` was measured, and it disproved the obvious reasoning.** This
+harness originally claimed a dead wheel makes momentum build on the
+remaining axes until the momentum guard trips. Flying it shows the
+opposite: the pointing error grows without bound — 23° to 178° over a
+minute — while the healthy wheels stay near zero momentum and **no guard
+ever fires**, because the error is about the dead axis and the
+controller asks the other two for almost nothing. That is a real gap in
+the vehicle's fault detection and worth reporting as one. It is not what
+E5 was specified to inject, which is why it is not the default.
+
+### How a fault reaches the twin
+
+The twin is MATLAB, so the fault has to cross a process boundary. It
+travels as a small JSON the runner writes beside each result:
+
+```json
+{"gains": {"natural_frequency_rad_s": 1.2},
+ "fault": {"axis": 0, "at_s": 123.456, "kind": "saturation", "seed": 5}}
+```
+
+`adcs.config(scenario, runConfig)` merges it, and `build_acav_twin`
+takes a `RunConfigPath` that bakes it into the generated model. The same
+file carries **E4's gains**, which had the same problem: neither is a
+property of the scenario — the scenario is identical in every run of
+both — so neither belonged in the YAML.
+
+Three details that are load-bearing. A missing run-config file is an
+**error**, not a silent default: a gain sweep that quietly used nominal
+gains at every point would produce a flat surface that reads as a
+finding, and the record would claim gains the twin never used. `axis` is
+**zero-based** in the record and converted once inside
+`adcs.wheel_fault`, because an off-by-one there faults the wrong wheel
+while every other number in the run still looks right — there is a
+fixture for it. And the saturation is applied to the state going *into*
+a step, before the momentum guard is evaluated, so SAFE trips on the
+very step the fault lands; a one-step lag would be invisible in a plot
+and would make the recorded epoch disagree with the one the run reacted
+to.
+
 `replay_matches` compares determinism signatures, not capture counts: two
 runs can agree on how many targets they captured while disagreeing about
 every pointing error. A replay that ran a *different* fault is reported
@@ -227,14 +280,6 @@ nothing, and E3's comparison rested entirely on per-target outcomes.
   labelled for what it actually is rather than filled with the backend
   round-trip time, which would have mislabelled one component as the
   whole.
-- **E5 can observe a fault but cannot yet inject one.** The twin has no
-  path for a wheel-health derate: `adcs.wheels` already takes `health`,
-  but `twin_step` does not pass one, and the fault would have to reach
-  the model as configuration evaluated against sim time
-  (`WheelFault.health_at`). Until then an E5 campaign runs, records its
-  planned fault, and replays deterministically — but every run is
-  nominal, so `safe_mode_runs` stays at zero for a reason that is not
-  the twin failing to report it.
 - **No campaign has been run against live STK.** Everything here is
   verified against an injected launcher. The first real campaign is the
   test of section 5's refusals.

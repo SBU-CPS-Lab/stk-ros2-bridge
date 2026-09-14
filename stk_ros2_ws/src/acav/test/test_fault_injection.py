@@ -13,6 +13,8 @@ import pytest
 
 from acav.fault_injection import (
     DEAD,
+    FAILURE,
+    SATURATION,
     WheelFault,
     fault_from_dict,
     plan_campaign_faults,
@@ -86,18 +88,24 @@ class TestHealthSchedule:
         """Inclusive on purpose: a fault landing exactly on a step
         boundary must be applied on that step rather than depending on a
         floating-point comparison to decide, which is how two supposedly
-        identical replays drift apart by one step."""
-        fault = WheelFault(axis=1, at_s=100.0)
+        identical replays drift apart by one step.
+
+        Spelled with FAILURE because health is that kind's mechanism;
+        SATURATION fills the wheel instead and leaves health alone.
+        """
+        fault = WheelFault(axis=1, at_s=100.0, kind=FAILURE)
         assert fault.health_at(100.0) == (1.0, DEAD, 1.0)
         assert fault.health_at(700.0) == (1.0, DEAD, 1.0)
 
     def test_only_the_faulted_axis_is_affected(self):
-        assert WheelFault(axis=0, at_s=0.0).health_at(1.0) == (0.0, 1.0, 1.0)
-        assert WheelFault(axis=2, at_s=0.0).health_at(1.0) == (1.0, 1.0, 0.0)
+        assert WheelFault(axis=0, at_s=0.0, kind=FAILURE).health_at(1.0) == \
+            (0.0, 1.0, 1.0)
+        assert WheelFault(axis=2, at_s=0.0, kind=FAILURE).health_at(1.0) == \
+            (1.0, 1.0, 0.0)
 
     def test_a_partial_derate_is_expressible(self):
-        assert WheelFault(axis=0, at_s=0.0, health=0.5).health_at(1.0) == \
-            (0.5, 1.0, 1.0)
+        assert WheelFault(axis=0, at_s=0.0, health=0.5,
+                          kind=FAILURE).health_at(1.0) == (0.5, 1.0, 1.0)
 
 
 class TestValidation:
@@ -127,3 +135,44 @@ class TestValidation:
     def test_restricting_the_eligible_axes_is_honoured(self):
         for seed in range(30):
             assert plan_fault(seed, WINDOW, axes=(1,)).axis == 1
+
+
+class TestFaultKinds:
+    """The two kinds do genuinely different things to the vehicle.
+
+    Which is which was measured, not reasoned about: this module used to
+    claim a dead wheel loads the healthy axes until the momentum guard
+    trips. It does not.
+    """
+
+    def test_saturation_leaves_the_wheel_healthy(self):
+        """It fills the wheel; it does not break it. A wheel at capacity
+        can still deliver torque that unloads it, which is what keeps
+        E5 a fault injection rather than a termination."""
+        fault = plan_fault(3, WINDOW)
+        assert fault.kind == "saturation"
+        assert fault.health_at(WINDOW) == (1.0, 1.0, 1.0)
+        assert fault.saturates_at(fault.at_s)
+
+    def test_failure_derates_and_never_saturates(self):
+        fault = WheelFault(axis=1, at_s=10.0, kind="failure")
+        assert fault.health_at(10.0) == (1.0, DEAD, 1.0)
+        assert not fault.saturates_at(10.0)
+
+    def test_saturation_is_the_default_because_e5_specifies_it(self):
+        """C1 section 9: "inject wheel saturation ... Stateflow -> SAFE"."""
+        assert WheelFault(axis=0, at_s=1.0).kind == "saturation"
+
+    def test_an_unknown_kind_is_refused(self):
+        with pytest.raises(ValueError, match="kind must be one of"):
+            WheelFault(axis=0, at_s=1.0, kind="jammed")
+
+    def test_the_kind_round_trips_through_a_record(self):
+        fault = WheelFault(axis=2, at_s=5.0, kind="failure")
+        assert fault_from_dict(fault.to_dict()).kind == "failure"
+
+    def test_a_record_predating_kinds_reads_as_saturation(self):
+        """Absence has one correct reading: saturation was the only
+        behaviour when those records were written."""
+        assert fault_from_dict(
+            {"axis": 0, "at_s": 1.0, "health": 0.0}).kind == "saturation"
