@@ -90,6 +90,55 @@ DEFAULT_ACCESS_QUERY_DELAY_S = 0.2
 FINALIZE_GRACE_S = 10.0
 
 
+def _utc_now() -> str:
+    """An ISO-8601 UTC timestamp, for the run's provenance."""
+    import datetime
+
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(
+        timespec="seconds")
+
+
+def _execution_mode_name(value: int) -> str:
+    """ScenarioTime.execution_mode as a name, via the bridge's own enum.
+
+    Routed through ``core/time_sync.ExecutionMode`` rather than a local
+    table so there is one mapping from those constants in the codebase.
+    A second copy is exactly how a renamed mode ends up recorded
+    correctly in one place and wrongly in another.
+    """
+    try:
+        from stk_bridge.core.time_sync import ExecutionMode
+
+        return ExecutionMode(int(value)).name.lower()
+    except (ImportError, ValueError):
+        LOGGER.warning("unrecognised execution mode %r", value)
+        return "unknown"
+
+
+def _parse_json_object(text: str, what: str) -> dict:
+    value = _parse_json_value(text, what)
+    return value if isinstance(value, dict) else {}
+
+
+def _parse_json_value(text: str, what: str):
+    """Parse a JSON argument, or warn and record nothing.
+
+    Warns rather than raises: a malformed ``--fault_json`` should not
+    destroy a run that has already executed against live STK. It is
+    recorded as absent, and the runner's own check then reports the
+    record as not matching the run it asked for -- which is the right
+    place for that to surface.
+    """
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except ValueError as error:
+        LOGGER.warning("ignoring malformed %s argument %r: %s",
+                       what, text, error)
+        return None
+
+
 @dataclass
 class SchedulerOptions:
     """Everything about a run that is not scenario data.
@@ -111,6 +160,20 @@ class SchedulerOptions:
     auto_shutdown: bool = True
     run_id: str = "run"
     seed: Optional[int] = None
+    #: Which experiment this run belongs to, e.g. "E5". Recorded so a
+    #: directory of results says what it is without a spreadsheet.
+    experiment: str = ""
+    #: Path to the scenario as loaded, hashed into the run's provenance.
+    #: Two runs claiming to be the same experiment while reading
+    #: different scenarios is a contradiction worth being able to detect.
+    scenario_path: str = ""
+    #: Controller gains and injected fault in force for this run, as
+    #: JSON, supplied by whatever launched it. These are recorded as
+    #: CONFIGURED -- unlike the backend, which is observed from the
+    #: bridge, because a backend can silently differ from what was asked
+    #: for and gains cannot.
+    gains_json: str = ""
+    fault_json: str = ""
 
 
 class SchedulerNode:
@@ -127,7 +190,12 @@ class SchedulerNode:
 
     def __init__(self, node, spec: AcavSpec, options: SchedulerOptions):
         from std_msgs.msg import String
-        from stk_msgs.msg import ScenarioTime, TargetSetpoint, TwinStatus
+        from stk_msgs.msg import (
+            BridgeStatus,
+            ScenarioTime,
+            TargetSetpoint,
+            TwinStatus,
+        )
         from stk_msgs.srv import ComputeAccess, QueryDataProvider
 
         from stk_bridge.interfaces import qos as qos_module
@@ -156,6 +224,16 @@ class SchedulerNode:
         self._window_elapsed_at: Optional[float] = None
         self._shutdown_requested = False
 
+        # Observed from the bridge rather than assumed from the launch
+        # configuration. C1 section 8 commits the paper to reporting
+        # nothing the mock produced, and a run that was configured for
+        # COM but fell back to the mock must not be indistinguishable
+        # from a real one in the record.
+        self._backend_type = "unknown"
+        self._stk_version = ""
+        self._execution_mode = "unknown"
+        self._started_utc = _utc_now()
+
         retention_s = spec.pointing.settle_hold_s + RETENTION_MARGIN_S
         self._tracker = CaptureTracker(
             capture_error_deg=spec.pointing.capture_error_deg,
@@ -182,6 +260,9 @@ class SchedulerNode:
         node.create_subscription(
             TwinStatus, options.twin_status_topic, self._on_twin_status,
             profiles["telemetry"])
+        node.create_subscription(
+            BridgeStatus, f"{prefix}/status", self._on_bridge_status,
+            profiles["status"])
 
         self._client_query = node.create_client(
             QueryDataProvider, f"{prefix}/query_data_provider")
@@ -195,7 +276,22 @@ class SchedulerNode:
 
     # -- lockstep step ------------------------------------------------------
 
+    def _on_bridge_status(self, message) -> None:
+        """Record which backend is actually running, not which was asked for."""
+        backend = (message.backend_type or "").strip().lower()
+        if backend and backend != self._backend_type:
+            if self._backend_type != "unknown":
+                LOGGER.warning(
+                    "the bridge's backend changed mid-run: %s -> %s. The "
+                    "record will carry the last one seen.",
+                    self._backend_type, backend)
+            LOGGER.info("bridge backend: %s (STK %s)", backend,
+                        message.stk_version_string or "unknown")
+        self._backend_type = backend or "unknown"
+        self._stk_version = message.stk_version_string or ""
+
     def _on_scenario_time(self, message) -> None:
+        self._execution_mode = _execution_mode_name(message.execution_mode)
         stamp = conv.ros_time_to_stk(message.sim_time)
         epoch = conv.ros_time_to_stk(message.scenario_epoch)
 
@@ -471,29 +567,53 @@ class SchedulerNode:
         )
 
     def _write_output(self, result: RunResult) -> None:
+        """Write the run as a C5 record: the result plus its provenance.
+
+        The provenance is what decides whether the numbers may be
+        published at all, so it is assembled here, in the process that
+        watched the run happen, rather than reconstructed afterwards
+        from launch arguments and memory.
+        """
         if not self._options.output_json:
             return
-        payload = {
-            "run_id": result.run_id,
-            "scheduler": result.scheduler,
-            "seed": result.seed,
-            "attempted_count": result.attempted_count,
-            "captured_count": result.captured_count,
-            "targets": [
-                {
-                    "target_id": t.target_id,
-                    "attempted": t.attempted,
-                    "outcome": t.outcome.value,
-                    "image_time_s": t.image_time_s,
-                    "error_at_image_deg": t.error_at_image_deg,
-                    "max_error_in_hold_deg": t.max_error_in_hold_deg,
-                }
-                for t in result.targets
-            ],
-        }
-        with open(self._options.output_json, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
-        LOGGER.info("wrote %s", self._options.output_json)
+
+        from acav.run_record import (
+            Provenance,
+            RunRecord,
+            scenario_digest,
+            write_record,
+        )
+
+        digest = ""
+        if self._options.scenario_path:
+            try:
+                digest = scenario_digest(self._options.scenario_path)
+            except OSError as error:
+                LOGGER.warning("could not hash the scenario file: %s", error)
+
+        record = RunRecord(
+            result=result,
+            experiment=self._options.experiment,
+            provenance=Provenance(
+                backend_type=self._backend_type,
+                stk_version=self._stk_version,
+                execution_mode=self._execution_mode,
+                scenario_sha256=digest,
+                gains=_parse_json_object(self._options.gains_json, "gains"),
+                fault=_parse_json_value(self._options.fault_json, "fault"),
+                started_utc=self._started_utc,
+                finished_utc=_utc_now()))
+
+        write_record(self._options.output_json, record)
+        LOGGER.info("wrote %s (backend=%s, mode=%s, reportable=%s)",
+                    self._options.output_json, self._backend_type,
+                    self._execution_mode, record.reportable)
+        if not record.reportable:
+            LOGGER.warning(
+                "this run is NOT reportable: the backend was %r. No number "
+                "it produced may appear in the paper (see the case study "
+                "spec, section 8); it is fine for development.",
+                self._backend_type)
 
     def _request_shutdown(self) -> None:
         import rclpy
@@ -561,6 +681,9 @@ def main(args=None) -> None:
     node.declare_parameter("auto_shutdown", True)
     node.declare_parameter("run_id", "run")
     node.declare_parameter("seed", -1)
+    node.declare_parameter("experiment", "")
+    node.declare_parameter("gains_json", "")
+    node.declare_parameter("fault_json", "")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -580,6 +703,10 @@ def main(args=None) -> None:
         auto_shutdown=bool(node.get_parameter("auto_shutdown").value),
         run_id=str(node.get_parameter("run_id").value),
         seed=None if seed_value < 0 else seed_value,
+        experiment=str(node.get_parameter("experiment").value),
+        scenario_path=str(node.get_parameter("scenario_config").value),
+        gains_json=str(node.get_parameter("gains_json").value),
+        fault_json=str(node.get_parameter("fault_json").value),
     )
 
     scheduler = SchedulerNode(node, spec, options)

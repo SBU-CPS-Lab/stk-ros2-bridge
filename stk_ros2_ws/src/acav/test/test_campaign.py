@@ -1,0 +1,393 @@
+"""Tests for the campaign matrices, aggregation and the runner loop.
+
+A campaign is 40 to 100+ runs, each needing STK and MATLAB, so it is an
+overnight thing on one machine and cannot be iterated on. Everything
+that can be established before it starts is established here.
+"""
+
+import os
+
+import pytest
+
+from acav.campaign import (
+    FREE_RUN,
+    LOCKSTEP,
+    Campaign,
+    RunSpec,
+    build_e2_scheduler_comparison,
+    build_e3_determinism,
+    build_e4_gain_sweep,
+    build_e5_fault_campaign,
+    build_e5_replay,
+    compare_schedulers,
+    determinism_comparison,
+    gain_surface,
+    replay_matches,
+)
+from acav.campaign_runner import (
+    CommandLauncher,
+    RunnerOptions,
+    check_record,
+    run_campaign,
+)
+from acav.fault_injection import WheelFault
+from acav.metrics import CaptureOutcome, RunResult, TargetResult
+from acav.run_record import Provenance, RunRecord, write_record
+
+WINDOW = 720.0
+
+
+def _result(run_id, seed=None, scheduler="dynamics_aware", error=0.2,
+            captured=True):
+    outcome = (CaptureOutcome.CAPTURED if captured
+               else CaptureOutcome.NOT_SETTLED)
+    return RunResult(
+        run_id=run_id, scheduler=scheduler, seed=seed,
+        targets=[TargetResult(target_id="T1", attempted=True,
+                              outcome=outcome, image_time_s=120.0,
+                              error_at_image_deg=error,
+                              max_error_in_hold_deg=error)])
+
+
+def _record(run_id, *, backend="com", mode=LOCKSTEP, seed=None,
+            scheduler="dynamics_aware", error=0.2, captured=True,
+            gains=None, fault=None):
+    return RunRecord(
+        result=_result(run_id, seed, scheduler, error, captured),
+        provenance=Provenance(backend_type=backend, execution_mode=mode,
+                              gains=gains or {}, fault=fault))
+
+
+class TestRunIdentity:
+    def test_the_id_is_derived_from_the_configuration(self):
+        run = RunSpec(experiment="E4", gains={
+            "natural_frequency_rad_s": 1.0, "profile_authority": 0.8})
+        assert run.run_id == "E4-dynamics_aware-lockstep-wn1-auth0p8"
+
+    def test_gain_tags_stay_filename_safe_and_distinct(self):
+        ids = {RunSpec(experiment="E4",
+                       gains={"natural_frequency_rad_s": value}).run_id
+               for value in (0.4, 0.75, 1.0, 1.25, 1.6)}
+        assert len(ids) == 5
+        assert all(not set(i) & set(r'/\ .:*?"<>|') for i in ids)
+
+    def test_the_id_is_stable_when_other_runs_are_inserted(self):
+        """Positional ids renumber on insertion and silently repoint
+        every result file an earlier campaign wrote. They are also what
+        makes resume possible at all."""
+        one = build_e3_determinism(repeats=2)
+        two = build_e3_determinism(repeats=3)
+        shared = {r.run_id for r in one.runs} & {r.run_id for r in two.runs}
+        assert len(shared) == len(one.runs)
+
+    def test_duplicate_run_ids_are_refused(self):
+        run = RunSpec(experiment="E2")
+        with pytest.raises(ValueError, match="duplicate run id"):
+            Campaign("c", "E2", "", runs=(run, run))
+
+    def test_an_unknown_gain_is_refused(self):
+        """A gain the twin does not have would be swept over with no
+        effect, producing a flat surface that looks like a finding."""
+        with pytest.raises(ValueError, match="unknown gain"):
+            RunSpec(experiment="E4", gains={"stiffness": 1.0})
+
+
+class TestMatrices:
+    def test_e2_pairs_the_two_schedulers(self):
+        campaign = build_e2_scheduler_comparison()
+        assert {r.scheduler for r in campaign.runs} == {
+            "kinematic", "dynamics_aware"}
+
+    def test_e3_varies_only_the_execution_mode(self):
+        campaign = build_e3_determinism(repeats=20)
+        assert len(campaign) == 40
+        assert sum(1 for r in campaign.runs if r.execution_mode == LOCKSTEP) \
+            == 20
+        assert sum(1 for r in campaign.runs if r.execution_mode == FREE_RUN) \
+            == 20
+        # Same seeds on both sides: if a free-run batch does come out
+        # identical it must be because the loop was deterministic, not
+        # because nothing in it varied.
+        lockstep = sorted(r.seed for r in campaign.runs
+                          if r.execution_mode == LOCKSTEP)
+        free = sorted(r.seed for r in campaign.runs
+                      if r.execution_mode == FREE_RUN)
+        assert lockstep == free
+
+    def test_e3_refuses_a_single_repeat(self):
+        with pytest.raises(ValueError, match="spread"):
+            build_e3_determinism(repeats=1)
+
+    def test_e4_defaults_to_the_forty_nine_run_grid(self):
+        campaign = build_e4_gain_sweep()
+        assert len(campaign) == 49
+        assert len({r.run_id for r in campaign.runs}) == 49
+
+    def test_e5_resolves_every_fault_before_anything_runs(self):
+        campaign = build_e5_fault_campaign([1, 2, 3], WINDOW)
+        assert all(r.fault is not None for r in campaign.runs)
+        assert {r.fault.seed for r in campaign.runs} == {1, 2, 3}
+
+    def test_e5_needs_seeds(self):
+        with pytest.raises(ValueError, match="seed"):
+            build_e5_fault_campaign([], WINDOW)
+
+
+class TestReplayMatrix:
+    def test_replay_carries_the_recorded_fault_not_the_rule(self):
+        """If the replay re-derived the fault from the seed, a change to
+        the sampling rule would turn a genuine reproduction into a
+        silent mismatch for every historical result."""
+        recorded = {"axis": 2, "at_s": 61.5, "health": 0.0, "seed": 4}
+        original = _record("E5-seed4", seed=4, fault=recorded)
+
+        replay = build_e5_replay([original])
+        assert len(replay) == 1
+        assert replay.runs[0].fault == WheelFault(axis=2, at_s=61.5, seed=4)
+        assert replay.runs[0].replay_of == "E5-seed4"
+
+    def test_replaying_nothing_is_an_error(self):
+        with pytest.raises(ValueError, match="nothing to replay"):
+            build_e5_replay([])
+
+    def test_matching_signatures_count_as_reproduction(self):
+        fault = {"axis": 0, "at_s": 10.0, "health": 0.0, "seed": 1}
+        original = _record("a", fault=fault)
+        replay = _record("a-replay", fault=fault)
+        assert replay_matches(original, replay).reproduced
+
+    def test_a_differing_signature_is_not_reproduction(self):
+        fault = {"axis": 0, "at_s": 10.0, "health": 0.0, "seed": 1}
+        original = _record("a", fault=fault, error=0.2)
+        replay = _record("a-replay", fault=fault, error=0.9)
+        check = replay_matches(original, replay)
+        assert not check.reproduced
+        assert "signatures differ" in check.detail
+
+    def test_a_replay_of_a_different_fault_is_not_reproduction(self):
+        """Even when the signatures agree. A match there says the fault
+        made no difference, not that the run was reproduced."""
+        original = _record("a", fault={"axis": 0, "at_s": 10.0,
+                                       "health": 0.0, "seed": 1})
+        replay = _record("a-replay", fault={"axis": 1, "at_s": 500.0,
+                                            "health": 0.0, "seed": 1})
+        check = replay_matches(original, replay)
+        assert not check.reproduced
+        assert "different fault" in check.detail
+
+
+class TestAggregation:
+    def test_determinism_is_grouped_by_the_observed_mode(self):
+        """A run that asked for lockstep and fell back to free-run
+        belongs in the free-run group. Grouping by what was requested
+        would report determinism for a batch that was not all
+        lockstep."""
+        records = [
+            _record("a", mode=LOCKSTEP, error=0.2),
+            _record("b", mode=LOCKSTEP, error=0.2),
+            _record("c", mode=FREE_RUN, error=0.3),
+            _record("d", mode=FREE_RUN, error=0.4),
+        ]
+        report = determinism_comparison(records)
+
+        assert report[LOCKSTEP]["deterministic"] is True
+        assert report[LOCKSTEP]["distinct_signatures"] == 1
+        assert report[FREE_RUN]["deterministic"] is False
+        assert report[FREE_RUN]["distinct_signatures"] == 2
+
+    def test_the_gain_surface_is_sorted_for_plotting(self):
+        records = [
+            _record("hi", gains={"natural_frequency_rad_s": 1.4}),
+            _record("lo", gains={"natural_frequency_rad_s": 0.4}),
+        ]
+        surface = gain_surface(records, total_targets=7)
+        assert [p["run_id"] for p in surface] == ["lo", "hi"]
+        assert surface[0]["capture_rate"] == pytest.approx(1.0)
+
+    def test_scheduler_comparison_reports_both_rates(self):
+        """Capture rate alone flatters a scheduler that attempts one
+        easy target, so coverage is always reported beside it."""
+        records = [
+            _record("k", scheduler="kinematic", captured=False),
+            _record("d", scheduler="dynamics_aware", captured=True),
+        ]
+        summary = compare_schedulers(records, total_targets=7)
+
+        assert summary["kinematic"]["capture_rate"] == pytest.approx(0.0)
+        assert summary["dynamics_aware"]["capture_rate"] == pytest.approx(1.0)
+        assert summary["kinematic"]["coverage_rate"] == pytest.approx(0.0)
+        assert summary["kinematic"]["over_promise_gap"] == pytest.approx(1.0)
+        assert "coverage_difference" in summary
+
+
+# ---------------------------------------------------------------------------
+# The runner loop
+# ---------------------------------------------------------------------------
+
+def _writing_launcher(**overrides):
+    """A launcher that writes a plausible record for the run it is given."""
+    def launch(run, campaign, output_path):
+        result = RunResult(run_id=overrides.get("run_id", run.run_id),
+                           scheduler=overrides.get("scheduler",
+                                                   run.scheduler),
+                           seed=overrides.get("seed", run.seed),
+                           targets=[TargetResult(
+                               target_id="T1", attempted=True,
+                               outcome=CaptureOutcome.CAPTURED,
+                               image_time_s=1.0, error_at_image_deg=0.1,
+                               max_error_in_hold_deg=0.1)])
+        provenance = Provenance(
+            backend_type="com", execution_mode=run.execution_mode,
+            gains=dict(run.gains),
+            fault=None if run.fault is None else run.fault.to_dict())
+        write_record(output_path,
+                     RunRecord(result=result, provenance=provenance,
+                               experiment=run.experiment))
+    return launch
+
+
+class TestRunnerLoop:
+    def _campaign(self):
+        return Campaign("c", "E2", "", runs=(
+            RunSpec(experiment="E2", scheduler="kinematic"),
+            RunSpec(experiment="E2", scheduler="dynamics_aware")))
+
+    def test_a_completed_campaign_collects_every_record(self, tmp_path):
+        outcome = run_campaign(self._campaign(), _writing_launcher(),
+                               RunnerOptions(output_dir=str(tmp_path)))
+        assert outcome.complete
+        assert len(outcome.records) == 2
+        assert not outcome.failed
+
+    def test_a_manifest_is_written_beside_the_results(self, tmp_path):
+        run_campaign(self._campaign(), _writing_launcher(),
+                     RunnerOptions(output_dir=str(tmp_path)))
+        assert os.path.exists(tmp_path / "campaign.json")
+
+    def test_resume_skips_runs_already_on_disk(self, tmp_path):
+        launched = []
+
+        def counting(run, campaign, path):
+            launched.append(run.run_id)
+            _writing_launcher()(run, campaign, path)
+
+        options = RunnerOptions(output_dir=str(tmp_path))
+        run_campaign(self._campaign(), counting, options)
+        assert len(launched) == 2
+
+        second = run_campaign(self._campaign(), counting, options)
+        assert len(launched) == 2            # nothing re-launched
+        assert len(second.records) == 2      # but everything collected
+
+    def test_a_launcher_that_writes_nothing_is_a_failure(self, tmp_path):
+        """Not an empty result. Scoring a launch problem as a run that
+        captured nothing would put infrastructure faults into the
+        study's headline metric."""
+        outcome = run_campaign(self._campaign(), lambda *_: None,
+                               RunnerOptions(output_dir=str(tmp_path)))
+        assert not outcome.complete
+        assert outcome.records == []
+        assert all(o.status == "failed" for o in outcome.outcomes)
+        assert "wrote no record" in outcome.outcomes[0].detail
+
+    def test_a_raising_launcher_costs_one_run_not_the_campaign(self, tmp_path):
+        def flaky(run, campaign, path):
+            if run.scheduler == "kinematic":
+                raise RuntimeError("STK did not start")
+            _writing_launcher()(run, campaign, path)
+
+        outcome = run_campaign(self._campaign(), flaky,
+                               RunnerOptions(output_dir=str(tmp_path)))
+        assert len(outcome.records) == 1
+        assert len(outcome.failed) == 1
+
+    def test_stop_on_error_halts_the_campaign(self, tmp_path):
+        outcome = run_campaign(
+            self._campaign(), lambda *_: (_ for _ in ()).throw(
+                RuntimeError("boom")),
+            RunnerOptions(output_dir=str(tmp_path), stop_on_error=True))
+        assert len(outcome.outcomes) == 1
+
+    def test_a_dry_run_launches_nothing_but_writes_the_manifest(self,
+                                                                tmp_path):
+        launched = []
+        outcome = run_campaign(
+            self._campaign(), lambda *a: launched.append(a),
+            RunnerOptions(output_dir=str(tmp_path), dry_run=True))
+        assert launched == []
+        assert os.path.exists(tmp_path / "campaign.json")
+        assert all(o.status == "skipped" for o in outcome.outcomes)
+
+
+class TestRecordValidation:
+    def test_a_record_with_the_wrong_seed_is_not_merged(self, tmp_path):
+        """The specific harness fault that would make E5 report
+        reproduction of something other than what it replayed."""
+        campaign = Campaign("c", "E5", "", runs=(
+            RunSpec(experiment="E5", seed=4,
+                    fault=WheelFault(axis=0, at_s=10.0, seed=4)),))
+
+        outcome = run_campaign(campaign, _writing_launcher(seed=99),
+                               RunnerOptions(output_dir=str(tmp_path)))
+        assert outcome.records == []
+        assert "seed" in outcome.failed[0].mismatches[0]
+
+    def test_a_mismatched_record_on_disk_is_not_resumed_over(self, tmp_path):
+        campaign = Campaign("c", "E5", "", runs=(
+            RunSpec(experiment="E5", seed=4),))
+        options = RunnerOptions(output_dir=str(tmp_path))
+
+        run_campaign(campaign, _writing_launcher(seed=99), options)
+        relaunched = []
+
+        def counting(run, c, path):
+            relaunched.append(run.run_id)
+            _writing_launcher()(run, c, path)
+
+        run_campaign(campaign, counting, options)
+        assert relaunched            # re-run rather than trusted
+
+    def test_a_matching_record_reports_no_mismatches(self):
+        run = RunSpec(experiment="E4", seed=1,
+                      gains={"natural_frequency_rad_s": 1.0})
+        record = _record(run.run_id, seed=1,
+                         gains={"natural_frequency_rad_s": 1.0})
+        assert check_record(run, record) == []
+
+    def test_wrong_gains_are_caught(self):
+        run = RunSpec(experiment="E4", gains={"profile_authority": 0.8})
+        record = _record(run.run_id, gains={"profile_authority": 0.6})
+        assert any("profile_authority" in m for m in check_record(run, record))
+
+    def test_the_execution_mode_is_deliberately_not_checked(self):
+        """A bridge that fell back to free-run produced a real run in
+        the mode it reports, and E3 groups by the observed mode so that
+        it is counted where it belongs rather than discarded."""
+        run = RunSpec(experiment="E3", execution_mode=LOCKSTEP)
+        record = _record(run.run_id, mode=FREE_RUN)
+        assert check_record(run, record) == []
+
+
+class TestCommandLauncher:
+    def test_the_run_configuration_is_substituted_into_the_command(self,
+                                                                   tmp_path):
+        marker = tmp_path / "out.json"
+        launcher = CommandLauncher([
+            "python", "-c",
+            "import sys, pathlib; pathlib.Path(sys.argv[1]).write_text("
+            "sys.argv[2])",
+            "{output}", "{scheduler}"])
+        run = RunSpec(experiment="E2", scheduler="kinematic")
+        launcher(run, Campaign("c", "E2", "", runs=(run,)), str(marker))
+        assert marker.read_text() == "kinematic"
+
+    def test_a_failing_command_raises(self, tmp_path):
+        launcher = CommandLauncher(["python", "-c", "raise SystemExit(3)"])
+        run = RunSpec(experiment="E2")
+        with pytest.raises(RuntimeError, match="exited 3"):
+            launcher(run, Campaign("c", "E2", "", runs=(run,)),
+                     str(tmp_path / "x.json"))
+
+    def test_an_empty_command_is_refused(self):
+        with pytest.raises(ValueError, match="launch command"):
+            CommandLauncher([])
