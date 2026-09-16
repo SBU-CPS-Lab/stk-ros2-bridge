@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 700" width="960" height="700"
+     font-family="DejaVu Sans, Arial, Helvetica, sans-serif">
+  <title>STK &#8596; ROS 2 bridge -- runtime architecture</title>
+  <desc>
+    Three-tier runtime: the MATLAB/Simulink digital twin talks to
+    stk_bridge_node over ROS 2 topics/services; stk_bridge_node's
+    interfaces/core/backends layers talk to STK 12.6 over one of three
+    swappable backends (COM, Engine, Connect). Hand-authored to match
+    docs/00_architecture.md section 3's ASCII diagram.
+  </desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#52514e"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="700" fill="#fcfcfb"/>
+
+  <text x="480" y="34" text-anchor="middle" font-size="20" font-weight="700"
+        fill="#0b0b0b">STK &#8596; ROS 2 bridge — runtime architecture</text>
+
+  <!-- MATLAB / Simulink twin -->
+  <rect x="210" y="60" width="540" height="92" rx="10" fill="#fcfcfb"
+        stroke="#4a3aa7" stroke-width="2.2"/>
+  <text x="480" y="88" text-anchor="middle" font-size="15" font-weight="700"
+        fill="#0b0b0b">MATLAB / Simulink — digital twin</text>
+  <text x="480" y="112" text-anchor="middle" font-size="12.5" fill="#898781">
+    dynamics · ADCS · FDIR · estimators</text>
+  <text x="480" y="132" text-anchor="middle" font-size="12.5" fill="#898781">
+    ROS Toolbox: publish / subscribe / service blocks</text>
+
+  <!-- Bridge outer box -->
+  <rect x="140" y="250" width="680" height="270" rx="10" fill="#fcfcfb"
+        stroke="#2a78d6" stroke-width="2.2"/>
+  <text x="480" y="278" text-anchor="middle" font-size="15" font-weight="700"
+        fill="#0b0b0b">stk_bridge_node (rclpy)</text>
+
+  <!-- interfaces/ -->
+  <rect x="170" y="296" width="620" height="54" rx="6" fill="#f5f4f1"
+        stroke="#c3c2b7" stroke-width="1.2"/>
+  <text x="185" y="316" font-size="13" font-weight="700" fill="#0b0b0b">interfaces/</text>
+  <text x="185" y="336" font-size="12" fill="#898781">
+    publishers · subscribers · services · actions · tf</text>
+
+  <!-- core/ -->
+  <rect x="170" y="360" width="620" height="88" rx="6" fill="#f5f4f1"
+        stroke="#c3c2b7" stroke-width="1.2"/>
+  <text x="185" y="380" font-size="13" font-weight="700" fill="#0b0b0b">core/</text>
+  <text x="185" y="402" font-size="12" fill="#898781">
+    time_sync (CLOCK AUTHORITY) · rate_group · sensing · actuation</text>
+  <text x="185" y="422" font-size="12" fill="#898781">
+    scenario_manager · frames · conversions · health</text>
+
+  <!-- backends/ -->
+  <rect x="170" y="458" width="620" height="44" rx="6" fill="#f5f4f1"
+        stroke="#c3c2b7" stroke-width="1.2"/>
+  <text x="185" y="476" font-size="13" font-weight="700" fill="#0b0b0b">backends/</text>
+  <text x="185" y="494" font-size="12" fill="#898781">
+    StkBackend (abstract) — com · engine · connect</text>
+
+  <!-- STK -->
+  <rect x="180" y="590" width="600" height="90" rx="10" fill="#fcfcfb"
+        stroke="#1baf7a" stroke-width="2.2"/>
+  <text x="480" y="618" text-anchor="middle" font-size="15" font-weight="700"
+        fill="#0b0b0b">STK 12.6 (2023 R1)</text>
+  <text x="480" y="642" text-anchor="middle" font-size="12.5" fill="#898781">
+    Data Providers · Real-time propagator · SetPosition</text>
+  <text x="480" y="660" text-anchor="middle" font-size="12.5" fill="#898781">
+    external .e/.a ephemeris · Access</text>
+
+  <!-- MATLAB <-> bridge arrows -->
+  <line x1="340" y1="250" x2="340" y2="152" stroke="#52514e" stroke-width="1.6"
+        marker-end="url(#arrow)"/>
+  <text x="328" y="196" text-anchor="end" font-size="11.5" fill="#52514e">/stk/telemetry/*</text>
+  <text x="328" y="211" text-anchor="end" font-size="11.5" fill="#52514e">/clock, /tf</text>
+
+  <line x1="620" y1="152" x2="620" y2="250" stroke="#52514e" stroke-width="1.6"
+        marker-end="url(#arrow)"/>
+  <text x="632" y="196" text-anchor="start" font-size="11.5" fill="#52514e">/stk/cmd/*</text>
+  <text x="632" y="211" text-anchor="start" font-size="11.5" fill="#52514e">services · actions</text>
+
+  <!-- backends -> STK fan, one arrow per backend -->
+  <line x1="280" y1="502" x2="280" y2="590" stroke="#52514e" stroke-width="1.6"
+        marker-end="url(#arrow)"/>
+  <rect x="262" y="540" width="36" height="16" fill="#fcfcfb"/>
+  <text x="280" y="552" text-anchor="middle" font-size="12" fill="#52514e">com</text>
+
+  <line x1="480" y1="502" x2="480" y2="590" stroke="#52514e" stroke-width="1.6"
+        marker-end="url(#arrow)"/>
+  <rect x="455" y="540" width="50" height="16" fill="#fcfcfb"/>
+  <text x="480" y="552" text-anchor="middle" font-size="12" fill="#52514e">engine</text>
+
+  <line x1="680" y1="502" x2="680" y2="590" stroke="#52514e" stroke-width="1.6"
+        marker-end="url(#arrow)"/>
+  <rect x="652" y="540" width="56" height="16" fill="#fcfcfb"/>
+  <text x="680" y="552" text-anchor="middle" font-size="12" fill="#52514e">connect</text>
+</svg>
