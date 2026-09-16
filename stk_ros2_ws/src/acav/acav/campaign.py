@@ -346,6 +346,34 @@ def build_e5_fault_campaign(seeds: Sequence[int], window_duration_s: float,
         runs=tuple(runs), scenario_path=scenario_path, backend=backend)
 
 
+def build_e6_latency(repeats: int = 5, scenario_path: str = "",
+                     backend: str = "com",
+                     scheduler: str = "dynamics_aware") -> Campaign:
+    """E6: what does the loop cost, broken down by phase.
+
+    Identical lockstep runs, repeated -- not to compare anything, but
+    because a single run's mean can catch one slow moment (a GC pause,
+    a disk stall) that a few repeats average out. C1 section 8 commits
+    the paper to reporting a MEASURED latency breakdown rather than an
+    implied step rate, which is what makes this experiment about
+    transparency rather than a performance claim.
+    """
+    if repeats < 1:
+        raise ValueError("E6 needs at least one run to measure anything")
+    runs = tuple(
+        RunSpec(experiment="E6", scheduler=scheduler, execution_mode=LOCKSTEP,
+               seed=index, notes="identical configuration, repeated for a "
+                                  "stable latency mean")
+        for index in range(repeats))
+    return Campaign(
+        campaign_id=f"E6_latency_{repeats}x",
+        experiment="E6",
+        description=(f"{repeats} identical lockstep run(s), measuring the "
+                     f"bridge's own sense/actuate/barrier-wait breakdown "
+                     f"and the achieved step rate."),
+        runs=runs, scenario_path=scenario_path, backend=backend)
+
+
 def build_e5_replay(records: Sequence[RunRecord],
                     scenario_path: str = "",
                     backend: str = "com") -> Campaign:
@@ -484,6 +512,65 @@ def compare_schedulers(records: Sequence[RunRecord],
         summary["coverage_difference"] = (
             summary["dynamics_aware"]["coverage_rate"]
             - summary["kinematic"]["coverage_rate"])
+    return summary
+
+
+def latency_breakdown(records: Sequence[RunRecord]) -> Dict[str, Any]:
+    """E6's answer: the phase breakdown and the achieved step rate.
+
+    Unreportable runs (see acav.run_record) are excluded up front,
+    matching every other aggregation function here -- a latency number
+    measured against the mock says nothing about the deploy machine's
+    real STK round trip, which is the entire quantity E6 exists to
+    report.
+    """
+    usable = [r for r in records if r.reportable]
+    return {
+        "runs": len(usable),
+        "excluded_unreportable": len(records) - len(usable),
+        "mean_step_latency_ms": _mean(
+            r.result.mean_step_latency_ms for r in usable),
+        "mean_sense_latency_ms": _mean(
+            r.result.mean_sense_latency_ms for r in usable),
+        "mean_actuate_latency_ms": _mean(
+            r.result.mean_actuate_latency_ms for r in usable),
+        "mean_barrier_wait_ms": _mean(
+            r.result.mean_barrier_wait_ms for r in usable),
+    }
+
+
+def convention_comparison(records: Sequence[RunRecord],
+                          total_targets: int) -> Dict[str, Any]:
+    """E1's answer: capture rate with vs without the mis-paired provider.
+
+    Split by whether ``Provenance.attitude_provider`` was forced, NOT by
+    scheduler -- both of E1's runs use the same scheduler on purpose
+    (see :func:`build_e1_convention`'s own docstring: only the read-back
+    provider is meant to vary), so grouping by scheduler the way
+    :func:`compare_schedulers` does would collapse E1's two runs into
+    one group and hide exactly the comparison the experiment exists to
+    make.
+    """
+    control = [r for r in records if not r.provenance.attitude_provider]
+    treatment = [r for r in records if r.provenance.attitude_provider]
+
+    def _group(group: List[RunRecord]) -> Dict[str, Any]:
+        return {
+            "runs": len(group),
+            "capture_rate": _mean(capture_rate(r.result) for r in group),
+            "coverage_rate": _mean(coverage_rate(r.result, total_targets)
+                                   for r in group),
+            "outcomes": _merge_counts(outcome_breakdown(r.result)
+                                      for r in group),
+        }
+
+    summary: Dict[str, Any] = {}
+    if control:
+        summary["control"] = _group(control)
+    if treatment:
+        summary["treatment"] = _group(treatment)
+        summary["forced_provider"] = sorted({
+            r.provenance.attitude_provider for r in treatment})
     return summary
 
 

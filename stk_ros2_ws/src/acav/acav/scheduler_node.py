@@ -64,8 +64,8 @@ from stk_bridge.core import conversions as conv
 from stk_bridge.core import data_providers as dp
 from stk_bridge.exceptions import StkBridgeError
 
-from acav.capture_tracking import CaptureTracker, RunAggregate, \
-    TelemetrySample, declined_result
+from acav.capture_tracking import CaptureTracker, LatencyAggregate, \
+    RunAggregate, TelemetrySample, declined_result
 from acav.metrics import RunResult, TargetResult
 from acav.scheduling import ScheduleEntry, SchedulePlan, plan
 from acav.spec import AcavSpec
@@ -239,6 +239,7 @@ class SchedulerNode:
 
         self._aggregate = RunAggregate(
             momentum_capacity_Nms=spec.actuators.momentum_capacity_Nms)
+        self._latency = LatencyAggregate()
 
         # Wall-clock interval between scenario ticks, which in lockstep
         # IS the closed-loop step time: the barrier does not release
@@ -306,6 +307,15 @@ class SchedulerNode:
                         message.stk_version_string or "unknown")
         self._backend_type = backend or "unknown"
         self._stk_version = message.stk_version_string or ""
+
+        # E6's breakdown. Observed unconditionally, on every status
+        # message, not just during a designated "E6 run" -- it costs
+        # nothing to accumulate and means a campaign never has to be
+        # re-run just because someone later wants the latency figure for
+        # a run that was launched for a different experiment.
+        self._latency.observe(
+            message.mean_sense_ms, message.mean_actuate_ms,
+            message.mean_barrier_wait_ms, message.step_samples)
 
     def _on_scenario_time(self, message) -> None:
         import time
@@ -601,6 +611,7 @@ class SchedulerNode:
             seed=self._options.seed,
         )
         self._aggregate.apply_to(result)
+        self._latency.apply_to(result)
         if self._tick_intervals_ms:
             result.mean_step_latency_ms = (
                 sum(self._tick_intervals_ms) / len(self._tick_intervals_ms))

@@ -130,6 +130,62 @@ class RunAggregate:
         result.wheel_energy_J = self.wheel_energy_J
 
 
+@dataclass
+class LatencyAggregate:
+    """E6's latency breakdown, accumulated from the bridge's own timing.
+
+    Each ``BridgeStatus`` sample already carries a MEAN over its own 1 Hz
+    window (``stk_bridge.core.step_timing``); this takes the mean of
+    those per-window means, weighted by how many step-loop iterations
+    fed each window. Weighting matters because a window can be short --
+    the first status published after a run starts may cover only one or
+    two steps -- and an unweighted average would let that thin window
+    count as much as a full second's worth of steady-state timing.
+
+    Separate from :class:`RunAggregate`: that one is driven by the
+    TWIN's telemetry (``TwinStatus``), this one by the BRIDGE's
+    (``BridgeStatus``). Different message, different publisher, no
+    reason to force them into one accumulator.
+    """
+
+    sense_ms_weighted: float = 0.0
+    actuate_ms_weighted: float = 0.0
+    barrier_wait_ms_weighted: float = 0.0
+    weight: int = 0
+
+    def observe(self, mean_sense_ms: float, mean_actuate_ms: float,
+                mean_barrier_wait_ms: float, step_samples: int) -> None:
+        """One ``BridgeStatus`` sample's timing window.
+
+        A window with ``step_samples == 0`` is skipped rather than
+        averaged in at weight zero: it carries no information (the
+        bridge had nothing to time yet), and NaN-guarding a zero-weight
+        contribution everywhere it could appear is more code than just
+        not observing it.
+        """
+        if step_samples <= 0:
+            return
+        self.sense_ms_weighted += mean_sense_ms * step_samples
+        self.actuate_ms_weighted += mean_actuate_ms * step_samples
+        self.barrier_wait_ms_weighted += mean_barrier_wait_ms * step_samples
+        self.weight += step_samples
+
+    def apply_to(self, result) -> None:
+        """Write the weighted means onto a :class:`RunResult`.
+
+        Leaves the result's defaults (NaN) untouched if nothing was ever
+        observed, rather than writing 0.0 -- a run where the bridge
+        never reported timing is "unmeasured", not "instant".
+        """
+        if self.weight == 0:
+            return
+        result.mean_sense_latency_ms = self.sense_ms_weighted / self.weight
+        result.mean_actuate_latency_ms = (
+            self.actuate_ms_weighted / self.weight)
+        result.mean_barrier_wait_ms = (
+            self.barrier_wait_ms_weighted / self.weight)
+
+
 def declined_result(entry: DeclinedEntry) -> TargetResult:
     """The trivial outcome for a target the scheduler never attempted."""
     return TargetResult(

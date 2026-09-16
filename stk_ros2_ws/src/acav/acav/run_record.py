@@ -226,6 +226,9 @@ def _result_to_dict(result: RunResult) -> Dict[str, Any]:
         "wheel_energy_J": _num(result.wheel_energy_J),
         "dropped_attitude_samples": result.dropped_attitude_samples,
         "mean_step_latency_ms": _num(result.mean_step_latency_ms),
+        "mean_sense_latency_ms": _num(result.mean_sense_latency_ms),
+        "mean_actuate_latency_ms": _num(result.mean_actuate_latency_ms),
+        "mean_barrier_wait_ms": _num(result.mean_barrier_wait_ms),
         "targets": [
             {
                 "target_id": t.target_id,
@@ -275,6 +278,10 @@ def _result_from_dict(raw: Dict[str, Any]) -> RunResult:
         wheel_energy_J=_from_num(raw.get("wheel_energy_J")),
         dropped_attitude_samples=int(raw.get("dropped_attitude_samples", 0)),
         mean_step_latency_ms=_from_num(raw.get("mean_step_latency_ms")),
+        mean_sense_latency_ms=_from_num(raw.get("mean_sense_latency_ms")),
+        mean_actuate_latency_ms=_from_num(
+            raw.get("mean_actuate_latency_ms")),
+        mean_barrier_wait_ms=_from_num(raw.get("mean_barrier_wait_ms")),
         seed=None if seed is None else int(seed),
     )
 

@@ -6,6 +6,7 @@ that can be established before it starts is established here.
 """
 
 import json
+import math
 import os
 
 import pytest
@@ -22,9 +23,11 @@ from acav.campaign import (
     build_e4_gain_sweep,
     build_e5_fault_campaign,
     build_e5_replay,
+    build_e6_latency,
     compare_schedulers,
     determinism_comparison,
     gain_surface,
+    latency_breakdown,
     replay_matches,
 )
 from acav.campaign_runner import (
@@ -493,3 +496,98 @@ class TestRunConfigDelivery:
         launcher(run, Campaign("c", "E5", "", runs=(run,)), str(target))
 
         assert target.read_text() == str(tmp_path / "out.runconfig.json")
+
+
+class TestE6Latency:
+    def test_repeats_are_identical_but_for_seed(self):
+        campaign = build_e6_latency(repeats=5)
+        assert len(campaign) == 5
+        assert len({r.execution_mode for r in campaign.runs}) == 1
+        assert {r.execution_mode for r in campaign.runs} == {LOCKSTEP}
+        assert {r.seed for r in campaign.runs} == {0, 1, 2, 3, 4}
+
+    def test_at_least_one_run_is_required(self):
+        with pytest.raises(ValueError, match="at least one"):
+            build_e6_latency(repeats=0)
+
+    def test_latency_breakdown_excludes_unreportable_runs(self):
+        """A latency number from the mock says nothing about the deploy
+        machine's real STK round trip, which is the entire point."""
+        records = [
+            _record("real", backend="com"),
+            _record("mock", backend="mock"),
+        ]
+        # give the reportable one a real number to average
+        records[0].result.mean_sense_latency_ms = 4.0
+        records[1].result.mean_sense_latency_ms = 999.0
+
+        breakdown = latency_breakdown(records)
+        assert breakdown["runs"] == 1
+        assert breakdown["excluded_unreportable"] == 1
+        assert breakdown["mean_sense_latency_ms"] == pytest.approx(4.0)
+
+    def test_an_empty_campaign_reports_nan_not_zero(self):
+        breakdown = latency_breakdown([])
+        assert breakdown["runs"] == 0
+        assert math.isnan(breakdown["mean_sense_latency_ms"])
+
+
+class TestReportCliFigures:
+    """The `report` verb's figure generation -- see campaign_cli.py."""
+
+    def _campaign_dir(self, tmp_path):
+        campaign = Campaign("c", "E2", "", runs=(
+            RunSpec(experiment="E2", scheduler="kinematic"),
+            RunSpec(experiment="E2", scheduler="dynamics_aware")))
+        run_campaign(campaign, _writing_launcher(), RunnerOptions(
+            output_dir=str(tmp_path)))
+        return campaign
+
+    def test_runconfig_files_are_not_mistaken_for_records(self, tmp_path):
+        """Both *.json and *.runconfig.json live in the output directory
+        (see campaign_runner.write_run_config); a naive *.json glob
+        would try to read the run-config as a record and fail every
+        run in the campaign."""
+        from acav.campaign_cli import load_results
+
+        self._campaign_dir(tmp_path)
+        assert any(tmp_path.glob("*.runconfig.json"))   # the fixture exists
+        records = load_results(str(tmp_path))
+        assert len(records) == 2
+
+    def test_make_figure_e2_returns_two_named_figures(self, tmp_path):
+        from acav.campaign_cli import analyse, load_results, make_figure
+
+        self._campaign_dir(tmp_path)
+        records = load_results(str(tmp_path))
+        report = analyse("E2", records, total_targets=1)
+        figures = make_figure("E2", report, records, total_targets=1)
+        assert set(figures) == {"capture_coverage", "outcomes"}
+
+    def test_write_figures_survives_a_missing_matplotlib(self, tmp_path,
+                                                          monkeypatch):
+        """A colleague running `report` for the JSON alone must not lose
+        that because a plotting library is not installed."""
+        import builtins
+
+        from acav.campaign_cli import _write_figures
+
+        real_import = builtins.__import__
+
+        def blocking_import(name, *args, **kwargs):
+            if name == "acav.report_figures" or name.startswith("matplotlib"):
+                raise ImportError("simulated: matplotlib not installed")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", blocking_import)
+        _write_figures("E2", {}, [], 1, str(tmp_path))   # must not raise
+        assert not (tmp_path / "figures").exists()
+
+    def test_write_figures_does_not_fail_the_report_on_a_bad_input(
+            self, tmp_path):
+        """A malformed report dict should not take the whole `report`
+        verb down with it -- the JSON already printed is the valuable
+        part."""
+        from acav.campaign_cli import _write_figures
+
+        _write_figures("E4", {"surface": "not a list"}, [], 1, str(tmp_path))

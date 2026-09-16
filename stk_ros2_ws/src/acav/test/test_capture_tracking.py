@@ -8,12 +8,15 @@ bookkeeping cannot silently misattribute a sample or drop one that was
 still needed.
 """
 
+import math
+
 import pytest
 
 from acav.capture_tracking import (
     CaptureTracker,
     TelemetrySample,
     declined_result,
+    LatencyAggregate,
     RunAggregate,
 )
 from acav.metrics import RunResult, CaptureOutcome
@@ -230,3 +233,49 @@ class TestRunAggregate:
         RunAggregate(momentum_capacity_Nms=0.02).apply_to(result)
         assert result.peak_momentum_fraction == (0.0, 0.0, 0.0)
         assert not result.entered_safe_mode
+
+
+class TestLatencyAggregate:
+    """E6's breakdown, accumulated from the bridge's own per-window means."""
+
+    def test_the_weighted_mean_favours_larger_windows(self):
+        """An unweighted average would let a thin first window (one or
+        two steps) count as much as a full second of steady state."""
+        aggregate = LatencyAggregate()
+        aggregate.observe(mean_sense_ms=100.0, mean_actuate_ms=0.0,
+                          mean_barrier_wait_ms=0.0, step_samples=1)
+        aggregate.observe(mean_sense_ms=10.0, mean_actuate_ms=0.0,
+                          mean_barrier_wait_ms=0.0, step_samples=99)
+        result = RunResult(run_id="r", scheduler="dynamics_aware")
+        aggregate.apply_to(result)
+        assert result.mean_sense_latency_ms == pytest.approx(10.9)
+
+    def test_a_window_with_no_samples_is_not_observed(self):
+        """It carries no information -- the bridge had nothing to time
+        yet -- so it must not dilute the weighted mean at weight zero."""
+        aggregate = LatencyAggregate()
+        aggregate.observe(mean_sense_ms=0.0, mean_actuate_ms=0.0,
+                          mean_barrier_wait_ms=0.0, step_samples=0)
+        aggregate.observe(mean_sense_ms=20.0, mean_actuate_ms=0.0,
+                          mean_barrier_wait_ms=0.0, step_samples=1)
+        result = RunResult(run_id="r", scheduler="dynamics_aware")
+        aggregate.apply_to(result)
+        assert result.mean_sense_latency_ms == pytest.approx(20.0)
+
+    def test_never_observed_leaves_the_defaults_nan_not_zero(self):
+        """Unmeasured is not the same as instant."""
+        result = RunResult(run_id="r", scheduler="dynamics_aware")
+        LatencyAggregate().apply_to(result)
+        assert math.isnan(result.mean_sense_latency_ms)
+        assert math.isnan(result.mean_actuate_latency_ms)
+        assert math.isnan(result.mean_barrier_wait_ms)
+
+    def test_all_three_phases_are_tracked_independently(self):
+        aggregate = LatencyAggregate()
+        aggregate.observe(mean_sense_ms=5.0, mean_actuate_ms=7.0,
+                          mean_barrier_wait_ms=9.0, step_samples=10)
+        result = RunResult(run_id="r", scheduler="dynamics_aware")
+        aggregate.apply_to(result)
+        assert result.mean_sense_latency_ms == pytest.approx(5.0)
+        assert result.mean_actuate_latency_ms == pytest.approx(7.0)
+        assert result.mean_barrier_wait_ms == pytest.approx(9.0)

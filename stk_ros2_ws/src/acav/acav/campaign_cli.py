@@ -44,12 +44,15 @@ from acav.campaign import (
     Campaign,
     build_e1_convention,
     build_e2_scheduler_comparison,
+    build_e6_latency,
     build_e3_determinism,
     build_e4_gain_sweep,
     build_e5_fault_campaign,
     compare_schedulers,
+    convention_comparison,
     determinism_comparison,
     gain_surface,
+    latency_breakdown,
 )
 from acav.campaign_runner import (
     CommandLauncher,
@@ -61,7 +64,7 @@ from acav.spec import AcavSpec
 
 LOGGER = logging.getLogger(__name__)
 
-EXPERIMENTS = ("E1", "E2", "E3", "E4", "E5")
+EXPERIMENTS = ("E1", "E2", "E3", "E4", "E5", "E6")
 
 
 def build_campaign(experiment: str, spec: AcavSpec, scenario_path: str,
@@ -76,6 +79,8 @@ def build_campaign(experiment: str, spec: AcavSpec, scenario_path: str,
     if experiment == "E4":
         return build_e4_gain_sweep(scenario_path=scenario_path,
                                    backend=backend)
+    if experiment == "E6":
+        return build_e6_latency(repeats, scenario_path, backend)
     if experiment == "E5":
         return build_e5_fault_campaign(
             list(range(seeds)), spec.window_duration_s,
@@ -93,7 +98,13 @@ def load_results(output_dir: str) -> List[RunRecord]:
     """
     records = []
     for path in sorted(glob.glob(os.path.join(output_dir, "*.json"))):
-        if os.path.basename(path) == "campaign.json":
+        name = os.path.basename(path)
+        # campaign.json is the manifest; *.runconfig.json is the E4/E5
+        # gain-and-fault input CommandLauncher writes BESIDE each
+        # result (see campaign_runner.write_run_config) -- both live in
+        # the same directory as the records and match *.json, but
+        # neither is one.
+        if name == "campaign.json" or name.endswith(".runconfig.json"):
             continue
         try:
             records.append(read_record(path))
@@ -131,7 +142,13 @@ def analyse(experiment: str, records: List[RunRecord],
         report["claim_holds"] = len(forced) > 0 and len(records) > len(forced)
         report["claim"] = ("a control and a mis-paired treatment both ran; "
                            "compare their capture rates")
-        report["schedulers"] = compare_schedulers(records, total_targets)
+        report["comparison"] = convention_comparison(records, total_targets)
+    elif experiment == "E6":
+        breakdown = latency_breakdown(records)
+        report["latency"] = breakdown
+        report["claim_holds"] = breakdown["runs"] > 0
+        report["claim"] = ("measured sense/actuate/barrier-wait breakdown "
+                           "from reportable runs only")
     elif experiment == "E5":
         faulted = [r for r in records if r.provenance.fault]
         safe = [r for r in faulted if r.result.entered_safe_mode]
@@ -172,6 +189,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--stop-on-error", action="store_true")
     parser.add_argument("--json", default="", metavar="PATH",
                         help="write the report as JSON as well as printing it")
+    parser.add_argument("--no-figures", action="store_true",
+                        help="report verb only: skip rendering a figure")
     parser.epilog = ("Everything after -- is the command that executes one "
                      "run; see acav.campaign_runner.CommandLauncher for the "
                      "placeholders it may contain.")
@@ -252,6 +271,49 @@ def _run(campaign: Campaign, args) -> int:
     return 0
 
 
+def make_figure(experiment: str, report: dict, records: List[RunRecord],
+                total_targets: int):
+    """The one figure ``experiment``'s question calls for, or None.
+
+    Takes the SAME aggregation dicts ``analyse`` already computed --
+    never re-derives a metric from the raw records -- so a figure and
+    the JSON report next to it can never disagree about a number.
+    """
+    from acav import report_figures as rf
+
+    if experiment == "E1":
+        return rf.e1_convention_figure(report.get("comparison", {}))
+    if experiment == "E2":
+        schedulers = report.get("schedulers", {})
+        return {"capture_coverage": rf.e2_capture_vs_coverage_figure(schedulers),
+               "outcomes": rf.e2_outcome_breakdown_figure(schedulers)}
+    if experiment == "E3":
+        return rf.e3_determinism_figure(report.get("determinism", {}))
+    if experiment == "E4":
+        return rf.e4_gain_surface_figure(report.get("surface", []))
+    if experiment == "E5":
+        from acav.campaign import replay_matches
+
+        # A replay's run_id is the original's with "-replay" appended --
+        # see RunSpec.run_id and build_e5_replay. Pairs are found that
+        # way rather than from provenance.fault alone, since matching
+        # faults is exactly what a genuine reproduction is supposed to
+        # produce and would pair even two UNRELATED runs that happened
+        # to share a fault. A directory holding only the original
+        # faulted runs (no replay verb run yet) has nothing to compare
+        # and reports "no data", not an error.
+        by_id = {r.result.run_id: r for r in records}
+        checks = [
+            replay_matches(record, by_id[f"{record.result.run_id}-replay"])
+            for record in records
+            if f"{record.result.run_id}-replay" in by_id
+        ]
+        return rf.e5_replay_figure(checks)
+    if experiment == "E6":
+        return rf.e6_latency_figure(report.get("latency", {}))
+    return None
+
+
 def _report(campaign: Campaign, args, total_targets: int) -> int:
     records = load_results(args.output_dir)
     if not records:
@@ -265,6 +327,10 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
         with open(args.json, "w", encoding="utf-8") as handle:
             handle.write(text)
             handle.write("\n")
+
+    if not args.no_figures:
+        _write_figures(args.experiment, report, records, total_targets,
+                       args.output_dir)
 
     if report["unreportable"]:
         LOGGER.error(
@@ -281,6 +347,44 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
         return 1
 
     return 0 if report.get("claim_holds", False) else 1
+
+
+def _write_figures(experiment: str, report: dict, records: List[RunRecord],
+                   total_targets: int, output_dir: str) -> None:
+    """Render this experiment's figure(s), or say clearly why not.
+
+    Never fatal to the report itself: a colleague running this to see
+    the JSON should not lose that because a plotting library is not
+    installed on their machine, or because matplotlib itself raised on
+    a genuinely malformed input. Either is logged and the verb's own
+    exit code -- which is about whether the experiment's CLAIM held --
+    is unaffected.
+    """
+    try:
+        from acav import report_figures as rf
+    except ImportError:
+        LOGGER.warning(
+            "matplotlib is not installed, so no figure was rendered. "
+            "pip install 'acav[figures]' (or plain matplotlib) to get "
+            "one; the JSON report above is unaffected.")
+        return
+
+    try:
+        figure = make_figure(experiment, report, records, total_targets)
+    except Exception as error:              # noqa: BLE001
+        LOGGER.warning("could not render a figure for %s: %s",
+                       experiment, error)
+        return
+    if figure is None:
+        return
+
+    figures_dir = os.path.join(output_dir, "figures")
+    if isinstance(figure, dict):
+        named = {f"{experiment}_{name}": fig for name, fig in figure.items()}
+    else:
+        named = {experiment: figure}
+    written = rf.save_all(named, figures_dir)
+    LOGGER.info("wrote %d figure file(s) to %s", len(written), figures_dir)
 
 
 def _refuse(run, campaign, path):

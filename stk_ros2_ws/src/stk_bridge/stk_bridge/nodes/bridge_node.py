@@ -98,6 +98,7 @@ class StkBridgeNode:
             ScenarioManager,
         )
         from stk_bridge.core.sensing import SensingConfig
+        from stk_bridge.core.step_timing import PhaseTimings
         from stk_bridge.core.time_sync import TimeSync, TimeSyncConfig
 
         self.node = node
@@ -147,6 +148,9 @@ class StkBridgeNode:
         self._step_lock = threading.Lock()
         self._loop_iterations = 0
         self._last_status_wall = 0.0
+        #: E6's latency breakdown. See core/step_timing.py for why this
+        #: is a windowed accumulator rather than a running lifetime mean.
+        self._timings = PhaseTimings()
 
     # -- startup -----------------------------------------------------------
 
@@ -324,23 +328,35 @@ class StkBridgeNode:
             self._step_size = 0.0
 
         # 1. Apply commands computed for the previous step.
-        self._apply_commands()
+        with self._timings.timed("actuate"):
+            self._apply_commands()
         # 2. Advance.
         now = self.time_sync.step(step_size or None)
         # 3. Publish the new state and the clock, so participants have
         #    what they need before being asked to acknowledge.
         self._publish_clock(now)
-        self._sense_and_publish(now)
+        with self._timings.timed("sense"):
+            self._sense_and_publish(now)
         self._run_rate_groups()
         self._publish_status(now)
-        # 4. Wait for acknowledgement.
-        self.time_sync.await_barrier()
+        # 4. Wait for acknowledgement. Timed for E6, though this
+        #    iteration's wait lands in the NEXT status publish's window
+        #    -- see core/step_timing.py's module docstring for why that
+        #    one-window lag is immaterial to a multi-minute mean.
+        with self._timings.timed("barrier_wait"):
+            self.time_sync.await_barrier()
 
     def _free_running_iteration(self) -> None:
+        # No barrier wait outside lockstep -- see BridgeStatus.msg's own
+        # field comment: step_samples tells a consumer that phase was
+        # never measured this run rather than implying a suspiciously
+        # fast zero.
         now = self.time_sync.now()
-        self._apply_commands()
+        with self._timings.timed("actuate"):
+            self._apply_commands()
         self._publish_clock(now)
-        self._sense_and_publish(now)
+        with self._timings.timed("sense"):
+            self._sense_and_publish(now)
         self._run_rate_groups()
         self._publish_status(now)
         self.time_sync.sleep_until_next(
@@ -415,6 +431,8 @@ class StkBridgeNode:
 
         self.health.check_heartbeat()
         backend = self.worker.backend
+        timings = self._timings.summary()
+        self._timings.reset()
         self.bridge_publishers.publish_status(
             state=int(self.health.state),
             backend_type=backend.backend_type.value,
@@ -424,6 +442,7 @@ class StkBridgeNode:
             queue_capacity=self.worker.queue_capacity,
             latency_ms=self.worker.last_latency_ms,
             last_error=self.health.last_error,
+            timings=timings,
             when=now,
         )
         self.bridge_publishers.publish_diagnostics(

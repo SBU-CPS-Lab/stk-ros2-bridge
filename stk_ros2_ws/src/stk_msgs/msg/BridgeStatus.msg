@@ -21,3 +21,16 @@ uint32 command_queue_capacity
 
 float64 last_backend_round_trip_ms
 string last_error
+
+# E6's latency breakdown, mean over the second since the last publish
+# (BridgeStatus is always 1 Hz -- see this message's own top comment).
+# step_samples is how many step-loop iterations fed that mean; a
+# consumer must check it before trusting a phase's number, because 0.0
+# means EITHER "fast" or "never measured this run" -- free-run has no
+# barrier wait at all, and a run that has not started stepping yet has
+# neither. See stk_bridge/core/step_timing.py for why this is windowed
+# rather than a lifetime average.
+float64 mean_sense_ms
+float64 mean_actuate_ms
+float64 mean_barrier_wait_ms
+uint32 step_samples

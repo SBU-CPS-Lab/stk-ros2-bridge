@@ -122,8 +122,21 @@ class RunResult:
     wheel_energy_J: float = 0.0
     #: Bridge-reported command drops, for the honesty of the result.
     dropped_attitude_samples: int = 0
-    #: Mean closed-loop step wall time, ms. Feeds E6.
+    #: Mean closed-loop step wall time, ms -- the SCHEDULER's own
+    #: tick-to-tick measurement, which in lockstep already spans a whole
+    #: sense/actuate/barrier cycle. The achieved step rate, not a
+    #: breakdown of what it is spent on.
     mean_step_latency_ms: float = float("nan")
+    #: The breakdown E6 actually asks for, from the BRIDGE's own timing
+    #: of each phase (stk_bridge.core.step_timing) -- a different vantage
+    #: point than mean_step_latency_ms above, and not expected to sum to
+    #: it exactly: the scheduler's tick-to-tick clock also includes its
+    #: own scheduling jitter and whatever the OTHER lockstep participants
+    #: (the twin) spent between the ack and the next tick, neither of
+    #: which any bridge-side phase timer sees.
+    mean_sense_latency_ms: float = float("nan")
+    mean_actuate_latency_ms: float = float("nan")
+    mean_barrier_wait_ms: float = float("nan")
     seed: Optional[int] = None
 
     @property

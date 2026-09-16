@@ -170,6 +170,26 @@ class TestProvenanceFields:
         assert read_record(str(path)).provenance.attitude_provider == ""
 
 
+class TestE6LatencyFields:
+    def test_the_breakdown_round_trips(self, tmp_path):
+        record = _record()
+        record.result.mean_sense_latency_ms = 3.2
+        record.result.mean_actuate_latency_ms = 1.1
+        record.result.mean_barrier_wait_ms = 8.4
+        path = str(tmp_path / "run.json")
+        write_record(path, record)
+        restored = read_record(path)
+        assert restored.result.mean_sense_latency_ms == pytest.approx(3.2)
+        assert restored.result.mean_actuate_latency_ms == pytest.approx(1.1)
+        assert restored.result.mean_barrier_wait_ms == pytest.approx(8.4)
+
+    def test_unmeasured_latency_round_trips_as_nan(self, tmp_path):
+        path = str(tmp_path / "run.json")
+        write_record(path, _record())
+        restored = read_record(path)
+        assert math.isnan(restored.result.mean_sense_latency_ms)
+
+
 class TestTamperDetection:
     def test_an_edited_result_is_rejected(self, tmp_path):
         """The signature is recomputed on read. A record whose stored
