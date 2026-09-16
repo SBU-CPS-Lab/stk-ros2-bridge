@@ -43,6 +43,7 @@ setup(
             "export_twin_fixtures = acav.fixtures_cli:main",
             "acav_scheduler = acav.scheduler_node:main",
             "run_acav_campaign = acav.campaign_cli:main",
+            "run_acav_run = acav.deploy_run_cli:main",
         ],
     },
 )

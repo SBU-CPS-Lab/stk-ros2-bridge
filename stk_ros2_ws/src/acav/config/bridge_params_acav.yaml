@@ -1,0 +1,138 @@
+# stk_bridge configuration for the ACAV case study (C4-C6).
+#
+# A copy of stk_bridge/config/bridge_params.yaml, not a reference to it,
+# with exactly the deltas config/acav_scenario.yaml's own `bridge:`
+# section documents as required for this study -- see that file's
+# comment block for why each one is what it is. Kept as a separate file
+# rather than edited in place so running the base bridge phases (T1
+# installation checks, non-ACAV use) is unaffected by the case study's
+# needs.
+#
+#   ros2 launch stk_bridge stk_bridge.launch.py \
+#       config_file:=$(pwd)/src/acav/config/bridge_params_acav.yaml
+#
+# Deltas from the base file, and why:
+#   time.barrier_participants: adds acav_scheduler. The base file lists
+#     only matlab_twin because the bridge phases were verified without
+#     a scheduler in the loop at all; ACAV adds a second barrier
+#     participant, and BOTH must ack every step or the run stalls
+#     against barrier_timeout_s (acav_scenario.yaml: bridge section).
+#   scenario.scenario_name: matches config/acav_scenario.yaml's own
+#     scenario.name (ACAV_SSS1), not the base file's generic
+#     SSS1_DigitalTwin -- so a COM backend with attach_to_existing does
+#     not silently attach to an unrelated open scenario of the same
+#     satellite name.
+#
+# scenario.scenario_path is left empty (create/attach to whatever is
+# already open) deliberately -- see docs/08_deploy_runbook.md for the
+# order of operations (build the ACAV scenario in STK BEFORE launching
+# the bridge) this assumes; verify against your own STK session before
+# trusting it for an overnight campaign, the same as every other
+# operational value in this file (see the base file's own header).
+
+topic_prefix: stk
+log_level: INFO
+
+backend:
+  type: com              # com | engine | connect | mock | auto
+  com:
+    attach_to_existing: true
+    visible: true
+    user_control: true
+  engine:
+    no_graphics: true
+  connect:
+    host: localhost
+    port: 5001
+    timeout_s: 10.0
+    connect_timeout_s: 5.0
+  mock:
+    scenario_epoch: 1717200000.0
+    satellite_name: SSS-1
+
+worker:
+  queue_size: 256
+  full_policy: drop_oldest
+  timeout_s: 10.0
+  start_timeout_s: 120.0
+
+scenario:
+  scenario_path: ""
+  scenario_name: ACAV_SSS1
+  ensure_objects:
+    - type: Satellite
+      name: SSS-1
+  realtime_objects:
+    - "*/Satellite/SSS-1"
+  look_ahead_s: 3600.0
+  look_behind_s: 3600.0
+  require_astrogator: false
+  require_coverage: false
+  require_communications: false
+
+validation:
+  enabled: true
+  fatal:
+    ephemeris_present: true
+    data_provider_returns_data: true
+    distance_is_metres: true
+    realtime_attitude_available: true
+    quaternion_ordering: true
+    angular_rate_scale: false
+    monotonicity_enforced: false
+
+sensing:
+  satellites:
+    - "*/Satellite/SSS-1"
+  position_frame: icrf
+  velocity_frame: icrf
+  lla_frame: fixed
+  enable_lla: true
+  enable_lighting: true
+  enable_access: false
+  enable_link_budget: false
+  access_pairs: []
+  rate_groups:
+    fast:   { rate_hz: 10.0 }
+    medium: { rate_hz: 1.0 }
+    slow:   { rate_hz: 0.1 }
+
+actuation:
+  default_attitude_inertial: false
+  coalesce: true
+
+time:
+  mode: lockstep
+  step_s: 0.1
+  real_time_factor: 1.0
+  barrier_participants:
+    - matlab_twin
+    - acav_scheduler
+  barrier_timeout_s: 5.0
+  on_barrier_timeout: abort
+  publish_clock: true
+  auto_step: true
+
+health:
+  critical_channels: [orbit_position, attitude]
+  stale_threshold: 5
+  heartbeat_timeout_s: 10.0
+  reconnect_enabled: true
+  reconnect_initial_delay_s: 1.0
+  reconnect_max_delay_s: 60.0
+  reconnect_max_attempts: 0
+
+qos:
+  telemetry_depth: 1
+  command_depth: 10
+  status_depth: 1
+  clock_depth: 10
+
+tf:
+  enabled: true
+
+executor:
+  threads: 6
+
+diagnostics:
+  period_s: 5.0

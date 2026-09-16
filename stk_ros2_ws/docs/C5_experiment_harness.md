@@ -237,6 +237,15 @@ gains and fault as **configured** and the backend and execution mode as
 **observed** — a backend can silently differ from what was asked for and
 gains cannot.
 
+A concrete launch script now exists —
+`acav/deploy_run_cli.py` (`scripts/run_acav_run.py`), which starts the
+bridge, hands off to a human for the MATLAB/Simulink twin (confirmed
+over ROS, not just a keypress — see that module's own docstring for
+why an unattended MATLAB step is not scripted yet), then runs the
+scheduler and captures every process's log. See
+[08_deploy_runbook.md](08_deploy_runbook.md) for how to actually run it
+on the Windows machine.
+
 ## 7. What the record now carries from the twin
 
 `TwinStatus` carries the reaction-wheel state alongside mode and
