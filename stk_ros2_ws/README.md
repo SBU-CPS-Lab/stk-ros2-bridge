@@ -2,11 +2,14 @@
 
 Bidirectional ROS 2 bridge between **AGI/Ansys STK 12.6 (2023 R1)** and
 **ROS 2 Humble**, for a satellite ADCS digital twin developed in
-MATLAB/Simulink. Worked example: satellite **SSS-1**.
+MATLAB/Simulink, plus a worked case study built on top of it. Satellite:
+**SSS-1**.
 
-See [`docs/00_architecture.md`](docs/00_architecture.md) for the full
-design and the phased build plan. This README covers only the workspace
-layout and the fastest path to a build.
+See [`docs/00_architecture.md`](docs/00_architecture.md) for the
+bridge's full design and phased build plan, and
+[`docs/C1_case_study_spec.md`](docs/C1_case_study_spec.md) for the case
+study's. This README covers only the workspace layout and the fastest
+path to a build.
 
 ## Layout
 
@@ -15,10 +18,16 @@ src/
   stk_msgs/     ROS 2 interfaces (msg/srv/action) -- ament_cmake
   stk_bridge/   The bridge itself -- ament_python
   stk_matlab/   MATLAB/Simulink-side client code (not a colcon package)
-docs/           Design docs, one per topic -- see docs/00_architecture.md first
+  acav/         Case study built on the bridge -- see src/acav/README.md
+docs/           Design docs, one per topic -- see docs/00_architecture.md
+                first for the bridge, docs/C1_case_study_spec.md for the
+                case study
 ```
 
 ## Build status
+
+**The bridge (phases 1-6) is complete.** ~13,800 lines across `stk_msgs`
+and `stk_bridge` (Python, MATLAB, ROS interfaces, YAML, docs):
 
 | Phase | Contents | Status |
 |---|---|---|
@@ -29,10 +38,22 @@ docs/           Design docs, one per topic -- see docs/00_architecture.md first
 | 5 | `interfaces/` + `nodes/` -- bridge is runnable | ✅ |
 | 6 | config, launch, tests, MATLAB/Simulink side, docs | ✅ |
 
-**All phases complete.** ~13,800 lines across the workspace (Python,
-MATLAB, ROS interfaces, YAML, docs). Test suite: 105 passed, 1 skipped
-(the skip is a `builtin_interfaces` import guard for running outside a
-sourced ROS 2 workspace -- see `test/test_conversions.py`).
+**The ACAV case study (C1-C6), built on top of the bridge, is also
+implemented and offline-tested.** No campaign has yet run against live
+STK -- see [`src/acav/README.md`](src/acav/README.md) for phase-by-phase
+status and [`docs/08_deploy_runbook.md`](docs/08_deploy_runbook.md) for
+running one.
+
+Test suite (bridge + case study, offline, no ROS or STK needed):
+
+```
+cd stk_ros2_ws
+python -m pytest src/acav/test src/stk_bridge/test -q
+```
+
+740 passed, 3 skipped as of the last C6 increment (the skips are
+`builtin_interfaces` import guards for running outside a sourced ROS 2
+workspace -- see `src/stk_bridge/test/test_conversions.py`).
 
 Several of this project's design decisions were corrected against a
 **live STK 12.6 install** partway through development, not assumed from
@@ -81,6 +102,10 @@ workspace's custom messages.
 ## Running the test suite
 
 ```bash
+# Both the bridge and the case study, no ROS 2 or STK needed:
+python3 -m pytest src/acav/test src/stk_bridge/test -q
+
+# Just the bridge:
 cd src/stk_bridge
 python3 -m pytest test/ --ignore=test/test_flake8.py --ignore=test/test_pep257.py
 ```
@@ -89,13 +114,15 @@ The full `core/` test suite (conversions, frames, Connect protocol, rate
 groups, time sync/lockstep barrier, mock-backend regression tests,
 actuation guards, and an end-to-end integration test) runs with **no
 ROS 2 installation required** -- `core/` has no ROS import at module
-scope, by design (see `stk_bridge/core/__init__.py`).
+scope, by design (see `stk_bridge/core/__init__.py`). The same is true
+of `src/acav/test` except for `scheduler_node.py` and
+`campaign_runner.py`'s real subprocess behaviour.
 
 ## Documentation map
 
 | Doc | Covers |
 |---|---|
-| `00_architecture.md` | Design, package structure, phased plan (this project's starting spec) |
+| `00_architecture.md` | Bridge design, package structure, phased plan (this project's starting spec) |
 | `01_installation_windows.md` | Full Windows/STK/ROS 2 setup |
 | `02_matlab_setup.md` | MATLAB ROS Toolbox + `+stkros` setup |
 | `03_message_reference.md` | Topic/service/action index |
@@ -103,3 +130,13 @@ scope, by design (see `stk_bridge/core/__init__.py`).
 | `05_time_synchronization.md` | Execution modes, lockstep barrier, the threading model |
 | `06_troubleshooting.md` | Every STK-12.6-specific finding from this project's bring-up |
 | `07_extending_backends.md` | Adding a backend or capability without breaking layering |
+| `08_deploy_runbook.md` | Running an ACAV campaign on the Windows STK machine, and what to send back |
+| `C1_case_study_spec.md` | The ACAV case study's claim, scenario contract, and honest limitations |
+| `C3_adcs_twin.md` | The ADCS twin: Python reference + MATLAB/Simulink model |
+| `C4_scheduler.md` | The target scheduler (kinematic vs. dynamics-aware) |
+| `C5_experiment_harness.md` | Provenance, seeded faults, run matrices, the campaign CLI |
+| `C6_analysis.md` | Turning a campaign directory into the paper's numbers and figures |
+
+(There is no separate `C2_*.md`: building and verifying the STK
+scenario is covered by `C1_case_study_spec.md` and
+`src/acav/README.md`.)
