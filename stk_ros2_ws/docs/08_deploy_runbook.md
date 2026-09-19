@@ -47,9 +47,11 @@ python src\acav\scripts\build_acav_scenario.py --backend com
 python src\acav\scripts\verify_acav_scenario.py --backend com
 ```
 
-Leave the scenario open in STK afterwards -- the ACAV bridge config
-(section 3) attaches to whatever is already open rather than building a
-new one, same as the base bridge's `attach_to_existing: true`.
+Leave the scenario open in STK afterwards. The ACAV bridge config uses
+`scenario.use_existing: true` and checks that its name is `ACAV_SSS1`.
+A missing or differently named scenario produces an error without creating
+or replacing a scenario. `backend.com.attach_to_existing` selects the STK
+application only; it does not select this scenario reuse policy.
 
 **Do not proceed past a FAIL.** Paste the verifier's output back for
 analysis if anything fails; its detail text is written to be the fix

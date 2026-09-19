@@ -149,6 +149,11 @@ class MockBackend(StkBackend):
 
     # -- scenario ----------------------------------------------------------
 
+    def get_current_scenario_name(self) -> Optional[str]:
+        """Return the current mock scenario without resetting its objects."""
+        self.require_connected()
+        return self._scenario_name or None
+
     def new_scenario(self, name: str) -> None:
         self._scenario_name = name
         self._objects.clear()

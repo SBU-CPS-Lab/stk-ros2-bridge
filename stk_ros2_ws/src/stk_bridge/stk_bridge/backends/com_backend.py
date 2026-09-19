@@ -354,6 +354,15 @@ class ComBackend(StkBackend):
 
     # -- scenario ----------------------------------------------------------
 
+    def get_current_scenario_name(self) -> Optional[str]:
+        """Inspect the attached application's scenario without replacing it."""
+        self.require_connected()
+        try:
+            scenario = self._root.CurrentScenario
+            return None if scenario is None else str(scenario.InstanceName)
+        except Exception as exc:
+            raise QueryError("CurrentScenario", "/", str(exc)) from exc
+
     def new_scenario(self, name: str) -> None:
         self.require_connected()
         try:

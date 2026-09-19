@@ -269,6 +269,8 @@ def canonical_object_path(path: str) -> str:
     path = (path or "").strip().strip('"')
     if not path:
         return path
+    if path in ("*", "*/"):
+        return "*"
     match = _ABSOLUTE_PATH_RE.match(path)
     if match:
         return "*/" + match.group("rest")

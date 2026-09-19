@@ -44,7 +44,7 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class ScenarioConfig:
-    #: Path to an existing .sc to load. Empty means create a new one.
+    #: Path to an existing .sc to load; empty creates unless use_existing.
     scenario_path: str = ""
     scenario_name: str = "SSS1_DigitalTwin"
     #: Objects to create if absent, as {"type": ..., "name": ...}.
@@ -56,11 +56,21 @@ class ScenarioConfig:
     require_astrogator: bool = False
     require_coverage: bool = False
     require_communications: bool = False
+    use_existing: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.use_existing, bool):
+            raise ValueError("scenario.use_existing must be a boolean")
+        if self.use_existing and self.scenario_path:
+            raise ValueError("scenario.use_existing conflicts with scenario_path")
+        if self.use_existing and not self.scenario_name.strip():
+            raise ValueError("scenario.use_existing requires scenario_name")
 
     @classmethod
     def from_config(cls, config: Optional[Dict] = None) -> "ScenarioConfig":
         section = (config or {}).get("scenario", {}) or {}
         return cls(
+            use_existing=section.get("use_existing", False),
             scenario_path=str(section.get("scenario_path", "")),
             scenario_name=str(section.get("scenario_name",
                                           "SSS1_DigitalTwin")),
@@ -153,7 +163,18 @@ class ScenarioManager:
             )
 
     def _open_scenario(self) -> None:
-        if self._config.scenario_path:
+        if self._config.use_existing:
+            current = self._backend.get_current_scenario_name()
+            expected = self._config.scenario_name
+            if current is None:
+                raise QueryError("CurrentScenario", "/",
+                                 f"no scenario is open; build/open {expected!r} first")
+            if current != expected:
+                raise QueryError("CurrentScenario", "/",
+                                 f"expected {expected!r}, but {current!r} is open; "
+                                 "the existing scenario was not replaced")
+            LOGGER.info("reusing open scenario %r", current)
+        elif self._config.scenario_path:
             LOGGER.info("loading scenario %s", self._config.scenario_path)
             self._backend.load_scenario(self._config.scenario_path)
         else:

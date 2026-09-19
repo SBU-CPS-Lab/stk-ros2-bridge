@@ -23,8 +23,9 @@
 #     not silently attach to an unrelated open scenario of the same
 #     satellite name.
 #
-# scenario.scenario_path is left empty (create/attach to whatever is
-# already open) deliberately -- see docs/08_deploy_runbook.md for the
+# scenario.use_existing reuses the open scenario after checking its name.
+# COM attach_to_existing selects the application, not the scenario.
+# scenario.scenario_path stays empty -- see docs/08_deploy_runbook.md for the
 # order of operations (build the ACAV scenario in STK BEFORE launching
 # the bridge) this assumes; verify against your own STK session before
 # trusting it for an overnight campaign, the same as every other
@@ -57,6 +58,7 @@ worker:
   start_timeout_s: 120.0
 
 scenario:
+  use_existing: true
   scenario_path: ""
   scenario_name: ACAV_SSS1
   ensure_objects:

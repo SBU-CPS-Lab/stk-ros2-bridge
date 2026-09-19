@@ -411,6 +411,12 @@ class StkBackend(abc.ABC):
 
     # -- scenario ----------------------------------------------------------
 
+    def get_current_scenario_name(self) -> Optional[str]:
+        """Return the open scenario name, or None, without changing it."""
+        from stk_bridge.exceptions import QueryError
+        raise QueryError("CurrentScenario", "/",
+                         "this backend does not support reusing an open scenario")
+
     @abc.abstractmethod
     def new_scenario(self, name: str) -> None: ...
 
