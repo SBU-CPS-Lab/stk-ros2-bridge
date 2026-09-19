@@ -8,11 +8,13 @@ scheduler run, then teardown -- and that a failure at any step is
 reported honestly rather than treated as success.
 """
 
+import inspect
 import json
 import os
 
 import pytest
 
+import acav.deploy_run_cli as deploy_run_cli
 from acav.deploy_run_cli import (
     ConnectResult,
     Deps,
@@ -204,3 +206,37 @@ class TestExecuteRunFailureModes:
         )
         execute_run(config, deps)
         assert bridge_proc.terminated
+
+
+class TestRealWaitFunctionsUseTheBridgesOwnQosProfiles:
+    """Regression guard for a real bug found on the Windows deploy box.
+
+    ``{prefix}/status`` is published RELIABLE + TRANSIENT_LOCAL
+    (`stk_bridge/interfaces/qos.py::status_qos`), so a late-joining
+    watcher must request at least TRANSIENT_LOCAL or DDS never matches
+    it to the publisher at all -- not "sees it late", *never sees it*,
+    with no error either side. An earlier version of
+    ``_wait_for_bridge_connected_ros`` hand-rolled a VOLATILE profile,
+    which reproduced exactly that against a live bridge that was
+    actually CONNECTED the whole time: "no BridgeStatus received at
+    all" for the full 90s timeout. These functions cannot be exercised
+    for real without ROS sourced (see the module's own lazy-import
+    comment), so this is a static guard on the source instead of a
+    behavioural test: it fails loudly if either function goes back to
+    building its own QoSProfile instead of reusing the bridge's.
+    """
+
+    def test_bridge_wait_reuses_the_bridges_status_qos(self):
+        source = inspect.getsource(
+            deploy_run_cli._wait_for_bridge_connected_ros)
+        assert "from stk_bridge.interfaces.qos import status_qos" in source
+        assert "status_qos(" in source
+        # The bug was a hand-rolled QoSProfile importing this type
+        # directly; status_qos() encapsulates it, so this function
+        # should no longer need to import it at all.
+        assert "QoSDurabilityPolicy" not in source
+
+    def test_twin_ack_wait_reuses_the_bridges_command_qos(self):
+        source = inspect.getsource(deploy_run_cli._wait_for_twin_ack_ros)
+        assert "from stk_bridge.interfaces.qos import command_qos" in source
+        assert "command_qos(" in source

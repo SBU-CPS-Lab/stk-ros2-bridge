@@ -22,9 +22,10 @@ Topology started, in this order, and why
    own launch file. This project has never run that model unattended,
    headless, end to end against a live bridge -- only interactively
    (``docs/C3_adcs_twin.md`` section 6). Scripting an unattended MATLAB
-   step this project has not verified and calling it done would be
-   exactly the failure mode CLAUDE.md warns about: a self-consistent,
-   untested guess standing in for a measurement. So this script stops
+   step this project has not verified and calling it done would replace
+   a measurement with a self-consistent, untested guess -- the specific
+   failure mode this project has repeatedly had to catch and fix
+   elsewhere (see e.g. ``docs/C6_analysis.md``). So this script stops
    and asks a human to start it, then *confirms* over ROS that the twin
    is actually acking the barrier before continuing -- it does not
    trust a keypress alone.
@@ -157,9 +158,22 @@ def _wait_for_bridge_connected_ros(prefix: str, timeout_s: float,
 
     Imported lazily -- this module must stay importable (for the offline
     unit tests) on a machine with no ROS 2 sourced.
+
+    Uses ``stk_bridge.interfaces.qos.status_qos()`` rather than a
+    hand-rolled profile, and that is load-bearing, not a style
+    preference: the bridge publishes ``{prefix}/status`` RELIABLE +
+    TRANSIENT_LOCAL (interfaces/qos.py's own docstring -- so a
+    late-joining watcher like this one sees current state immediately).
+    A subscriber whose durability does not request at least
+    TRANSIENT_LOCAL never matches that publisher at the DDS layer -- not
+    "arrives late", *never arrives*, with no error on either side. An
+    earlier version of this function used VOLATILE and reproduced
+    exactly that: the bridge was running and CONNECTED the whole time,
+    and this function reported "no BridgeStatus received at all" for the
+    full timeout regardless.
     """
     import rclpy
-    from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
+    from stk_bridge.interfaces.qos import status_qos
     from stk_msgs.msg import BridgeStatus
 
     seen: List[BridgeStatus] = []
@@ -167,11 +181,7 @@ def _wait_for_bridge_connected_ros(prefix: str, timeout_s: float,
     rclpy.init(args=None)
     try:
         node = rclpy.create_node("deploy_run_wait_for_bridge")
-        qos = QoSProfile(
-            depth=5,
-            reliability=QoSReliabilityPolicy.RELIABLE,
-            durability=QoSDurabilityPolicy.VOLATILE,
-        )
+        qos = status_qos(depth=5)
         node.create_subscription(
             BridgeStatus, f"{prefix}/status", seen.append, qos)
 
@@ -203,8 +213,17 @@ def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
     in the barrier -- the specific thing that matters, since a Simulink
     model can be "running" (Play pressed) yet not have its Subscribe/
     Publish blocks wired to the right topics.
+
+    Uses ``stk_bridge.interfaces.qos.command_qos()`` -- the profile the
+    bridge's own ack subscriber uses (``ros_subscribers.py``) -- for the
+    same reason ``_wait_for_bridge_connected_ros`` now uses
+    ``status_qos()``: a durability/reliability mismatch on this topic
+    would not fail loudly, it would just never deliver a message, and
+    this function has no way to tell that apart from "the twin really
+    isn't acking".
     """
     import rclpy
+    from stk_bridge.interfaces.qos import command_qos
     from std_msgs.msg import String
 
     seen: List[str] = []
@@ -214,7 +233,7 @@ def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
         node = rclpy.create_node("deploy_run_wait_for_twin")
         node.create_subscription(
             String, f"{prefix}/lockstep/ack",
-            lambda message: seen.append(str(message.data)), 10)
+            lambda message: seen.append(str(message.data)), command_qos())
 
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:

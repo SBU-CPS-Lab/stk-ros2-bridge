@@ -206,7 +206,25 @@ specific runs' `run.log` for the COM-fell-back-to-mock warning from
 step 4 before sending -- it is the single most likely reason a run
 would not count.
 
-## 7. What is genuinely unverified here, so you know what to look for
+## 7. Fixed after the first real attempt
+
+**"bridge_connected: no BridgeStatus received at all" after ~90 s, even
+though the bridge log showed it running fine.** Not a timeout, and not
+anything wrong on the deploy machine -- a QoS mismatch in this script.
+`{prefix}/status` is published RELIABLE + TRANSIENT_LOCAL (so a
+late-joining watcher sees current state immediately, per
+`stk_bridge/interfaces/qos.py`), and an earlier version of
+`deploy_run_cli._wait_for_bridge_connected_ros` subscribed VOLATILE.
+DDS never matches a VOLATILE reader to a TRANSIENT_LOCAL writer at
+all -- not "arrives late", *never arrives*, with no error on either
+side, which is exactly what made this look like a hang rather than a
+config problem. Fixed by having both wait functions reuse the bridge's
+own `status_qos()` / `command_qos()` instead of hand-rolling a profile.
+If you pulled this repo before this fix, update and try again before
+chasing anything else -- this was the actual cause of the report above,
+not a sign your STK/bridge setup is wrong.
+
+## 8. What is genuinely unverified here, so you know what to look for
 
 - **The manual MATLAB handoff (section 4, step 2-3).** This is the
   piece of the whole pipeline most likely to need a fix on the first
