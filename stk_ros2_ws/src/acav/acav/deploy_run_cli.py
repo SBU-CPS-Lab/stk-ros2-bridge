@@ -87,7 +87,7 @@ class RunConfig:
     prefix: str = "stk"
     log_dir: str = ""
     bridge_connect_timeout_s: float = 90.0
-    twin_ack_timeout_s: float = 300.0
+    twin_ack_timeout_s: float = 60.0
     ros_domain_id: str = ""
 
     def resolved_log_dir(self) -> str:
@@ -379,7 +379,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-dir", default="")
     parser.add_argument("--bridge-connect-timeout-s", type=float,
                         default=90.0)
-    parser.add_argument("--twin-ack-timeout-s", type=float, default=300.0)
+    parser.add_argument("--twin-ack-timeout-s", type=float, default=60.0)
     return parser
 
 

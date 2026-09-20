@@ -44,6 +44,8 @@ function setup_stk_ros(varargin)
     fprintf('  workspace root: %s\n', wsRoot);
 
     addpath(matlabDir);
+    addpath(fullfile(matlabDir, 'simulink'));
+    rehash;
     fprintf('  added %s to path\n', matlabDir);
 
     msgPkgDir = fullfile(wsRoot, 'src', 'stk_msgs');

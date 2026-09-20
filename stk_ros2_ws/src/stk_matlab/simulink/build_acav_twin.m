@@ -71,37 +71,12 @@ function modelName = build_acav_twin(options)
 % wired to it but constructing a typed bus as an ordinary function
 % OUTPUT needs explicit, version-sensitive port configuration.
 %
-% NOT diagram-update-verified in THIS environment, and that is a
-% dev-box tooling limitation, not a defect in the wiring below. Confirmed
-% empirically: in this R2024a-on-Linux setup (the SAME setup that makes
-% ros2genmsg work at all -- see "ros2genmsg now works here" in local
-% working notes), no block that needs ELEMENT-LEVEL bus introspection
-% (a MATLAB Function reading a field, or a Bus Selector) can resolve a
-% Subscribe block's output for ANY stk_msgs custom message -- reproduced
-% identically for AttitudeState, AngularRate and ScenarioTime, each in
-% total isolation (a single Subscribe feeding a single one-line MATLAB
-% Function), all failing "cannot determine sizes and/or types of the
-% outputs" / a port-width mismatch that names nothing actually wrong.
-% Blocks that do NOT need introspection (Terminator; a Blank-Message-
-% sourced bus feeding Bus Assignment, used throughout below) work
-% without complaint, and a MATLAB Function reading builtin_interfaces/
-% Time (a BUILT-IN, not custom-generated, type, via ros2lib/Current
-% Time) also works cleanly in a separate isolated test -- so the
-% fault is specific to consuming a Subscribe block's output for a
-% ros2genmsg-CUSTOM type here, not to MATLAB Function blocks, Bus
-% Selectors, or this message shape in particular. Most likely the same
-% root cause as the ros2genmsg GLIBCXX/typesupport mismatch already
-% documented: the introspection path needs a live subscriber handshake
-% that this dev box's generated libraries and MATLAB's own bundled ROS
-% runtime disagree on, and unlike the CXXFLAGS/LD_LIBRARY_PATH fixes
-% already found, this one did not yield to an environment variable set
-% from the calling MATLAB process (plausibly because ROS's own separate
-% server subprocess, libmwros2server, does not inherit it). NOT
-% expected to reproduce on the deploy machine, which needs neither
-% workaround in the first place. The diagram-update check below is kept
-% as a WARNING rather than a hard failure for exactly this reason: it
-% cannot currently pass here regardless of whether the wiring is right,
-% so treating its failure as fatal would block every build on this box.
+% Subscribe output 1 is the boolean IsNew flag; output 2 is the Msg bus.
+% MATLAB Function inputs must consume Msg to access message fields.
+% Diagram update below is mandatory before saving a usable model.
+% GuidanceControl calls MATLAB-hosted adcs.simulink_step in Normal mode:
+% YAML/JSON loading and dynamic slew-profile state are not code-generated.
+% This model requires MATLAB during simulation; it is not a standalone target.
 %
 % Building this wiring is what exposed a real defect in adcs.twin_step,
 % since fixed: quaternionCmd was `in.quaternion` verbatim -- the same
@@ -131,16 +106,39 @@ function modelName = build_acav_twin(options)
     end
 
     modelName = char(options.ModelName);
+    matlabDir = fileparts(fileparts(mfilename('fullpath')));
+    addpath(matlabDir);
+    rehash;
+    if strlength(options.RunConfigPath) > 0
+        candidate = char(options.RunConfigPath);
+        if ~isfile(candidate)
+            candidate = fullfile(fileparts(fileparts(matlabDir)), candidate);
+        end
+        [found, attributes] = fileattrib(candidate);
+        if ~found
+            error('build_acav_twin:MissingRunConfig', ...
+                'Run configuration does not exist: %s', options.RunConfigPath);
+        end
+        options.RunConfigPath = string(attributes.Name);
+    end
     requireMessages();
 
     if bdIsLoaded(modelName)
         close_system(modelName, 0);
     end
     new_system(modelName);
+    % Opening a saved model must not depend on the caller's current folder
+    % or on an old MATLAB package cache from before the adapter was added.
+    bootstrap = [ ...
+        'acavModelFile = get_param(bdroot,''FileName''); ' ...
+        'if ~isempty(acavModelFile), ' ...
+        'addpath(fileparts(fileparts(acavModelFile))); end; rehash;'];
+    set_param(modelName, 'PostLoadFcn', bootstrap, 'InitFcn', bootstrap);
     cleanup = onCleanup(@() discardIfUnsaved(modelName));
     load_system('ros2lib');
 
     set_param(modelName, 'SolverType', 'Fixed-step', ...
+        'SimulationMode', 'normal', ...
         'FixedStep', num2str(options.SampleTime), ...
         'StopTime', 'inf');
 
@@ -196,11 +194,11 @@ function modelName = build_acav_twin(options)
         unpackBlock, 'Position', [240 40 420 460]);
     setMatlabFunctionBody(unpackBlock, unpackTelemetrySource());
 
-    add_line(modelName, 'AttitudeSub/1', 'UnpackTelemetry/1');
-    add_line(modelName, 'OrbitSub/1', 'UnpackTelemetry/2');
-    add_line(modelName, 'SetpointSub/1', 'UnpackTelemetry/3');
-    add_line(modelName, 'AngularRateSub/1', 'UnpackTelemetry/4');
-    add_line(modelName, 'ScenarioTimeSub/1', 'UnpackTelemetry/5');
+    add_line(modelName, 'AttitudeSub/2', 'UnpackTelemetry/1');
+    add_line(modelName, 'OrbitSub/2', 'UnpackTelemetry/2');
+    add_line(modelName, 'SetpointSub/2', 'UnpackTelemetry/3');
+    add_line(modelName, 'AngularRateSub/2', 'UnpackTelemetry/4');
+    add_line(modelName, 'ScenarioTimeSub/2', 'UnpackTelemetry/5');
 
     % -- guidance and control -------------------------------------------
     controlBlock = [modelName '/GuidanceControl'];
@@ -251,7 +249,8 @@ function modelName = build_acav_twin(options)
         'stk_msgs/AttitudeCommand');
     addBusAssignment(modelName, 'AttitudeCmdAssign', [790 90 940 230], ...
         {'orientation.x', 'orientation.y', 'orientation.z', ...
-         'orientation.w', 'object_path', 'use_inertial_frame'});
+         'orientation.w', 'object_path', 'use_inertial_frame', 'object_path_SL_Info.CurrentLength', ...
+         'object_path_SL_Info.ReceivedLength'});
     add_line(modelName, 'AttitudeCmdBlank/1', 'AttitudeCmdAssign/1');
     for k = 1:4
         add_line(modelName, sprintf('DemuxQCmd/%d', k), ...
@@ -259,6 +258,8 @@ function modelName = build_acav_twin(options)
     end
     add_line(modelName, 'UnpackTelemetry/8', 'AttitudeCmdAssign/6');
     add_line(modelName, 'UseInertialFrame/1', 'AttitudeCmdAssign/7');
+    add_line(modelName, 'UnpackTelemetry/10', 'AttitudeCmdAssign/8');
+    add_line(modelName, 'UnpackTelemetry/11', 'AttitudeCmdAssign/9');
 
     addHeaderAssignment(modelName, 'AttitudeCmdStamp', [980 90 1090 130]);
     add_line(modelName, 'AttitudeCmdAssign/1', 'AttitudeCmdStamp/1');
@@ -281,21 +282,26 @@ function modelName = build_acav_twin(options)
     addBlankMessage(modelName, 'TwinStatusBlank', [790 260 940 280], ...
         'stk_msgs/TwinStatus');
     addBusAssignment(modelName, 'TwinStatusAssign', [790 300 940 380], ...
-        {'mode', 'boresight_error_rad', 'wheel_momentum_nms.x', ...
+        {'boresight_error_rad', 'wheel_momentum_nms.x', ...
          'wheel_momentum_nms.y', 'wheel_momentum_nms.z', ...
          'wheels_saturated', 'wheel_energy_j'});
     add_line(modelName, 'TwinStatusBlank/1', 'TwinStatusAssign/1');
-    add_line(modelName, 'GuidanceControl/3', 'TwinStatusAssign/2');
-    add_line(modelName, 'GuidanceControl/4', 'TwinStatusAssign/3');
+    add_line(modelName, 'GuidanceControl/4', 'TwinStatusAssign/2');
     for k = 1:3
         add_line(modelName, sprintf('DemuxMomentum/%d', k), ...
-            sprintf('TwinStatusAssign/%d', k + 3));
+            sprintf('TwinStatusAssign/%d', k + 2));
     end
-    add_line(modelName, 'GuidanceControl/6', 'TwinStatusAssign/7');
-    add_line(modelName, 'GuidanceControl/7', 'TwinStatusAssign/8');
+    add_line(modelName, 'GuidanceControl/6', 'TwinStatusAssign/6');
+    add_line(modelName, 'GuidanceControl/7', 'TwinStatusAssign/7');
 
     addHeaderAssignment(modelName, 'TwinStatusStamp', [980 300 1090 340]);
-    add_line(modelName, 'TwinStatusAssign/1', 'TwinStatusStamp/1');
+    add_block('simulink/User-Defined Functions/MATLAB Function', ...
+        [modelName '/EncodeMode'], 'Position', [950 360 1080 400]);
+    setMatlabFunctionBody([modelName '/EncodeMode'], encodeModeSource());
+    setMessageOutput([modelName '/EncodeMode'], 'stk_msgs/TwinStatus');
+    add_line(modelName, 'TwinStatusAssign/1', 'EncodeMode/1');
+    add_line(modelName, 'GuidanceControl/3', 'EncodeMode/2');
+    add_line(modelName, 'EncodeMode/1', 'TwinStatusStamp/1');
 
     addPublish(modelName, 'TwinStatusPub', [1130 300 1310 340], ...
         options.TwinStatusTopic, 'stk_msgs/TwinStatus');
@@ -307,19 +313,17 @@ function modelName = build_acav_twin(options)
         add_block('simulink/User-Defined Functions/MATLAB Function', ...
             ackTextBlock, 'Position', [720 410 900 440]);
         setMatlabFunctionBody(ackTextBlock, buildAckTextSource());
+        setMessageOutput(ackTextBlock, 'std_msgs/String');
         add_line(modelName, 'UnpackTelemetry/9', 'BuildAckText/1');
 
         addBlankMessage(modelName, 'AckBlank', [940 400 1090 420], ...
             'std_msgs/String');
-        addBusAssignment(modelName, 'AckAssign', [940 430 1090 470], ...
-            {'data'});
-        add_line(modelName, 'AckBlank/1', 'AckAssign/1');
-        add_line(modelName, 'BuildAckText/1', 'AckAssign/2');
+        add_line(modelName, 'AckBlank/1', 'BuildAckText/2');
 
         addPublish(modelName, 'LockstepAckPub', [1130 430 1310 470], ...
             sprintf('/%s/lockstep/ack', options.Prefix), ...
             'std_msgs/String');
-        add_line(modelName, 'AckAssign/1', 'LockstepAckPub/1');
+        add_line(modelName, 'BuildAckText/1', 'LockstepAckPub/1');
 
         add_block('built-in/Note', [modelName '/AckOrderingNote'], ...
             'Position', [720 490 1160 570], 'Text', ...
@@ -345,20 +349,8 @@ function modelName = build_acav_twin(options)
         for k = 1:numel(err.cause)
             detail = sprintf('%s\n  - %s', detail, err.cause{k}.message);
         end
-        % A WARNING, not a hard failure: on this dev box, ANY MATLAB
-        % Function or Bus Selector consuming a Subscribe block's output
-        % for a custom stk_msgs type fails this exact check regardless
-        % of whether the wiring is right (see the "Signal wiring" header
-        % comment) -- confirmed on three unrelated message types in
-        % total isolation. Treating it as fatal would block every build
-        % here for a reason that has nothing to do with this function's
-        % correctness. Re-run on the deploy machine (or if this dev
-        % box's introspection limitation gets fixed) to get a real
-        % diagram-update verification.
-        warning('build_acav_twin:WiringUnverified', ...
-            ['diagram update failed -- see the "Signal wiring" header ' ...
-             'comment for why this specific check is known-unreliable ' ...
-             'on this dev box:\n%s'], detail);
+        error('build_acav_twin:WiringInvalid', ...
+            'Diagram update failed; model was not saved:\n%s', detail);
     end
 
     save_system(modelName, fullfile(fileparts(mfilename('fullpath')), ...
@@ -416,13 +408,25 @@ end
 function addSubscribe(model, name, position, topic, messageType)
     block = [model '/' name];
     add_block('ros2lib/Subscribe', block, 'Position', position);
-    set_param(block, 'topic', topic, 'messageType', messageType);
+    % Bridge telemetry is best-effort: a reliable subscriber cannot match it.
+    set_param(block, 'topic', topic, 'messageType', messageType, ...
+        'QOSReliability', 'Best effort', 'QOSDurability', 'Volatile');
 end
 
 function addPublish(model, name, position, topic, messageType)
+% Only publish commands, status and barrier acknowledgements after telemetry
+% validation. Substituting an identity quaternion would invent a measurement.
     block = [model '/' name];
-    add_block('ros2lib/Publish', block, 'Position', position);
-    set_param(block, 'topic', topic, 'messageType', messageType);
+    add_block('built-in/Subsystem', block, 'Position', position);
+    add_block('built-in/Inport', [block '/Message'], 'Position', [25 40 55 60]);
+    add_block('built-in/EnablePort', [block '/Enable'], 'Position', [25 90 55 110]);
+    add_block('ros2lib/Publish', [block '/Publish'], 'Position', [100 30 240 70]);
+    set_param([block '/Publish'], 'topic', topic, 'messageType', messageType, ...
+        'QOSReliability', 'Reliable', 'QOSDurability', 'Volatile');
+    add_line(block, 'Message/1', 'Publish/1');
+    controlPorts = get_param([model '/GuidanceControl'], 'PortHandles');
+    publishPorts = get_param(block, 'PortHandles');
+    add_line(model, controlPorts.Outport(8), publishPorts.Enable);
 end
 
 function addBlankMessage(model, name, position, messageType)
@@ -483,6 +487,13 @@ function setMatlabFunctionBody(blockPath, source)
     block.Script = source;
 end
 
+function setMessageOutput(blockPath, messageType)
+    root = sfroot;
+    chart = root.find('-isa', 'Stateflow.EMChart', 'Path', blockPath);
+    output = chart.find('-isa', 'Stateflow.Data', 'Scope', 'Output', 'Name', 'msg');
+    output.DataType = ros.slros2.internal.bus.Util.rosMsgTypeToDataTypeStr(messageType);
+end
+
 function source = guidanceControlSource(runConfigPath)
     %GUIDANCECONTROLSOURCE The block body: a thin call into +adcs.
     %
@@ -499,32 +510,19 @@ function source = guidanceControlSource(runConfigPath)
     if nargin < 1
         runConfigPath = "";
     end
-    configCall = 'adcs.config()';
-    if strlength(runConfigPath) > 0
-        configCall = sprintf('adcs.config([], ''%s'')', runConfigPath);
-    end
     source = strjoin({
-        'function [torque, qCmd, mode, err, momentum, saturated, energy] = ...'
+        'function [torque, qCmd, mode, err, momentum, saturated, energy, ready] = ...'
         '        fcn(qMeas, omega, pos, vel, targetEci, haveTarget, t)'
         '%#codegen'
-        '    persistent cfg state'
-        '    if isempty(cfg)'
-        ['        cfg = ' configCall ';']
-        '        state = adcs.initial_state();'
-        '    end'
-        '    in = struct(''quaternion'', qMeas, ''omega'', omega, ...'
-        '                ''position'', pos, ''velocity'', vel, ...'
-        '                ''targetEci'', targetEci, ...'
-        '                ''haveTarget'', haveTarget, ''t'', t);'
-        '    out = adcs.twin_step(in, cfg, state);'
-        '    state = out.state;'
-        '    torque = out.torque;'
-        '    qCmd = out.quaternionCmd;'
-        '    mode = out.state.mode;'
-        '    err = out.boresightErrorRad;'
-        '    momentum = out.state.wheelMomentum;'
-        '    saturated = out.wheelsSaturated;'
-        '    energy = out.state.wheelEnergyJ;'
+        '    coder.extrinsic(''adcs.simulink_step'');'
+        '    persistent started'
+        '    reset = isempty(started);'
+        '    started = true;'
+        '    torque = zeros(1,3); qCmd = [0 0 0 1]; mode = 1;'
+        '    err = 0; momentum = zeros(1,3); saturated = false; energy = 0; ready = false;'
+        sprintf(['    [torque,qCmd,mode,err,momentum,saturated,energy,ready] = ' ...
+            'adcs.simulink_step(qMeas,omega,pos,vel,targetEci,haveTarget,t,reset,''%s'');'], ...
+            strrep(char(runConfigPath), '''', ''''''))
         'end'
         }, newline);
 end
@@ -537,7 +535,7 @@ function source = unpackTelemetrySource()
     % whatever is wired to it, so this needs no Bus Selector chain.
     source = strjoin({
         'function [qMeas, omega, pos, vel, targetEci, haveTarget, t, ...'
-        '    objectPath, stepIndex] = fcn(attitudeMsg, orbitMsg, ...'
+        '    objectPath, stepIndex, pathLength, pathReceived] = fcn(attitudeMsg, orbitMsg, ...'
         '    setpointMsg, rateMsg, timeMsg)'
         '%#codegen'
         '    qMeas = [attitudeMsg.orientation.x, attitudeMsg.orientation.y, ...'
@@ -551,6 +549,8 @@ function source = unpackTelemetrySource()
         '    haveTarget = setpointMsg.has_target;'
         '    t = double(timeMsg.sim_time.sec) + double(timeMsg.sim_time.nanosec) * 1e-9;'
         '    objectPath = attitudeMsg.object_path;'
+        '    pathLength = attitudeMsg.object_path_SL_Info.CurrentLength;'
+        '    pathReceived = attitudeMsg.object_path_SL_Info.ReceivedLength;'
         '    stepIndex = timeMsg.step_index;'
         'end'
         }, newline);
@@ -562,9 +562,38 @@ function source = buildAckTextSource()
     % ("acav_scheduler:<step_index>", see docs/C4_scheduler.md section 5)
     % so a log reader can tell which participant acked a given step.
     source = strjoin({
-        'function text = fcn(stepIndex)'
+        'function msg = fcn(stepIndex, blank)'
         '%#codegen'
-        '    text = "matlab_twin:" + string(stepIndex);'
+        '    msg = blank;'
+        '    prefix = uint8(''matlab_twin:'');'
+        '    digits = zeros(1,20,''uint8''); n = 0;'
+        '    value = uint64(stepIndex);'
+        '    while true'
+        '        n = n + 1; digits(n) = uint8(rem(value,uint64(10))) + uint8(48);'
+        '        value = idivide(value,uint64(10));'
+        '        if value == 0, break; end'
+        '    end'
+        '    msg.data(:) = 0;'
+        '    msg.data(1:numel(prefix)) = prefix;'
+        '    for k = 1:n, msg.data(numel(prefix)+k) = digits(n-k+1); end'
+        '    msg.data_SL_Info.CurrentLength = uint32(numel(prefix)+n);'
+        '    msg.data_SL_Info.ReceivedLength = uint32(numel(prefix)+n);'
+        'end'
+        }, newline);
+end
+
+function source = encodeModeSource()
+    source = strjoin({
+        'function msg = fcn(blank, mode)'
+        '%#codegen'
+        '    msg = blank;'
+        '    labels = uint8([''NADIR '';''SLEW  '';''SETTLE'';''IMAGE '';''SAFE  '']);'
+        '    lengths = [5 4 6 5 4];'
+        '    idx = min(5,max(1,mode)); n = lengths(idx);'
+        '    msg.mode(:) = 0;'
+        '    for k = 1:n, msg.mode(k) = labels(idx,k); end'
+        '    msg.mode_SL_Info.CurrentLength = uint32(n);'
+        '    msg.mode_SL_Info.ReceivedLength = uint32(n);'
         'end'
         }, newline);
 end

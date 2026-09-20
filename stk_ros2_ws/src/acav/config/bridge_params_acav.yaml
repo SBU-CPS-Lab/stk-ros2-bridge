@@ -64,8 +64,10 @@ scenario:
   ensure_objects:
     - type: Satellite
       name: SSS-1
-  realtime_objects:
-    - "*/Satellite/SSS-1"
+  # STK propagates the orbit; MATLAB sends attitude commands only.
+  # RealTime orbit propagation would discard the prebuilt ephemeris.
+  # The actuation dispatcher enables streamed attitude on the first command.
+  realtime_objects: []
   look_ahead_s: 3600.0
   look_behind_s: 3600.0
   require_astrogator: false

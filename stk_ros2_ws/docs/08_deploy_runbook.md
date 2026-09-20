@@ -53,6 +53,13 @@ A missing or differently named scenario produces an error without creating
 or replacing a scenario. `backend.com.attach_to_existing` selects the STK
 application only; it does not select this scenario reuse policy.
 
+The ACAV configuration leaves `scenario.realtime_objects` empty: STK
+retains the orbit generated from the scenario YAML, while MATLAB sends
+attitude commands. The first attitude command enables streamed attitude
+without changing the orbit propagator. If an earlier bridge run switched
+the satellite to RealTime, close that scenario and repeat the two commands
+above to restore it before launching the bridge again.
+
 **Do not proceed past a FAIL.** Paste the verifier's output back for
 analysis if anything fails; its detail text is written to be the fix
 instruction, but a genuinely new finding (a different STK patch level,
@@ -118,9 +125,11 @@ What should happen, in order:
    then press Enter in the PowerShell window.
 3. The script does **not** just trust that keypress -- it then polls
    `stk/lockstep/ack` for a message starting `matlab_twin:` for up to
-   300 s (`--twin-ack-timeout-s`). If this times out, the twin is
-   running but not actually acking the barrier -- check the Subscribe/
-   Publish block topics in the model against `stk/lockstep/ack` and
+   60 s (`--twin-ack-timeout-s`). If this times out, the twin has not
+   delivered an ack. It gates all publishers until telemetry is valid;
+   confirm the orbit was not switched to RealTime and telemetry subscribers
+   use Best effort / Volatile QoS. Check the Subscribe/Publish block topics
+   in the model against `stk/lockstep/ack` and
    `stk/status`, not the MATLAB console for errors (there may be none;
    a silently-wrong topic name just never acks).
 4. It launches `ros2 run acav acav_scheduler` with this run's
@@ -238,7 +247,7 @@ not a sign your STK/bridge setup is wrong.
   the bridge fails validation immediately with an object-not-found
   style error, check this first.
 - **Timing.** `--bridge-connect-timeout-s` (90 s) and
-  `--twin-ack-timeout-s` (300 s) are guesses, not measurements -- STK
+  `--twin-ack-timeout-s` (60 s) are guesses, not measurements -- STK
   Desktop launch time and how long it takes a human to switch to
   MATLAB and press Play are both machine- and person-dependent. Raise
   either if you see a timeout that would have succeeded given a few

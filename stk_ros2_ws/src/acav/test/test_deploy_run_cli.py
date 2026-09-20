@@ -46,6 +46,15 @@ class FakeProcess:
         self.killed = True
 
 
+def test_twin_wait_defaults_to_one_minute_and_allows_override():
+    parser = deploy_run_cli._parser()
+    args = ["--run-id", "probe", "--output", "probe.json",
+            "--bridge-config", "bridge.yaml"]
+    assert parser.parse_args(args).twin_ack_timeout_s == 60.0
+    assert parser.parse_args(args + ["--twin-ack-timeout-s", "15"]).twin_ack_timeout_s == 15.0
+    assert RunConfig.__dataclass_fields__["twin_ack_timeout_s"].default == 60.0
+
+
 def _config(tmp_path, **overrides):
     defaults = dict(
         run_id="E6-seed1", experiment="E6", scheduler="dynamics_aware",
