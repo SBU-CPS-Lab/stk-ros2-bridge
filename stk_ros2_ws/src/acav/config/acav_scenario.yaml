@@ -243,7 +243,7 @@ bridge:
   namespace: sss_1
   execution_mode: lockstep
   barrier_participants: [matlab_twin, acav_scheduler]
-  barrier_timeout_s: 5.0
+  barrier_timeout_s: 30.0
   on_barrier_timeout: abort
   rate_groups:
     fast: 10.0       # attitude, body rate, orbit

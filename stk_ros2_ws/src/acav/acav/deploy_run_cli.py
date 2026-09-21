@@ -11,7 +11,7 @@ context actually runs it.
 
 Topology started, in this order, and why
 ------------------------------------------
-1. **stk_bridge** (``ros2 launch``) -- the twin and the scheduler are
+1. **stk_bridge** (direct Python module process) -- the twin and the scheduler are
    both lockstep barrier participants *against* the bridge, so nothing
    else can usefully start first.
 2. **the MATLAB/Simulink twin -- NOT started by this script.**
@@ -106,6 +106,7 @@ class Deps:
     subprocess, or a human at a keyboard -- see test_deploy_run_cli.py.
     """
 
+    check_idle: Callable[[str], None] = None
     popen: Callable[..., "subprocess.Popen"] = subprocess.Popen
     wait_for_bridge_connected: Callable[[str, float, str], "ConnectResult"] = None
     wait_for_twin_ack: Callable[[str, float], bool] = None
@@ -113,6 +114,8 @@ class Deps:
     sleep: Callable[[float], None] = time.sleep
 
     def __post_init__(self) -> None:
+        if self.check_idle is None:
+            self.check_idle = _check_graph_idle
         if self.wait_for_bridge_connected is None:
             self.wait_for_bridge_connected = _wait_for_bridge_connected_ros
         if self.wait_for_twin_ack is None:
@@ -126,27 +129,53 @@ class ConnectResult:
     detail: str = ""
 
 
+def _check_graph_idle(prefix: str) -> None:
+    """Reject a shared graph before a new run can accept another run's status."""
+    import rclpy
+    rclpy.init()
+    node = rclpy.create_node("acav_run_preflight")
+    try:
+        deadline = time.monotonic() + 3.0
+        topics = [f"/{prefix.strip('/')}/status",
+                  f"/{prefix.strip('/')}/scenario_time",
+                  f"/{prefix.strip('/')}/lockstep/ack", "/clock"]
+        while time.monotonic() < deadline:
+            rclpy.spin_once(node, timeout_sec=0.1)
+            active = [topic for topic in topics if node.count_publishers(topic)]
+            if active:
+                raise RuntimeError("Another run is active on " + ", ".join(active)
+                                   + "; stop its bridge, scheduler and twin first")
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
 def bridge_launch_argv(config: RunConfig) -> List[str]:
-    return [
-        "ros2", "launch", "stk_bridge", "stk_bridge.launch.py",
-        f"config_file:={config.bridge_config}",
-    ]
+    # Own the actual node process, not a ros2 launcher whose children survive
+    # terminate() on Windows. Keep the same interpreter and ROS environment.
+    return [sys.executable, "-m", "stk_bridge.nodes.bridge_node", "--ros-args",
+            "-p", f"config_file:={json.dumps(config.bridge_config)}"]
 
 
 def scheduler_argv(config: RunConfig) -> List[str]:
-    argv = [
-        "ros2", "run", "acav", "acav_scheduler", "--ros-args",
-        "-p", f"scenario_config:={config.scenario}",
-        "-p", f"scheduler_type:={config.scheduler}",
-        "-p", f"prefix:={config.prefix}",
-        "-p", f"output_json:={config.output}",
-        "-p", f"run_id:={config.run_id}",
-        "-p", f"experiment:={config.experiment}",
-        "-p", f"gains_json:={config.gains_json}",
-        "-p", f"fault_json:={config.fault_json}",
-        "-p", f"attitude_provider:={config.attitude_provider}",
-        "-p", "auto_shutdown:=true",
-    ]
+    # ROS parses parameter values as YAML. Quote strings explicitly so an
+    # empty value, JSON payload, numeric-looking ID or Windows path retains
+    # its string type. subprocess receives an argv list, not shell text.
+    strings = {
+        "scenario_config": config.scenario,
+        "scheduler_type": config.scheduler,
+        "prefix": config.prefix,
+        "output_json": config.output,
+        "run_id": config.run_id,
+        "experiment": config.experiment,
+        "gains_json": config.gains_json,
+        "fault_json": config.fault_json,
+        "attitude_provider": config.attitude_provider,
+    }
+    argv = [sys.executable, "-m", "acav.scheduler_node", "--ros-args"]
+    for name, value in strings.items():
+        argv += ["-p", f"{name}:={json.dumps(value)}"]
+    argv += ["-p", "auto_shutdown:=true"]
     if config.seed:
         argv += ["-p", f"seed:={config.seed}"]
     return argv
@@ -188,6 +217,8 @@ def _wait_for_bridge_connected_ros(prefix: str, timeout_s: float,
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=0.5)
+            if node.count_publishers(f"{prefix}/status") > 1:
+                return ConnectResult(False, "", "multiple bridge status publishers detected")
             if seen:
                 latest = seen[-1]
                 if latest.state == BridgeStatus.CONNECTED:
@@ -223,14 +254,18 @@ def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
     isn't acking".
     """
     import rclpy
-    from stk_bridge.interfaces.qos import command_qos
+    from stk_bridge.interfaces.qos import command_qos, clock_qos
+    from stk_msgs.msg import ScenarioTime
     from std_msgs.msg import String
 
     seen: List[str] = []
+    ticks = []
 
     rclpy.init(args=None)
     try:
         node = rclpy.create_node("deploy_run_wait_for_twin")
+        node.create_subscription(ScenarioTime, f"{prefix}/scenario_time",
+                                 ticks.append, clock_qos())
         node.create_subscription(
             String, f"{prefix}/lockstep/ack",
             lambda message: seen.append(str(message.data)), command_qos())
@@ -238,7 +273,7 @@ def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=0.5)
-            if any(text.startswith("matlab_twin:") for text in seen):
+            if ticks and f"matlab_twin:{ticks[-1].step_index}" in seen:
                 return True
         return False
     finally:
@@ -275,8 +310,10 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
         (run_log.info if ok else run_log.error)("%s: %s", step, detail or "ok")
 
     bridge_proc = None
+    scheduler_proc = None
     scheduler_returncode = EXIT_STEP_FAILED
     try:
+        deps.check_idle(config.prefix)
         with _open_log(log_dir, "bridge.log") as bridge_log:
             run_log.info("launching bridge: %s",
                          " ".join(bridge_launch_argv(config)))
@@ -327,7 +364,14 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 run_log.info("launching scheduler: %s", " ".join(argv))
                 scheduler_proc = deps.popen(
                     argv, stdout=scheduler_log, stderr=subprocess.STDOUT)
-                scheduler_returncode = scheduler_proc.wait()
+                while True:
+                    try:
+                        scheduler_returncode = scheduler_proc.wait(timeout=1.0)
+                        break
+                    except subprocess.TimeoutExpired:
+                        if bridge_proc.poll() is not None:
+                            record("bridge_alive", False, "bridge exited while scheduler was running")
+                            return EXIT_STEP_FAILED
                 record("scheduler_exit", scheduler_returncode == 0,
                        f"returncode={scheduler_returncode}")
 
@@ -339,13 +383,15 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
 
         return EXIT_OK if scheduler_returncode == 0 else EXIT_STEP_FAILED
     finally:
-        if bridge_proc is not None and bridge_proc.poll() is None:
-            run_log.info("stopping bridge")
-            bridge_proc.terminate()
-            try:
-                bridge_proc.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                bridge_proc.kill()
+        for name, process in (("scheduler", scheduler_proc), ("bridge", bridge_proc)):
+            if process is not None and process.poll() is None:
+                run_log.info("stopping %s", name)
+                process.terminate()
+                try:
+                    process.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=15)
         summary["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         summary["output_exists"] = os.path.exists(config.output)
         with open(os.path.join(log_dir, "summary.json"), "w",

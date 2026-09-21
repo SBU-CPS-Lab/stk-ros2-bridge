@@ -56,6 +56,19 @@ class TestTimeSyncConfig:
 
 
 class TestLockstepBarrier:
+    def test_completed_step_duplicate_never_satisfies_next_barrier(self, caplog):
+        barrier = LockstepBarrier(["a"])
+        barrier.begin_step(1)
+        assert barrier.acknowledge("a", 1)
+        barrier.begin_step(2)
+        assert not barrier.acknowledge("a", 1)
+        assert barrier.missing() == ["a"]
+        assert barrier.late_acks == 0
+        assert not caplog.records
+        assert not barrier.acknowledge("a", 3)
+        assert barrier.late_acks == 1
+        assert barrier.missing() == ["a"]
+
     def test_ack_for_wrong_step_is_rejected_not_counted(self):
         """An ack for a stale step must NOT satisfy the current step's
         wait -- that would let a lagging participant appear synced."""

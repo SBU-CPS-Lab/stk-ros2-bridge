@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import logging
 import math
+import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
@@ -210,16 +211,21 @@ class ConventionValidator:
 
         try:
             path = self._backend.create_object(
-                "Satellite", self.TEST_OBJECT_NAME
+                "Satellite", f"{self.TEST_OBJECT_NAME}_{uuid.uuid4().hex}"
             )
             path = conv.canonical_object_path(path)
+            # Own only the object created by this run. An interrupted prior
+            # process can leave its satellite in an otherwise valid scenario.
+            self._path = path
+            self._owns_object = True
             propagate = getattr(self._backend, "propagate", None)
             if propagate is not None:
                 propagate(path)
-            self._owns_object = True
             LOGGER.info("validation using dedicated object %s", path)
             return path
         except Exception as exc:
+            self._teardown_object()
+            self._owns_object = False
             if not self._requested_path:
                 raise
             LOGGER.warning(

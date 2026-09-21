@@ -47,6 +47,8 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from stk_bridge.exceptions import LockstepBarrierTimeoutError
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -308,7 +310,12 @@ class StkBridgeNode:
                 else:
                     self._free_running_iteration()
                 self._loop_iterations += 1
-            except Exception as exc:  # noqa: BLE001 - never kill the loop
+            except LockstepBarrierTimeoutError as exc:
+                LOGGER.error("lockstep aborted; time will not advance: %s", exc)
+                self.health.record_error(str(exc), fatal=True)
+                self._running.clear()
+                self._publish_status(self.time_sync.now())
+            except Exception as exc:  # noqa: BLE001 - keep non-barrier handling
                 LOGGER.exception("bridge loop iteration failed")
                 self.health.record_error(f"{type(exc).__name__}: {exc}")
                 time.sleep(0.1)
@@ -344,7 +351,21 @@ class StkBridgeNode:
         #    -- see core/step_timing.py's module docstring for why that
         #    one-window lag is immaterial to a multi-minute mean.
         with self._timings.timed("barrier_wait"):
-            self.time_sync.await_barrier()
+            while self._running.is_set():
+                try:
+                    self.time_sync.await_barrier()
+                    break
+                except LockstepBarrierTimeoutError:
+                    startup_wait = bool((self.config.get("time") or {}).get(
+                        "wait_for_startup_participants", False))
+                    if not startup_wait or self.time_sync.step_index != 1:
+                        raise
+                    # Republish the SAME initial step for late joiners. Never
+                    # reset the barrier or advance STK while MATLAB starts.
+                    LOGGER.info("waiting at initial step for lockstep participants")
+                    self._publish_clock(now)
+                    self._sense_and_publish(now)
+                    self._publish_status(now)
 
     def _free_running_iteration(self) -> None:
         # No barrier wait outside lockstep -- see BridgeStatus.msg's own
@@ -373,7 +394,7 @@ class StkBridgeNode:
         try:
             self.worker.call(
                 lambda backend: apply_commands(self.actuation, commands),
-                "apply_commands", timeout_s=5.0)
+                "apply_commands")
             self.health.record_success()
         except Exception as exc:
             LOGGER.warning("failed to apply %d command(s): %s",
@@ -385,7 +406,7 @@ class StkBridgeNode:
             try:
                 samples = self.worker.call(
                     lambda backend, p=path: self.sensing.read_all(p, now),
-                    f"sense({path})", timeout_s=5.0)
+                    f"sense({path})")
             except Exception as exc:
                 LOGGER.debug("sensing failed on %s: %s", path, exc)
                 self.health.record_error(str(exc))
@@ -514,7 +535,10 @@ def main(args=None) -> None:
 
     try:
         bridge.start()
-        executor.spin()
+        while rclpy.ok() and bridge._running.is_set():
+            executor.spin_once(timeout_sec=0.5)
+        if rclpy.ok() and not bridge._running.is_set():
+            raise RuntimeError("bridge execution aborted; see preceding lockstep error")
     except KeyboardInterrupt:
         LOGGER.info("interrupted")
     except Exception:

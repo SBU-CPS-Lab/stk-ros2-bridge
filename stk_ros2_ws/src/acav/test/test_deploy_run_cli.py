@@ -25,6 +25,11 @@ from acav.deploy_run_cli import (
 )
 
 
+@pytest.fixture(autouse=True)
+def offline_graph(monkeypatch):
+    monkeypatch.setattr(deploy_run_cli, "_check_graph_idle", lambda prefix: None)
+
+
 class FakeProcess:
     def __init__(self, returncode=0):
         self._returncode = returncode
@@ -73,17 +78,32 @@ class TestArgvBuilding:
     def test_bridge_launch_names_the_config_file(self, tmp_path):
         config = _config(tmp_path)
         argv = bridge_launch_argv(config)
-        assert argv[:3] == ["ros2", "launch", "stk_bridge"]
-        assert f"config_file:={config.bridge_config}" in argv
+        assert argv[1:3] == ["-m", "stk_bridge.nodes.bridge_node"]
+        assert f"config_file:={json.dumps(config.bridge_config)}" in argv
 
     def test_scheduler_argv_carries_every_run_identifying_field(self, tmp_path):
         config = _config(tmp_path, seed="42")
         argv = scheduler_argv(config)
-        joined = " ".join(argv)
-        for expected in ("scheduler_type:=dynamics_aware",
-                        "output_json:=", "run_id:=E6-seed1",
-                        "experiment:=E6", "seed:=42"):
-            assert expected in joined
+        import yaml
+        params = dict(item.split(":=", 1) for item in argv if ":=" in item)
+        values = {name: yaml.safe_load(value) for name, value in params.items()}
+        assert values["scheduler_type"] == "dynamics_aware"
+        assert values["output_json"] == config.output
+        assert values["run_id"] == "E6-seed1"
+        assert values["experiment"] == "E6"
+        assert values["seed"] == 42
+        assert values["auto_shutdown"] is True
+
+    @pytest.mark.parametrize("value", ["", "{}", "null", "123", "true",
+                                       '{"gain": 1.2}', r"C:\My Runs\test.json"])
+    def test_string_parameters_keep_their_value_and_type(self, tmp_path, value):
+        import yaml
+        argv = scheduler_argv(_config(tmp_path, scenario=value, gains_json=value))
+        params = dict(item.split(":=", 1) for item in argv if ":=" in item)
+        for name in ("scenario_config", "gains_json"):
+            decoded = yaml.safe_load(params[name])
+            assert isinstance(decoded, str)
+            assert decoded == value
 
     def test_scheduler_argv_omits_seed_param_when_unset(self, tmp_path):
         config = _config(tmp_path, seed="")
@@ -249,3 +269,28 @@ class TestRealWaitFunctionsUseTheBridgesOwnQosProfiles:
         source = inspect.getsource(deploy_run_cli._wait_for_twin_ack_ros)
         assert "from stk_bridge.interfaces.qos import command_qos" in source
         assert "command_qos(" in source
+
+def test_busy_graph_prevents_launch(tmp_path):
+    def busy(prefix):
+        raise RuntimeError('Another run is active')
+    from unittest.mock import Mock
+    popen = Mock()
+    with pytest.raises(RuntimeError, match='Another run'):
+        execute_run(_config(tmp_path), Deps(check_idle=busy, popen=popen))
+    popen.assert_not_called()
+
+
+def test_interrupt_stops_scheduler_and_bridge(tmp_path):
+    class InterruptedProcess(FakeProcess):
+        def wait(self, timeout=None):
+            if not self.terminated:
+                raise KeyboardInterrupt()
+            return 0
+    bridge = FakeProcess(); scheduler = InterruptedProcess()
+    processes = iter([bridge, scheduler])
+    deps = Deps(popen=lambda *a, **k: next(processes),
+                wait_for_bridge_connected=lambda *a: ConnectResult(True,'com'),
+                wait_for_twin_ack=lambda *a: True, prompt=lambda text: None)
+    with pytest.raises(KeyboardInterrupt):
+        execute_run(_config(tmp_path), deps)
+    assert bridge.terminated and scheduler.terminated

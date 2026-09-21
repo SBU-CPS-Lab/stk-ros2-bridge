@@ -408,9 +408,10 @@ end
 function addSubscribe(model, name, position, topic, messageType)
     block = [model '/' name];
     add_block('ros2lib/Subscribe', block, 'Position', position);
-    % Bridge telemetry is best-effort: a reliable subscriber cannot match it.
+    % ACAV lockstep requires reliable telemetry in bridge_params_acav.yaml.
+    % No newer step exists to replace a lost sample while the barrier waits.
     set_param(block, 'topic', topic, 'messageType', messageType, ...
-        'QOSReliability', 'Best effort', 'QOSDurability', 'Volatile');
+        'QOSReliability', 'Reliable', 'QOSDurability', 'Volatile');
 end
 
 function addPublish(model, name, position, topic, messageType)
@@ -426,7 +427,9 @@ function addPublish(model, name, position, topic, messageType)
     add_line(block, 'Message/1', 'Publish/1');
     controlPorts = get_param([model '/GuidanceControl'], 'PortHandles');
     publishPorts = get_param(block, 'PortHandles');
-    add_line(model, controlPorts.Outport(8), publishPorts.Enable);
+    port = 9; % Commands and status are sent only once per telemetry time.
+    if strcmp(name, 'LockstepAckPub'), port = 8; end % Repeat ack for late listeners.
+    add_line(model, controlPorts.Outport(port), publishPorts.Enable);
 end
 
 function addBlankMessage(model, name, position, messageType)
@@ -511,7 +514,7 @@ function source = guidanceControlSource(runConfigPath)
         runConfigPath = "";
     end
     source = strjoin({
-        'function [torque, qCmd, mode, err, momentum, saturated, energy, ready] = ...'
+        'function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh] = ...'
         '        fcn(qMeas, omega, pos, vel, targetEci, haveTarget, t)'
         '%#codegen'
         '    coder.extrinsic(''adcs.simulink_step'');'
@@ -519,8 +522,8 @@ function source = guidanceControlSource(runConfigPath)
         '    reset = isempty(started);'
         '    started = true;'
         '    torque = zeros(1,3); qCmd = [0 0 0 1]; mode = 1;'
-        '    err = 0; momentum = zeros(1,3); saturated = false; energy = 0; ready = false;'
-        sprintf(['    [torque,qCmd,mode,err,momentum,saturated,energy,ready] = ' ...
+        '    err = 0; momentum = zeros(1,3); saturated = false; energy = 0; ready = false; fresh = false;'
+        sprintf(['    [torque,qCmd,mode,err,momentum,saturated,energy,ready,fresh] = ' ...
             'adcs.simulink_step(qMeas,omega,pos,vel,targetEci,haveTarget,t,reset,''%s'');'], ...
             strrep(char(runConfigPath), '''', ''''''))
         'end'
@@ -548,6 +551,12 @@ function source = unpackTelemetrySource()
         '        setpointMsg.target_position_m.y, setpointMsg.target_position_m.z];'
         '    haveTarget = setpointMsg.has_target;'
         '    t = double(timeMsg.sim_time.sec) + double(timeMsg.sim_time.nanosec) * 1e-9;'
+        '    ta = double(attitudeMsg.header.stamp.sec) + double(attitudeMsg.header.stamp.nanosec)*1e-9;'
+        '    to = double(orbitMsg.header.stamp.sec) + double(orbitMsg.header.stamp.nanosec)*1e-9;'
+        '    tr = double(rateMsg.header.stamp.sec) + double(rateMsg.header.stamp.nanosec)*1e-9;'
+        '    if any(abs([ta to tr]-t) > 1e-6)'
+        '        qMeas = zeros(1,4); % Hold until all telemetry matches this step.'
+        '    end'
         '    objectPath = attitudeMsg.object_path;'
         '    pathLength = attitudeMsg.object_path_SL_Info.CurrentLength;'
         '    pathReceived = attitudeMsg.object_path_SL_Info.ReceivedLength;'

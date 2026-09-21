@@ -30,6 +30,10 @@ function test_simulink_adapter()
         assert(norm(momentum-expected.state.wheelMomentum)<1e-12);
         assert(saturated==expected.wheelsSaturated);
         assert(abs(energy-expected.state.wheelEnergyJ)<1e-12);
+        [~,repeatQ,~,~,repeatH,~,repeatEnergy,valid,fresh] = ...
+            adcs.simulink_step(q,omega,pos,vel,target,true,t,false,'');
+        assert(valid && ~fresh && isequal(repeatQ,qCmd));
+        assert(isequal(repeatH,momentum) && repeatEnergy==energy);
         state = expected.state; q = qCmd; omega = expected.omegaNext;
     end
     [~,first] = adcs.simulink_step([0 0 0 1],[0 0 0],pos,vel,target,true,0,true,'');

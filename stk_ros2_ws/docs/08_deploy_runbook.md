@@ -235,6 +235,39 @@ If you pulled this repo before this fix, update and try again before
 chasing anything else -- this was the actual cause of the report above,
 not a sign your STK/bridge setup is wrong.
 
+### Lockstep restart and diagnostics
+
+After updating the lockstep code, stop the previous twin and coordinator,
+rebuild `stk_bridge` and `acav`, then load ROS and the workspace in a fresh
+terminal. Keep the prepared STK scenario open. Start only `run_acav_run.py`;
+do not also launch a separate bridge or scheduler. The coordinator now owns
+both node processes directly and stops both on exit. It rejects an already
+active graph before starting a new run.
+
+At the MATLAB prompt, rebuild `acav_twin` with the new run configuration and
+open the newly generated model, rather than reusing an older loaded model.
+Run it, then press Enter in the coordinator terminal. The bridge holds step
+1 during this handoff and republishes it for late subscribers. Subsequent
+steps require both participants' acknowledgements; timeout aborts the bridge
+without advancing again. The twin processes each telemetry timestamp once
+and waits for matching attitude, orbit and rate timestamps.
+
+ACAV now explicitly uses **reliable telemetry on both the bridge and the
+generated model**. The generic bridge still defaults to best effort: using
+that default configuration with the ACAV model will not match its reliable
+subscriptions. Reliable delivery is appropriate here because the barrier
+prevents a newer step from replacing a missing sample. Commands and acks
+remain reliable. The ACAV barrier and COM operation timeouts are 30 wall
+seconds; neither changes `step_s` or the experiment duration.
+
+An acknowledgement for a previously accepted step can arrive again after
+the bridge advances. It is ignored at debug level and never satisfies the
+new barrier. An unmatched acknowledgement still produces a warning. Look
+for `lockstep barrier timeout ... missing acks` and preceding COM/sensing
+errors to diagnose a real stall; a duplicate ack alone is not evidence of
+one. If a timeout remains, preserve `bridge.log`, `scheduler.log`, `run.log`
+and the MATLAB Diagnostic Viewer output before reusing the same run ID.
+
 ## 8. What is genuinely unverified here, so you know what to look for
 
 - **The manual MATLAB handoff (section 4, step 2-3).** This is the

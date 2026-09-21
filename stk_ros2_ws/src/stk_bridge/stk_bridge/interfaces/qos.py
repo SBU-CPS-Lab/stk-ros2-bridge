@@ -3,10 +3,9 @@
 Different traffic wants different guarantees, and ROS 2's defaults suit
 none of the three kinds this bridge carries:
 
-**Telemetry** (position, attitude, rates) is best-effort with depth 1.
-A control loop wants the *newest* state, not a replayed queue of stale
-ones. Reliable delivery here is actively harmful: on a congested link it
-buys retransmission of samples that were obsolete before they arrived.
+**Telemetry** (position, attitude, rates) defaults to best-effort with
+depth 1 for streaming. ACAV lockstep explicitly selects reliable delivery:
+its current sample cannot become obsolete until all participants ack it.
 
 **Commands** (position/attitude/rate injection) are reliable with a
 small queue. A dropped command is a real loss -- STK's real-time
@@ -84,16 +83,21 @@ def clock_qos(depth: int = 10):
 def from_config(config: Optional[Dict] = None) -> Dict[str, object]:
     """Build the profile set, honouring overrides in ``qos_profiles.yaml``.
 
-    Only depth is configurable. Reliability and durability are
-    deliberately not: a user who makes telemetry reliable to "avoid
-    dropping data" will instead build unbounded latency into a control
-    loop, and the failure looks like a performance problem rather than a
-    configuration mistake. If that trade-off is genuinely wanted, it
-    should be an explicit code change with a comment explaining why.
+    Streaming telemetry defaults to best effort. Lockstep deployments can
+    explicitly request reliable telemetry: there is no newer step until
+    participants consume this one, so dropping its only sample can deadlock
+    the barrier. Subscribers must also request reliable delivery.
     """
     section = (config or {}).get("qos", {}) or {}
+    reliability = section.get("telemetry_reliability", "best_effort")
+    if reliability not in ("best_effort", "reliable"):
+        raise ValueError("qos.telemetry_reliability must be best_effort or reliable")
+    telemetry = telemetry_qos(int(section.get("telemetry_depth", 1)))
+    if reliability == "reliable":
+        _, Reliability, _, _ = _import_qos()
+        telemetry.reliability = Reliability.RELIABLE
     return {
-        "telemetry": telemetry_qos(int(section.get("telemetry_depth", 1))),
+        "telemetry": telemetry,
         "command": command_qos(int(section.get("command_depth", 10))),
         "status": status_qos(int(section.get("status_depth", 1))),
         "clock": clock_qos(int(section.get("clock_depth", 10))),

@@ -54,7 +54,7 @@ backend:
 worker:
   queue_size: 256
   full_policy: drop_oldest
-  timeout_s: 10.0
+  timeout_s: 30.0  # COM operations can exceed 5 s on the desktop
   start_timeout_s: 120.0
 
 scenario:
@@ -112,10 +112,11 @@ time:
   barrier_participants:
     - matlab_twin
     - acav_scheduler
-  barrier_timeout_s: 5.0
+  barrier_timeout_s: 30.0  # wall seconds; allows desktop/Simulink scheduling delays
   on_barrier_timeout: abort
   publish_clock: true
   auto_step: true
+  wait_for_startup_participants: true
 
 health:
   critical_channels: [orbit_position, attitude]
@@ -127,6 +128,8 @@ health:
   reconnect_max_attempts: 0
 
 qos:
+  # A lockstep sample cannot be skipped: the next sample waits for its ack.
+  telemetry_reliability: reliable
   telemetry_depth: 1
   command_depth: 10
   status_depth: 1

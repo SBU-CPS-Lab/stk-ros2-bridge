@@ -153,6 +153,7 @@ class LockstepBarrier:
         self._lock = threading.Condition()
         self._step_index = 0
         self._acked: Set[str] = set()
+        self._last_accepted: Dict[str, int] = {}
         self._late_acks = 0
         self._timeouts = 0
 
@@ -195,10 +196,15 @@ class LockstepBarrier:
         """
         with self._lock:
             if step_index != self._step_index:
+                if (step_index < self._step_index
+                        and self._last_accepted.get(name) == step_index):
+                    LOGGER.debug("ignoring duplicate ack from %r for completed step %d",
+                                 name, step_index)
+                    return False
                 self._late_acks += 1
                 LOGGER.warning(
                     "ack from %r is for step %d but the current step is %d; "
-                    "ignoring. The participant is out of sync.",
+                    "ignoring unmatched acknowledgement.",
                     name, step_index, self._step_index,
                 )
                 return False
@@ -206,6 +212,7 @@ class LockstepBarrier:
                 LOGGER.debug("ack from unregistered participant %r", name)
                 return False
             self._acked.add(name)
+            self._last_accepted[name] = step_index
             self._lock.notify_all()
             return True
 
