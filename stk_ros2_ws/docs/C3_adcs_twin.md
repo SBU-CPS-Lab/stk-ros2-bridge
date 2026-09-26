@@ -248,6 +248,17 @@ one is unresolvable. Edit the builder, not the model.
   Header-Assignment chains to Publish blocks that are enabled only
   once telemetry is valid. The model passes diagram update; see
   section 5.
+- **Every outgoing stamp comes from `ScenarioTime`, never from a ROS
+  clock.** An attitude command is stamped at the time the commanded
+  attitude is reached (this step + `step_s`), and a twin status at this
+  step's time. The first live run used ROS Header Assignment blocks,
+  which stamp with the Simulink node's own clock, and that node is not
+  run on simulation time. Every attitude sample went to STK years
+  outside the scenario and every status sample outside every hold
+  window. The same run showed that `t` reached `adcs.twin_step` as
+  absolute epoch seconds rather than seconds since the window start
+  (the function's documented contract), which would have fired every
+  E5 fault on the first step. Both are fixed in `build_acav_twin`.
 - **The twin now closes its own loop.** See section 8: building the
   wiring exposed that `twin_step` never integrated the torque it
   computed, and that is fixed.

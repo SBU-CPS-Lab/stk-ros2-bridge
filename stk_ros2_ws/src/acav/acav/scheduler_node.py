@@ -56,6 +56,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set
 
@@ -85,9 +86,16 @@ RETENTION_MARGIN_S = 5.0
 DEFAULT_ACCESS_QUERY_DELAY_S = 0.2
 
 #: How long past the window's own end to keep waiting for outstanding
-#: access answers before finalising the run anyway (as UNVERIFIED
-#: rather than silently omitted -- see ``_finish_run``).
-FINALIZE_GRACE_S = 10.0
+#: access answers before finalising the run anyway (see ``_finish_run``).
+#: WALL seconds, not simulation seconds: the STK scenario ends at the
+#: window's end, so the bridge cannot step past it, and a grace period
+#: counted in simulation time never expires -- the first live run waited
+#: for step 7201, never got it, and wrote no record at all.
+FINALIZE_GRACE_WALL_S = 15.0
+
+#: A TwinStatus stamped further than this from the scenario's current
+#: time is not late, it is on the wrong clock (see ``_on_twin_status``).
+TWIN_STAMP_TOLERANCE_S = 5.0
 
 
 def _utc_now() -> str:
@@ -224,8 +232,14 @@ class SchedulerNode:
         self._access_requested: Set[str] = set()
         self._results: Dict[str, TargetResult] = {}
         self._finalized: Set[str] = set()
-        self._window_elapsed_at: Optional[float] = None
+        #: Targets whose outcome could not be computed, with the reason.
+        #: They count as done for completion -- they will never be
+        #: scored, and waiting for them would only mean waiting forever.
+        self._unscorable: Dict[str, str] = {}
+        self._window_elapsed_wall: Optional[float] = None
         self._shutdown_requested = False
+        self._last_sim_time_s: Optional[float] = None
+        self._misstamped_twin_status = 0
 
         # Observed from the bridge rather than assumed from the launch
         # configuration. C1 section 8 commits the paper to reporting
@@ -287,6 +301,12 @@ class SchedulerNode:
         self._client_access = node.create_client(
             ComputeAccess, f"{prefix}/compute_access")
 
+        # Steady (wall) clock on purpose: the grace period must keep
+        # running when the bridge has stopped stepping.
+        from rclpy.clock import Clock, ClockType
+        node.create_timer(1.0, self._maybe_finish_run,
+                          clock=Clock(clock_type=ClockType.STEADY_TIME))
+
         LOGGER.info(
             "acav_scheduler ready: policy=%s, %d attempted, %d declined",
             self._plan.scheduler_type.value, len(self._plan.attempted),
@@ -334,6 +354,7 @@ class SchedulerNode:
             LOGGER.info("scenario epoch resolved: %s", epoch)
 
         sim_time_s = stamp - self._epoch
+        self._last_sim_time_s = sim_time_s
 
         # Retried every tick, not just once at start: a service that is
         # not yet advertised at t=0 (the bridge node and this one can
@@ -392,6 +413,7 @@ class SchedulerNode:
                         "is known; dropping one sample")
             return
         time_s = conv.ros_time_to_stk(message.header.stamp) - self._epoch
+        self._check_twin_stamp(time_s)
         try:
             sample = TelemetrySample(
                 time_s=time_s,
@@ -414,6 +436,31 @@ class SchedulerNode:
             # keep going; that target's window may end up short a
             # sample, which evaluate_capture will notice on its own.
             LOGGER.error("twin_status out of order: %s", exc)
+
+    def _check_twin_stamp(self, time_s: float) -> None:
+        """Say so, loudly, when the twin is stamping on the wrong clock.
+
+        Every hold-window lookup uses the TwinStatus stamp as the
+        sample's time. A twin stamping with wall-clock time (the first
+        live run did) produces samples ~73 million seconds after the
+        epoch: none can ever fall in a hold window, every target fails
+        to finalise, and each failure message on its own reads like a
+        sampling-rate problem rather than a clock problem.
+        """
+        if self._last_sim_time_s is None:
+            return
+        offset_s = time_s - self._last_sim_time_s
+        if abs(offset_s) <= TWIN_STAMP_TOLERANCE_S:
+            return
+        self._misstamped_twin_status += 1
+        if self._misstamped_twin_status == 1:
+            LOGGER.error(
+                "twin_status stamped at t=%.1f s while the scenario is at "
+                "t=%.1f s (%+.3g s apart): the twin is stamping with a "
+                "clock other than the scenario's -- wall-clock time is "
+                "the usual cause. No such sample can fall in a hold "
+                "window, so no target can be scored.",
+                time_s, self._last_sim_time_s, offset_s)
 
     # -- target geometry --------------------------------------------------
 
@@ -553,6 +600,7 @@ class SchedulerNode:
                 entry, has_access)
         except ValueError as exc:
             LOGGER.error("could not finalise %s: %s", entry.target_id, exc)
+            self._unscorable[entry.target_id] = str(exc)
             return
         self._finalized.add(entry.target_id)
         LOGGER.info("%s finalised: %s (access=%s)", entry.target_id,
@@ -565,27 +613,44 @@ class SchedulerNode:
             return
         if sim_time_s < self._spec.window_duration_s:
             return
-        if self._window_elapsed_at is None:
-            self._window_elapsed_at = sim_time_s
+        if self._window_elapsed_wall is None:
+            self._window_elapsed_wall = time.monotonic()
+        self._maybe_finish_run()
 
-        all_done = len(self._finalized) == len(self._spec.targets)
-        grace_expired = (sim_time_s - self._window_elapsed_at
-                        >= FINALIZE_GRACE_S)
-        if all_done or grace_expired:
-            self._finish_run(forced=not all_done)
+    def _maybe_finish_run(self) -> None:
+        """Finish once every target is accounted for, or the grace expires.
+
+        Called on every tick after the window's end and from a 1 Hz
+        steady-clock timer, since past the scenario's end there may be no
+        more ticks at all.
+        """
+        if self._shutdown_requested or self._window_elapsed_wall is None:
+            return
+        accounted = len(self._finalized) + len(
+            set(self._unscorable) - self._finalized)
+        all_accounted = accounted == len(self._spec.targets)
+        grace_expired = (time.monotonic() - self._window_elapsed_wall
+                         >= FINALIZE_GRACE_WALL_S)
+        if all_accounted or grace_expired:
+            self._finish_run(forced=len(self._finalized)
+                             != len(self._spec.targets))
 
     def _finish_run(self, forced: bool) -> None:
         self._shutdown_requested = True
         if forced:
             missing = [t.id for t in self._spec.targets
                       if t.id not in self._finalized]
+            reasons = {target_id: self._unscorable.get(
+                target_id, "no access answer arrived in time")
+                for target_id in missing}
             LOGGER.error(
-                "finalising the run with %d target(s) never scored (no "
-                "access answer arrived in time): %s. Neither CAPTURED "
-                "nor any other outcome is a valid guess for missing "
-                "data, so these are omitted from the result rather than "
-                "scored as a failure they may not have been.",
-                len(missing), missing)
+                "finalising the run with %d target(s) never scored: %s. "
+                "Neither CAPTURED nor any other outcome is a valid guess "
+                "for missing data, so these are omitted from the result "
+                "rather than scored as a failure they may not have been.",
+                len(missing), "; ".join(
+                    f"{target_id} ({reason})"
+                    for target_id, reason in reasons.items()))
             for target_id in missing:
                 self._results.pop(target_id, None)
 

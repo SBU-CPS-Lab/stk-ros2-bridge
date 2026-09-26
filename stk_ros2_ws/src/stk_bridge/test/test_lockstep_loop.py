@@ -27,6 +27,7 @@ def test_startup_retry_republishes_without_advancing_or_resetting_barrier():
     node._running = threading.Event(); node._running.set()
     node._step_request = threading.Event(); node._step_lock = threading.Lock()
     node._step_size = 0
+    node._last_startup_log = 0.0
     node._timings = SimpleNamespace(timed=lambda name: nullcontext())
     node.time_sync = Mock(step_index=1)
     node.time_sync.step.return_value = 0.1
@@ -48,6 +49,7 @@ def _timed_node(barrier_outcomes):
     node._step_request = threading.Event()
     node._step_lock = threading.Lock()
     node._step_size = 0
+    node._last_startup_log = 0.0
     node._timings = PhaseTimings()
     node.time_sync = Mock(step_index=1)
     node.time_sync.step.return_value = 0.1

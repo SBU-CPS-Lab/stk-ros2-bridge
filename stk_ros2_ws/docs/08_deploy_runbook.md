@@ -108,8 +108,9 @@ test create an empty one first: `'{"run_id":"E6-smoke-1","gains":{},
 
 What should happen, in order:
 
-1. The script launches `ros2 launch stk_bridge stk_bridge.launch.py
-   config_file:=...bridge_params_acav.yaml` and waits for
+1. The script starts the bridge node directly (`python -m
+   stk_bridge.nodes.bridge_node` with `config_file:=...bridge_params_acav.yaml`,
+   so stopping it stops the real process) and waits for
    `BridgeStatus.state == CONNECTED`, up to 90 s by default
    (`--bridge-connect-timeout-s` to change it).
 2. It prints a block telling you to start MATLAB and the Simulink twin,
@@ -127,8 +128,10 @@ What should happen, in order:
    `stk/lockstep/ack` for a message starting `matlab_twin:` for up to
    60 s (`--twin-ack-timeout-s`). If this times out, the twin has not
    delivered an ack. It gates all publishers until telemetry is valid;
-   confirm the orbit was not switched to RealTime and telemetry subscribers
-   use Best effort / Volatile QoS. Check the Subscribe/Publish block topics
+   confirm the orbit was not switched to RealTime and that the model was
+   rebuilt after the last update (its telemetry subscribers must be
+   Reliable, matching `qos.telemetry_reliability: reliable` in the ACAV
+   bridge config). Check the Subscribe/Publish block topics
    in the model against `stk/lockstep/ack` and
    `stk/status`, not the MATLAB console for errors (there may be none;
    a silently-wrong topic name just never acks).
@@ -267,6 +270,75 @@ for `lockstep barrier timeout ... missing acks` and preceding COM/sensing
 errors to diagnose a real stall; a duplicate ack alone is not evidence of
 one. If a timeout remains, preserve `bridge.log`, `scheduler.log`, `run.log`
 and the MATLAB Diagnostic Viewer output before reusing the same run ID.
+
+### First full run (2026-09-26): the twin's clock
+
+The run connected, the twin acked, and the scheduler ran for two hours
+-- but every target failed with `no telemetry samples in the hold
+window`, the twin sat in SAFE with its wheels saturated, and the bridge
+aborted at step 7201. One cause behind all of it: **the Simulink model
+stamped its messages with wall-clock time.** Its header blocks used the
+Simulink ROS node's own clock, and nothing runs that node on simulation
+time. So:
+
+- the bridge wrote every attitude command to STK at a 2026 time stamp,
+  years outside the scenario -- STK's attitude inside the scenario never
+  changed, the twin kept seeing the same attitude and no rate, poured
+  torque into the wheels until they saturated, and the momentum guard
+  latched SAFE;
+- the scheduler filed every twin status ~73 million seconds after the
+  scenario epoch, where no hold window can be.
+
+The model now stamps every message from the `ScenarioTime` of the step
+it is processing: an attitude command at the time the commanded attitude
+is reached (this step + `step_s`), a twin status at this step's time.
+Separately, the run could not end: with targets unscored, the scheduler
+waited for more simulation time past the window's end, which the
+scenario does not have. It now waits in wall time instead and always
+writes its record.
+
+**After pulling this update, rebuild everything** -- the `.slx` is a
+build artifact, and the old one still stamps with the wall clock:
+
+```powershell
+colcon build --symlink-install --packages-select stk_msgs stk_bridge acav
+```
+
+```matlab
+build_acav_twin('RunConfigPath', 'results\E6_smoke\E6-smoke-1.runconfig.json')
+```
+
+**Check it within the first minute of the run**, not after two hours:
+
+```powershell
+ros2 topic echo --once /acav/twin_status
+```
+
+`header.stamp.sec` must be near `1717237800` (the scenario epoch, June
+2024), not today's date. The bridge and scheduler now also say so
+themselves: a wall-clock stamped command is rejected with an ERROR in
+`bridge.log`, and the scheduler logs one ERROR naming the clock
+mismatch. The bridge log also gains a line every 60 s with the step
+rate and the sense / actuate / barrier-wait breakdown -- the first run
+managed only ~1.1 steps/s, and that line is how we find out where the
+time goes.
+
+**What to capture on the next run**, in addition to the log bundle: in
+separate terminals, from just before pressing Enter until the run ends,
+
+```powershell
+ros2 topic echo /stk/status > status.txt
+ros2 topic echo /stk/sss_1/attitude > attitude.txt
+ros2 topic echo /stk/sss_1/angular_rate > rate.txt
+ros2 topic echo /stk/cmd/attitude > cmd.txt
+ros2 topic echo /acav/twin_status > twin_status.txt
+```
+
+The attitude, rate and command captures answer the next open question:
+whether the body rate STK reports back (it derives it from the attitude
+samples the twin sends) matches the rate the twin integrated. The twin
+restarts every step from STK's reported rate, so a large mismatch there
+would show up as slews that never settle.
 
 ## 8. What is genuinely unverified here, so you know what to look for
 

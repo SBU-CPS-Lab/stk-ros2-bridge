@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 import time
 from typing import Dict, List, Optional
@@ -50,6 +51,12 @@ import yaml
 from stk_bridge.exceptions import LockstepBarrierTimeoutError
 
 LOGGER = logging.getLogger(__name__)
+
+#: How often the initial step is republished while lockstep participants
+#: are still starting (wall seconds).
+STARTUP_REPUBLISH_S = 2.0
+#: How often the step rate and E6's phase breakdown are logged.
+TIMING_LOG_PERIOD_S = 60.0
 
 
 class BridgeContext:
@@ -153,6 +160,16 @@ class StkBridgeNode:
         #: E6's latency breakdown. See core/step_timing.py for why this
         #: is a windowed accumulator rather than a running lifetime mean.
         self._timings = PhaseTimings()
+        #: The same breakdown, summed over a longer window and written to
+        #: the log, so a run that never produces a record (it aborted, or
+        #: the scheduler failed) still leaves its step rate behind.
+        self._timing_log = {"wall": time.monotonic(), "step": 0,
+                            "sense": 0.0, "actuate": 0.0,
+                            "barrier_wait": 0.0, "samples": 0}
+        self._warn_counts: Dict[str, int] = {}
+        self._commands_late = 0
+        self._commands_rejected = 0
+        self._last_startup_log = 0.0
 
     # -- startup -----------------------------------------------------------
 
@@ -355,21 +372,34 @@ class StkBridgeNode:
         #    the scheduler's process start), and as one sample in a
         #    ~7200-step run it would add several ms to the reported
         #    mean barrier wait -- the order of the quantity E6 measures.
+        #    While waiting at step 1 for late participants, the step is
+        #    republished every STARTUP_REPUBLISH_S rather than once per
+        #    barrier timeout: a participant that joins late (the
+        #    scheduler, started only once the twin acks) sees nothing
+        #    until the next republish, and at a 30 s barrier timeout that
+        #    was ~30 s of dead time per run.
         started = time.perf_counter()
         waited_for_startup = False
+        startup_wait = (
+            bool((self.config.get("time") or {}).get(
+                "wait_for_startup_participants", False))
+            and self.time_sync.step_index == 1)
         while self._running.is_set():
             try:
-                self.time_sync.await_barrier()
+                self.time_sync.await_barrier(
+                    timeout_s=STARTUP_REPUBLISH_S if startup_wait else None)
                 break
-            except LockstepBarrierTimeoutError:
-                startup_wait = bool((self.config.get("time") or {}).get(
-                    "wait_for_startup_participants", False))
-                if not startup_wait or self.time_sync.step_index != 1:
+            except LockstepBarrierTimeoutError as exc:
+                if not startup_wait:
                     raise
                 # Republish the SAME initial step for late joiners. Never
                 # reset the barrier or advance STK while MATLAB starts.
                 waited_for_startup = True
-                LOGGER.info("waiting at initial step for lockstep participants")
+                wall = time.monotonic()
+                if wall - self._last_startup_log >= 30.0:
+                    self._last_startup_log = wall
+                    LOGGER.info("waiting at initial step for lockstep "
+                                "participants: %s", exc)
                 self._publish_clock(now)
                 self._sense_and_publish(now)
                 self._publish_status(now)
@@ -398,7 +428,7 @@ class StkBridgeNode:
     def _apply_commands(self) -> None:
         from stk_bridge.interfaces.ros_subscribers import apply_commands
 
-        commands = self.inbox.drain()
+        commands = self._screen_command_times(self.inbox.drain())
         if not commands:
             return
         try:
@@ -411,6 +441,95 @@ class StkBridgeNode:
                            len(commands), exc)
             self.health.record_error(str(exc))
 
+    def _screen_command_times(self, commands):
+        """Lockstep only: refuse commands stamped far from simulation time.
+
+        A command's stamp is the STK sample time it is written at. In
+        lockstep every legitimate command is for the next step, so a stamp
+        minutes (or years) away is a participant stamping with the wrong
+        clock -- and STK accepts such a sample without complaint, so
+        applying it would leave the attitude inside the scenario
+        untouched for the whole run while everything looked healthy.
+        A command stamped at or before the current step is kept, since it
+        still fixes STK's attitude history, but counted: it arrived after
+        the barrier released, so its step was sensed without it.
+        """
+        from stk_bridge.core.time_sync import ExecutionMode
+
+        if not commands or self.time_sync.mode is not ExecutionMode.LOCKSTEP:
+            return commands
+        now_s = self.time_sync.now().epoch_seconds
+        step_s = self.time_sync.config.step_s
+        limit_s = float((self.config.get("time") or {}).get(
+            "max_command_offset_s", 60.0))
+        kept = []
+        for channel, command in commands:
+            offset_s = command.time.epoch_seconds - now_s
+            if abs(offset_s) > limit_s:
+                self._commands_rejected += 1
+                self._warn_limited(
+                    "command-offset", logging.ERROR,
+                    "rejected %s command for %s stamped %+.1f s from "
+                    "simulation time (limit %.0f s). Lockstep commands "
+                    "must carry scenario time; a wall-clock stamp is the "
+                    "usual cause.", channel, command.object_path,
+                    offset_s, limit_s)
+                continue
+            if offset_s < 0.5 * step_s:
+                self._commands_late += 1
+                self._warn_limited(
+                    "command-late", logging.WARNING,
+                    "%s command for %s stamped %+.3f s from the current "
+                    "step: it arrived after the barrier released, so the "
+                    "step it was for was sensed without it.",
+                    channel, command.object_path, offset_s)
+            kept.append((channel, command))
+        return kept
+
+    def _lockstep_hint(self) -> str:
+        from stk_bridge.core.time_sync import ExecutionMode
+
+        if self.time_sync.mode is not ExecutionMode.LOCKSTEP:
+            return ""
+        return ("; nothing was published for this step, so a lockstep "
+                "participant waiting on this telemetry will not ack it")
+
+    def _warn_limited(self, key: str, level: int, message: str,
+                      *args) -> None:
+        """Log the 1st, 10th, 100th, ... occurrence of one kind of problem.
+
+        Enough to see that it happens and how often, without one line
+        per step for a two-hour run.
+        """
+        count = self._warn_counts.get(key, 0) + 1
+        self._warn_counts[key] = count
+        if str(count).rstrip("0") == "1":
+            LOGGER.log(level, message + " [occurrence %d]", *args, count)
+
+    def _log_timing_summary(self, timings) -> None:
+        """Every TIMING_LOG_PERIOD_S, log the step rate and E6's breakdown."""
+        acc = self._timing_log
+        samples = int(timings.get("step_samples", 0))
+        for phase in ("sense", "actuate", "barrier_wait"):
+            acc[phase] += timings.get(f"mean_{phase}_ms", 0.0) * samples
+        acc["samples"] += samples
+        wall = time.monotonic()
+        elapsed = wall - acc["wall"]
+        if elapsed < TIMING_LOG_PERIOD_S:
+            return
+        step = self.time_sync.step_index
+        n = max(acc["samples"], 1)
+        LOGGER.info(
+            "step %d: %.2f steps/s over the last %.0f s; per step: sense "
+            "%.1f ms, actuate %.1f ms, barrier wait %.1f ms; commands late "
+            "%d, rejected %d (run totals)",
+            step, (step - acc["step"]) / elapsed, elapsed,
+            acc["sense"] / n, acc["actuate"] / n, acc["barrier_wait"] / n,
+            self._commands_late, self._commands_rejected)
+        self._timing_log = {"wall": wall, "step": step, "sense": 0.0,
+                            "actuate": 0.0, "barrier_wait": 0.0,
+                            "samples": 0}
+
     def _sense_and_publish(self, now) -> None:
         for path, publishers in self.publishers.items():
             try:
@@ -418,13 +537,24 @@ class StkBridgeNode:
                     lambda backend, p=path: self.sensing.read_all(p, now),
                     f"sense({path})")
             except Exception as exc:
-                LOGGER.debug("sensing failed on %s: %s", path, exc)
+                self._warn_limited(
+                    "sense-failed", logging.WARNING,
+                    "sensing failed on %s at t=%.3f s: %s%s", path,
+                    now - self.time_sync.epoch, exc, self._lockstep_hint())
                 self.health.record_error(str(exc))
                 continue
 
             if not samples:
                 # No state at this epoch. Publishing nothing is
-                # deliberate -- see ros_publishers' module docstring.
+                # deliberate -- see ros_publishers' module docstring --
+                # but in lockstep a participant waiting for this step's
+                # telemetry then never acks, and the barrier timeout
+                # names the participant rather than the missing data.
+                self._warn_limited(
+                    "sense-empty", logging.WARNING,
+                    "STK returned no state for %s at t=%.3f s (past the "
+                    "scenario's analysis period?)%s", path,
+                    now - self.time_sync.epoch, self._lockstep_hint())
                 continue
 
             publishers.publish_samples(samples)
@@ -464,6 +594,7 @@ class StkBridgeNode:
         backend = self.worker.backend
         timings = self._timings.summary()
         self._timings.reset()
+        self._log_timing_summary(timings)
         self.bridge_publishers.publish_status(
             state=int(self.health.state),
             backend_type=backend.backend_type.value,
@@ -543,16 +674,16 @@ def main(args=None) -> None:
         (config.get("executor") or {}).get("threads", 6)))
     executor.add_node(node)
 
+    aborted = False
     try:
         bridge.start()
         while rclpy.ok() and bridge._running.is_set():
             executor.spin_once(timeout_sec=0.5)
-        if rclpy.ok() and not bridge._running.is_set():
-            raise RuntimeError("bridge execution aborted; see preceding lockstep error")
+        aborted = rclpy.ok() and not bridge._running.is_set()
     except KeyboardInterrupt:
         LOGGER.info("interrupted")
     except Exception:
-        LOGGER.exception("bridge failed to start")
+        LOGGER.exception("bridge stopped with an error")
         raise
     finally:
         bridge.stop()
@@ -560,6 +691,10 @@ def main(args=None) -> None:
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+    if aborted:
+        LOGGER.error("bridge stopped: the step loop aborted (see the error "
+                     "logged above)")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

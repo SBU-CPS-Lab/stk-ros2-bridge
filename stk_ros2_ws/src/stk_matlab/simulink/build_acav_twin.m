@@ -142,14 +142,14 @@ function modelName = build_acav_twin(options)
         'FixedStep', num2str(options.SampleTime), ...
         'StopTime', 'inf');
 
-    % There is NO model-level ROS time-source parameter. Checked on
-    % R2023a: the model has none, and the ROS 2 Current Time block
-    % exposes only OutputFormat and SampleTime. Time follows /clock
-    % because the generated node runs with use_sim_time true, which is
-    % a launch-time setting, not a model one. An earlier version of this
-    % function set an invented 'ROSTimeSource' parameter and warned when
-    % it failed, which read as a release incompatibility rather than as
-    % a parameter that never existed.
+    % The model never reads a ROS clock. Every outgoing stamp is derived
+    % from the ScenarioTime message of the step being processed (see
+    % addStamp): the Simulink ROS node is not run with use_sim_time, so
+    % anything stamped from the node's own clock is wall-clock time.
+    %
+    % The command stamp is offset by the twin's own integration step,
+    % read from the same config twin_step uses at run time.
+    stepNs = round(adcs.config([], char(options.RunConfigPath)).stepS * 1e9);
 
     base = sprintf('/%s/%s', options.Prefix, options.Namespace);
 
@@ -208,10 +208,11 @@ function modelName = build_acav_twin(options)
         guidanceControlSource(options.RunConfigPath));
 
     % UnpackTelemetry outputs, in order: qMeas, omega, pos, vel,
-    % targetEci, haveTarget, t, objectPath, stepIndex. The first seven
-    % feed GuidanceControl 1:1; objectPath and stepIndex bypass it and
-    % are picked up directly by the publish chains below, since they
-    % pass through unchanged and adcs.twin_step has no use for either.
+    % targetEci, haveTarget, t, objectPath, stepIndex, pathLength,
+    % pathReceived, stampSec, stampNsec. The first seven feed
+    % GuidanceControl 1:1; the rest bypass it and are picked up directly
+    % by the publish chains below, since adcs.twin_step has no use for
+    % them.
     for k = 1:7
         add_line(modelName, sprintf('UnpackTelemetry/%d', k), ...
             sprintf('GuidanceControl/%d', k));
@@ -261,8 +262,18 @@ function modelName = build_acav_twin(options)
     add_line(modelName, 'UnpackTelemetry/10', 'AttitudeCmdAssign/8');
     add_line(modelName, 'UnpackTelemetry/11', 'AttitudeCmdAssign/9');
 
-    addHeaderAssignment(modelName, 'AttitudeCmdStamp', [980 90 1090 130]);
+    % Stamped with the time the commanded attitude is ACHIEVED: twin_step
+    % integrates one cfg.stepS from this step's telemetry, so qCmd is the
+    % attitude at t + stepS. The bridge writes it to STK at that stamp,
+    % which is the next step's time -- exactly where it is read back.
+    addStamp(modelName, 'AttitudeCmdStamp', [980 90 1090 130], ...
+        'stk_msgs/AttitudeCommand');
+    add_block('simulink/Sources/Constant', [modelName '/CmdStampOffsetNs'], ...
+        'Position', [920 150 970 170], 'Value', num2str(stepNs));
     add_line(modelName, 'AttitudeCmdAssign/1', 'AttitudeCmdStamp/1');
+    add_line(modelName, 'UnpackTelemetry/12', 'AttitudeCmdStamp/2');
+    add_line(modelName, 'UnpackTelemetry/13', 'AttitudeCmdStamp/3');
+    add_line(modelName, 'CmdStampOffsetNs/1', 'AttitudeCmdStamp/4');
 
     addPublish(modelName, 'AttitudeCmdPub', [1130 90 1310 130], ...
         sprintf('/%s/cmd/attitude', options.Prefix), ...
@@ -294,7 +305,13 @@ function modelName = build_acav_twin(options)
     add_line(modelName, 'GuidanceControl/6', 'TwinStatusAssign/6');
     add_line(modelName, 'GuidanceControl/7', 'TwinStatusAssign/7');
 
-    addHeaderAssignment(modelName, 'TwinStatusStamp', [980 300 1090 340]);
+    % Stamped with this step's own time: boresight_error_rad and the mode
+    % describe the MEASURED attitude at t, which is what the scheduler's
+    % hold-window check needs.
+    addStamp(modelName, 'TwinStatusStamp', [980 300 1090 340], ...
+        'stk_msgs/TwinStatus');
+    add_block('simulink/Sources/Constant', [modelName '/StatusStampOffsetNs'], ...
+        'Position', [920 410 970 430], 'Value', '0');
     add_block('simulink/User-Defined Functions/MATLAB Function', ...
         [modelName '/EncodeMode'], 'Position', [950 360 1080 400]);
     setMatlabFunctionBody([modelName '/EncodeMode'], encodeModeSource());
@@ -302,6 +319,9 @@ function modelName = build_acav_twin(options)
     add_line(modelName, 'TwinStatusAssign/1', 'EncodeMode/1');
     add_line(modelName, 'GuidanceControl/3', 'EncodeMode/2');
     add_line(modelName, 'EncodeMode/1', 'TwinStatusStamp/1');
+    add_line(modelName, 'UnpackTelemetry/12', 'TwinStatusStamp/2');
+    add_line(modelName, 'UnpackTelemetry/13', 'TwinStatusStamp/3');
+    add_line(modelName, 'StatusStampOffsetNs/1', 'TwinStatusStamp/4');
 
     addPublish(modelName, 'TwinStatusPub', [1130 300 1310 340], ...
         options.TwinStatusTopic, 'stk_msgs/TwinStatus');
@@ -463,16 +483,20 @@ function addBusAssignment(model, name, position, dottedFields)
     set_param(block, 'AssignedSignals', strjoin(dottedFields, ','));
 end
 
-function addHeaderAssignment(model, name, position)
-%ADDHEADERASSIGNMENT Stamp a message's header with the node's own clock.
-% InsertTimeStamp='on' is the only field this model needs set: the stamp
-% follows /clock under use_sim_time (a launch-time setting, not a model
-% one -- see the SolverType comment above), and frame_id is left at the
-% block's default rather than hardcoded here, since none of these three
-% messages' headers are read by a frame-dependent consumer.
+function addStamp(model, name, position, messageType)
+%ADDSTAMP Stamp a message's header from the telemetry's own sim time.
+% Deliberately NOT ros2lib/Header Assignment with InsertTimeStamp: that
+% stamps with the Simulink ROS node's clock, and nothing runs that node
+% with use_sim_time, so every stamp was wall-clock time. The bridge takes
+% an AttitudeCommand's stamp as the STK sample time and the scheduler
+% takes a TwinStatus stamp as the sample's time, so a wall-clock stamp
+% put every attitude sample years outside the scenario and every status
+% sample outside every hold window -- silently, for a whole run.
     block = [model '/' name];
-    add_block('ros2lib/Header Assignment', block, 'Position', position);
-    set_param(block, 'InsertTimeStamp', 'on');
+    add_block('simulink/User-Defined Functions/MATLAB Function', ...
+        block, 'Position', position);
+    setMatlabFunctionBody(block, stampSource());
+    setMessageOutput(block, messageType);
 end
 
 function setMatlabFunctionBody(blockPath, source)
@@ -532,14 +556,27 @@ end
 
 function source = unpackTelemetrySource()
     %UNPACKTELEMETRYSOURCE Flatten the five subscribed ROS buses into the
-    % plain numerics adcs.twin_step expects, plus two passthroughs
-    % (objectPath, stepIndex) the publish side needs but twin_step does
-    % not. A MATLAB Function block infers each INPUT's bus type from
-    % whatever is wired to it, so this needs no Bus Selector chain.
+    % plain numerics adcs.twin_step expects, plus passthroughs the publish
+    % side needs but twin_step does not. A MATLAB Function block infers
+    % each INPUT's bus type from whatever is wired to it, so this needs no
+    % Bus Selector chain.
+    %
+    % Two time quantities come out, and they are deliberately different:
+    %   t                 seconds since the window start -- twin_step's
+    %                     documented contract, and what E5's fault epochs
+    %                     (WheelFault.at_s) are measured against. Using
+    %                     absolute epoch seconds here would make every
+    %                     injected fault fire on the first step.
+    %   stampSec/Nsec     this step's absolute sim time, exactly as the
+    %                     bridge sent it, for stamping outgoing headers.
+    %                     Integers throughout: no double round trip, so a
+    %                     command stamp lands on the bridge's step grid.
+    % The telemetry hold compares the three STK-derived headers against
+    % the ScenarioTime stamp in integer sec/nanosec for the same reason.
     source = strjoin({
         'function [qMeas, omega, pos, vel, targetEci, haveTarget, t, ...'
-        '    objectPath, stepIndex, pathLength, pathReceived] = fcn(attitudeMsg, orbitMsg, ...'
-        '    setpointMsg, rateMsg, timeMsg)'
+        '    objectPath, stepIndex, pathLength, pathReceived, stampSec, stampNsec] = ...'
+        '    fcn(attitudeMsg, orbitMsg, setpointMsg, rateMsg, timeMsg)'
         '%#codegen'
         '    qMeas = [attitudeMsg.orientation.x, attitudeMsg.orientation.y, ...'
         '        attitudeMsg.orientation.z, attitudeMsg.orientation.w];'
@@ -550,11 +587,16 @@ function source = unpackTelemetrySource()
         '    targetEci = [setpointMsg.target_position_m.x, ...'
         '        setpointMsg.target_position_m.y, setpointMsg.target_position_m.z];'
         '    haveTarget = setpointMsg.has_target;'
-        '    t = double(timeMsg.sim_time.sec) + double(timeMsg.sim_time.nanosec) * 1e-9;'
-        '    ta = double(attitudeMsg.header.stamp.sec) + double(attitudeMsg.header.stamp.nanosec)*1e-9;'
-        '    to = double(orbitMsg.header.stamp.sec) + double(orbitMsg.header.stamp.nanosec)*1e-9;'
-        '    tr = double(rateMsg.header.stamp.sec) + double(rateMsg.header.stamp.nanosec)*1e-9;'
-        '    if any(abs([ta to tr]-t) > 1e-6)'
+        '    stampSec = double(timeMsg.sim_time.sec);'
+        '    stampNsec = double(timeMsg.sim_time.nanosec);'
+        '    t = (stampSec - double(timeMsg.scenario_epoch.sec)) + ...'
+        '        (stampNsec - double(timeMsg.scenario_epoch.nanosec)) * 1e-9;'
+        '    heldSec = double([attitudeMsg.header.stamp.sec, ...'
+        '        orbitMsg.header.stamp.sec, rateMsg.header.stamp.sec]);'
+        '    heldNsec = double([attitudeMsg.header.stamp.nanosec, ...'
+        '        orbitMsg.header.stamp.nanosec, rateMsg.header.stamp.nanosec]);'
+        '    offsetNs = (heldSec - stampSec) * 1e9 + (heldNsec - stampNsec);'
+        '    if any(abs(offsetNs) > 1000)'
         '        qMeas = zeros(1,4); % Hold until all telemetry matches this step.'
         '    end'
         '    objectPath = attitudeMsg.object_path;'
@@ -587,6 +629,23 @@ function source = buildAckTextSource()
         '    for k = 1:n, msg.data(numel(prefix)+k) = digits(n-k+1); end'
         '    msg.data_SL_Info.CurrentLength = uint32(numel(prefix)+n);'
         '    msg.data_SL_Info.ReceivedLength = uint32(numel(prefix)+n);'
+        'end'
+        }, newline);
+end
+
+function source = stampSource()
+    %STAMPSOURCE header.stamp = (sec, nsec) + offsetNs, carried in int64
+    % nanoseconds so the result is exact and lands on the bridge's step
+    % grid rather than a double-rounding neighbour of it.
+    source = strjoin({
+        'function msg = fcn(msgIn, sec, nsec, offsetNs)'
+        '%#codegen'
+        '    msg = msgIn;'
+        '    billion = int64(1000000000);'
+        '    total = int64(nsec) + int64(offsetNs);'
+        '    carry = idivide(total, billion, ''floor'');'
+        '    msg.header.stamp.sec = int32(int64(sec) + carry);'
+        '    msg.header.stamp.nanosec = uint32(total - carry * billion);'
         'end'
         }, newline);
 end
