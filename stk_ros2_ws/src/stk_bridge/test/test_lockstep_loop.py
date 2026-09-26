@@ -37,3 +37,39 @@ def test_startup_retry_republishes_without_advancing_or_resetting_barrier():
     node.time_sync.step.assert_called_once()
     assert node._publish_clock.call_count == 2
     assert node._sense_and_publish.call_count == 2
+
+
+def _timed_node(barrier_outcomes):
+    from stk_bridge.core.step_timing import PhaseTimings
+    node = StkBridgeNode.__new__(StkBridgeNode)
+    node.config = {'time': {'wait_for_startup_participants': True}}
+    node._running = threading.Event()
+    node._running.set()
+    node._step_request = threading.Event()
+    node._step_lock = threading.Lock()
+    node._step_size = 0
+    node._timings = PhaseTimings()
+    node.time_sync = Mock(step_index=1)
+    node.time_sync.step.return_value = 0.1
+    node.time_sync.await_barrier.side_effect = barrier_outcomes
+    for name in ['_apply_commands', '_publish_clock', '_sense_and_publish',
+                 '_run_rate_groups', '_publish_status']:
+        setattr(node, name, Mock())
+    return node
+
+
+def test_startup_wait_is_not_recorded_as_barrier_wait():
+    # Launch latency (a human starting MATLAB) is not loop cost; one such
+    # sample would bias E6's run-level mean barrier wait by milliseconds.
+    node = _timed_node([LockstepBarrierTimeoutError(1, ['matlab_twin']), None])
+    node._lockstep_iteration()
+    assert node._timings.summary()["mean_barrier_wait_ms"] == 0.0
+    assert node._timings.summary()["step_samples"] == 1   # actuate only
+
+
+def test_an_ordinary_barrier_wait_is_still_recorded():
+    node = _timed_node([None])
+    node._lockstep_iteration()
+    summary = node._timings.summary()
+    assert summary["step_samples"] == 1
+    assert len(node._timings._samples["barrier_wait"]) == 1

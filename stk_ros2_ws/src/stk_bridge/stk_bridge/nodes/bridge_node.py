@@ -350,22 +350,32 @@ class StkBridgeNode:
         #    iteration's wait lands in the NEXT status publish's window
         #    -- see core/step_timing.py's module docstring for why that
         #    one-window lag is immaterial to a multi-minute mean.
-        with self._timings.timed("barrier_wait"):
-            while self._running.is_set():
-                try:
-                    self.time_sync.await_barrier()
-                    break
-                except LockstepBarrierTimeoutError:
-                    startup_wait = bool((self.config.get("time") or {}).get(
-                        "wait_for_startup_participants", False))
-                    if not startup_wait or self.time_sync.step_index != 1:
-                        raise
-                    # Republish the SAME initial step for late joiners. Never
-                    # reset the barrier or advance STK while MATLAB starts.
-                    LOGGER.info("waiting at initial step for lockstep participants")
-                    self._publish_clock(now)
-                    self._sense_and_publish(now)
-                    self._publish_status(now)
+        #    A step-1 wait that needed the startup retry is NOT recorded:
+        #    it is minutes of launch latency (a human starting MATLAB,
+        #    the scheduler's process start), and as one sample in a
+        #    ~7200-step run it would add several ms to the reported
+        #    mean barrier wait -- the order of the quantity E6 measures.
+        started = time.perf_counter()
+        waited_for_startup = False
+        while self._running.is_set():
+            try:
+                self.time_sync.await_barrier()
+                break
+            except LockstepBarrierTimeoutError:
+                startup_wait = bool((self.config.get("time") or {}).get(
+                    "wait_for_startup_participants", False))
+                if not startup_wait or self.time_sync.step_index != 1:
+                    raise
+                # Republish the SAME initial step for late joiners. Never
+                # reset the barrier or advance STK while MATLAB starts.
+                waited_for_startup = True
+                LOGGER.info("waiting at initial step for lockstep participants")
+                self._publish_clock(now)
+                self._sense_and_publish(now)
+                self._publish_status(now)
+        if not waited_for_startup:
+            self._timings.record(
+                "barrier_wait", (time.perf_counter() - started) * 1000.0)
 
     def _free_running_iteration(self) -> None:
         # No barrier wait outside lockstep -- see BridgeStatus.msg's own

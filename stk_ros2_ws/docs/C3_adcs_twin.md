@@ -160,20 +160,25 @@ no single version had seen both halves.
 |---|---|
 | `test_acav_twin` | **47/47 pass** — the MATLAB reproduces every fixture, closed-loop trajectories and the per-step orchestration included |
 | `adcs.build_mission_chart` | builds; SAFE latches (0 outgoing), reachable from all four nominal states, all guards at execution order 1 |
-| `build_acav_twin` | writes a real, fully wired `.slx` (R2024a, with `ros2genmsg` run first) |
+| `build_acav_twin` | writes a fully wired `.slx` **and passes Simulink's diagram update** (R2024a on Linux here, R2023b on the deploy machine), with `ros2genmsg` run first |
+| `test_simulink_adapter` | **passes** — `adcs.simulink_step`, the Normal-mode adapter the model calls, matches `adcs.twin_step` over 12 closed-loop steps, gates invalid/zero startup telemetry, and resets on simulation start |
 | `ros2genmsg` | **succeeds**, R2024a, given a Python 3.8-3.11 interpreter and a `-include cstdint` compile flag the dev box needs but the deploy machine should not (see `docs/C4_scheduler.md` section 2) |
 
-So the algorithms, the chart, message generation, and now the signal
-wiring itself are all built and code-reviewable. What is NOT verified
-on this dev box is whether the wiring actually *type-checks*: a
-separate dev-box-only tooling limitation (see `docs/C4_scheduler.md`
-section 2) means `build_acav_twin`'s own diagram-update check cannot
-currently pass here for ANY custom `stk_msgs` type, wiring mistake or
-not — it now warns instead of failing the build, and says so. The
-narrower, honest boundary this leaves: the wiring is written and
-structurally complete, but its correctness has only been checked by
-inspection, not by Simulink's own compiler, until it runs somewhere
-without this limitation (the deploy machine, most likely).
+So the algorithms, the chart, message generation and the signal wiring
+are all built, and Simulink's own compiler accepts the wiring.
+`build_acav_twin` now treats a diagram-update failure as fatal and does
+not save the model.
+
+**Correction.** An earlier version of this section said the diagram
+update could not pass on this dev box for any custom `stk_msgs` type,
+because of a tooling limitation. That was wrong. The model wired each
+Subscribe block's output **1** into `UnpackTelemetry`, and output 1 of
+`ros2lib/Subscribe` is the boolean `IsNew` flag; the message bus is
+output **2**. Every "cannot determine sizes and/or types" and "is not a
+bus signal" error came from reading message fields off a boolean. The
+control case that seemed to rule this out (the ROS 2 Current Time block
+working) has only one output, so it was never exposed to the wrong port.
+With the wiring fixed, the same dev-box setup passes diagram update.
 
 Three things this turned up:
 
@@ -235,12 +240,14 @@ one is unresolvable. Edit the builder, not the model.
 - **Block wiring is built.** `build_acav_twin` needs `setup_stk_ros` to
   have run first; it checks for the message types up front and says so,
   rather than dying inside a mask callback with a half-built model open.
-  The five Subscribe blocks feed a consolidating `UnpackTelemetry`
-  MATLAB Function, which feeds `GuidanceControl`; its outputs go out
-  through a Blank-Message/Bus-Assignment/Header-Assignment chain to each
-  Publish block. See `docs/C4_scheduler.md` section 2 for a dev-box
-  tooling limitation that keeps this from being diagram-update-verified
-  here specifically (not a defect in the wiring itself).
+  The five Subscribe blocks feed their message output (port 2, not the
+  `IsNew` flag on port 1) into a consolidating `UnpackTelemetry` MATLAB
+  Function, which feeds `GuidanceControl`; that calls
+  `adcs.simulink_step`, which runs `adcs.twin_step` once per telemetry
+  timestamp. Outputs go out through Blank-Message/Bus-Assignment/
+  Header-Assignment chains to Publish blocks that are enabled only
+  once telemetry is valid. The model passes diagram update; see
+  section 5.
 - **The twin now closes its own loop.** See section 8: building the
   wiring exposed that `twin_step` never integrated the torque it
   computed, and that is fixed.

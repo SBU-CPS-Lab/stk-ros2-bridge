@@ -85,46 +85,25 @@ workaround belongs in this repository — the DEPLOY machine has a Python
 in range already and should never need the `cstdint` flag at all if its
 toolchain is the one MATLAB was built against.
 
-**A third, unrelated dev-box limitation this surfaced while wiring the
-model.** Getting `ros2genmsg` to run here was necessary but not
-sufficient for verifying the wiring: in this same R2024a-on-Linux setup,
-no block that needs ELEMENT-LEVEL bus introspection — a MATLAB Function
-reading a field, or a Bus Selector — can resolve a Subscribe block's
-output for ANY custom `stk_msgs` type. Confirmed identically for
-`AttitudeState`, `AngularRate` and `ScenarioTime`, each in total
-isolation (a single Subscribe feeding a one-line MATLAB Function): all
-three fail Simulink's diagram-update check with "cannot determine sizes
-and/or types of the outputs" / a port-width mismatch that names nothing
-actually wrong. Blocks that do NOT need introspection (a Terminator; a
-Blank-Message-sourced bus feeding a Bus Assignment) work without
-complaint, and the identical MATLAB-Function pattern against
-`builtin_interfaces/Time` (a BUILT-IN, not custom-generated, type, via
-the ROS2 Current Time block) also works cleanly — so the fault is
-specific to introspecting a Subscribe block's output for a
-ros2genmsg-custom type here, not to MATLAB Function blocks, Bus
-Selectors, or any one message's shape.
+**The "third dev-box limitation" reported here earlier was a wiring bug,
+not a tooling one.** This section used to claim that on this
+R2024a-on-Linux setup no MATLAB Function or Bus Selector could read a
+Subscribe block's output for any custom `stk_msgs` type, and blamed a
+GLIBCXX mismatch in MATLAB's ROS 2 server subprocess. The real cause
+was simpler: the model wired each Subscribe block's output **1** into
+`UnpackTelemetry`. On `ros2lib/Subscribe`, output 1 is the boolean
+`IsNew` flag and output 2 is the message bus. Every "cannot determine
+sizes and/or types" and "is not a bus signal" error came from reading
+message fields off a boolean. The evidence that seemed to point at the
+toolchain fits the wiring bug just as well: blocks that never read a
+field (a Terminator) could not fail, and the ROS 2 Current Time block
+used as a control has a single output, so its port 1 really is the
+message.
 
-Most likely the same root cause as blocker 2 above, one layer deeper: a
-live subscriber handshake that this dev box's generated libraries and
-MATLAB's bundled ROS runtime disagree on. Confirmed via `feval(model,
-[],[],[],'compile')` that Subscribe blocks DO start a live ROS2 server
-subprocess and a real subscription during type resolution, which for at
-least one type crashed outright with the same `GLIBCXX_3.4.32 not
-found` signature as blocker 2 — but unlike blocker 2, prefixing the
-system's newer `libstdc++` onto `LD_LIBRARY_PATH` for the calling MATLAB
-process did not fix the MATLAB-Function/Bus-Selector case, only a bare
-Subscribe-to-Terminator one, which suggests the ROS2 server subprocess
-(`libmwros2server`) does not inherit that environment variable from its
-parent. Not chased further: it would mean either patching MATLAB's own
-launcher scripts (the same `/opt/matlab` boundary blocker 1 and 2
-already respect) or another environment-level trick with an unclear
-blast radius, for a problem that is very unlikely to reproduce on the
-deploy machine at all, since Windows MATLAB there needs neither of the
-first two workarounds in the first place.
-
-`build_acav_twin`'s own diagram-update check is a WARNING rather than a
-hard failure for exactly this reason — see `docs/C3_adcs_twin.md`
-section 7 for what the wiring itself now looks like.
+Wiring port 2 fixed it. The corrected model passes diagram update on
+this same dev box, with the same `ros2genmsg` recipe as above, and on
+the deploy machine. `build_acav_twin` now fails, rather than warns,
+when diagram update fails. See `docs/C3_adcs_twin.md` section 5.
 
 **Who computes the pointing error, and why not the scheduler.** The
 twin does, in `TwinStatus.boresight_error_rad`. It already has the
@@ -257,8 +236,8 @@ repeatedly.
 
 - **The twin's signal wiring is built** (`docs/C3_adcs_twin.md`
   section 7), turning `/acav/setpoint` and `/acav/twin_status` from
-  declared topics into a working loop — though not diagram-update
-  -verified on this dev box, for the tooling reason in section 2. The
+  declared topics into a working loop, and it passes Simulink's diagram
+  update (section 2 corrects an earlier wrong diagnosis here). The
   `quaternionCmd` defect that wiring exposed (the twin computed a torque
   but never integrated it, so the vehicle could not slew) is fixed and
   now fixture-covered; see `docs/C3_adcs_twin.md` section 8.
