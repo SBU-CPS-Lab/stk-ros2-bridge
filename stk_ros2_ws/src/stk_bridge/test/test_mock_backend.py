@@ -225,15 +225,32 @@ class TestPlacedObjectInertialFrame:
                                StkTime(epoch.epoch_seconds + 400.0))
         assert early != pytest.approx(later)
 
-    def test_inertial_and_fixed_agree_at_the_epoch(self, backend, placed):
-        """The mock's Earth-rotation model is zeroed at the scenario
-        epoch (see _earth_rotation), so the two frames must coincide
-        there -- the one point where "frozen" and "rotating" cannot be
-        told apart, and therefore the one point a bug here could hide."""
+    def test_inertial_is_fixed_rotated_by_the_earth_rotation_angle(
+            self, backend, placed):
+        """Even at the scenario epoch the two frames differ by the real
+        Earth Rotation Angle -- as they do in STK. An earlier mock zeroed
+        the angle at the epoch, which made an Earth-fixed/inertial
+        mis-pairing cost almost nothing for the first minutes of a run,
+        and let the ACAV loop run commanding in one frame and reading in
+        the other without any offline test noticing."""
         epoch = backend.get_scenario_epoch()
         fixed = self._position(backend, placed, "Fixed", epoch)
         inertial = self._position(backend, placed, "ICRF", epoch)
-        assert fixed == pytest.approx(inertial, abs=1e-6)
+        julian = epoch.epoch_seconds / 86400.0 + 2440587.5
+        era = 2.0 * math.pi * (0.7790572732640 + 1.00273781191135448
+                               * (julian - 2451545.0))
+        # A z-rotation by the Earth Rotation Angle: same height and
+        # length, longitude shifted by ERA. Only the MAGNITUDE is asserted
+        # -- the mock's rotation sense has not been checked against STK,
+        # and a test should not enshrine an unverified sign.
+        assert inertial[2] == pytest.approx(fixed[2], abs=1e-3)
+        assert math.hypot(*inertial) == pytest.approx(math.hypot(*fixed), abs=1e-3)
+        shift = (math.atan2(inertial[1], inertial[0])
+                 - math.atan2(fixed[1], fixed[0])) % (2.0 * math.pi)
+        era = era % (2.0 * math.pi)
+        assert min(abs(shift - era), abs(shift - (2.0 * math.pi - era))) \
+            == pytest.approx(0.0, abs=1e-6)
+        assert math.dist(fixed, inertial) > 1.0e5   # nowhere near equal
 
     def test_rotation_preserves_distance_from_earth_centre(self, backend,
                                                             placed):

@@ -48,7 +48,10 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from stk_bridge.exceptions import LockstepBarrierTimeoutError
+from stk_bridge.exceptions import (
+    ConventionValidationError,
+    LockstepBarrierTimeoutError,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -170,6 +173,7 @@ class StkBridgeNode:
         self._commands_late = 0
         self._commands_rejected = 0
         self._last_startup_log = 0.0
+        self._advance_ms = (0.0, 0)
 
     # -- startup -----------------------------------------------------------
 
@@ -195,6 +199,7 @@ class StkBridgeNode:
             report.attitude_provider, report.angular_rate_provider,
             report.angle_rate_scale.source,
         )
+        check_attitude_pairing(report, self.config)
 
         self.sensing = SensingPipeline(
             self.worker.backend, self.frames, self.sensing_config, report)
@@ -354,8 +359,15 @@ class StkBridgeNode:
         # 1. Apply commands computed for the previous step.
         with self._timings.timed("actuate"):
             self._apply_commands()
-        # 2. Advance.
+        # 2. Advance. Not one of E6's three reported phases (it is STK's
+        #    own clock update), but timed for the log: it is part of what
+        #    a step costs.
+        advance_started = time.perf_counter()
         now = self.time_sync.step(step_size or None)
+        total, count = self._advance_ms
+        self._advance_ms = (
+            total + (time.perf_counter() - advance_started) * 1000.0,
+            count + 1)
         # 3. Publish the new state and the clock, so participants have
         #    what they need before being asked to acknowledge.
         self._publish_clock(now)
@@ -486,6 +498,42 @@ class StkBridgeNode:
             kept.append((channel, command))
         return kept
 
+    def _retry_missing_channels(self, path, now, samples):
+        """Lockstep only: re-read fast channels that a sensing pass missed.
+
+        A lockstep participant that needs all three fast channels for a
+        step (the ACAV twin does -- it waits for attitude, orbit and rate
+        stamped with the same step) never acks a step where one of them
+        failed to read, and the run aborts 30 s later naming the
+        participant. One retry absorbs a transient STK hiccup; a channel
+        still missing after it is reported rather than left silent.
+        """
+        from stk_bridge.core.time_sync import ExecutionMode
+
+        if (not samples
+                or self.time_sync.mode is not ExecutionMode.LOCKSTEP):
+            return samples
+        missing = [c for c in self.sensing.FAST_CHANNELS if c not in samples]
+        if not missing:
+            return samples
+        try:
+            retried = self.worker.call(
+                lambda backend, p=path, m=missing: self.sensing.read_all(
+                    p, now, channels=m),
+                f"sense-retry({path})")
+        except Exception as exc:
+            retried = {}
+            LOGGER.debug("sensing retry failed on %s: %s", path, exc)
+        samples = {**samples, **(retried or {})}
+        still = [c for c in missing if c not in samples]
+        if still:
+            self._warn_limited(
+                "sense-partial", logging.WARNING,
+                "no %s for %s at t=%.3f s even after a retry%s",
+                "/".join(still), path, now - self.time_sync.epoch,
+                self._lockstep_hint())
+        return samples
+
     def _lockstep_hint(self) -> str:
         from stk_bridge.core.time_sync import ExecutionMode
 
@@ -519,13 +567,24 @@ class StkBridgeNode:
             return
         step = self.time_sync.step_index
         n = max(acc["samples"], 1)
+        channels = getattr(self.sensing, "channel_timings", None) or {}
+        per_channel = ", ".join(
+            f"{name} {total / max(count, 1):.0f}"
+            for name, (total, count) in sorted(channels.items()))
+        advance_total, advance_count = self._advance_ms
         LOGGER.info(
             "step %d: %.2f steps/s over the last %.0f s; per step: sense "
-            "%.1f ms, actuate %.1f ms, barrier wait %.1f ms; commands late "
-            "%d, rejected %d (run totals)",
+            "%.1f ms (per read, ms: %s), actuate %.1f ms, barrier wait "
+            "%.1f ms, clock advance %.1f ms; commands late %d, rejected %d "
+            "(run totals)",
             step, (step - acc["step"]) / elapsed, elapsed,
-            acc["sense"] / n, acc["actuate"] / n, acc["barrier_wait"] / n,
+            acc["sense"] / n, per_channel or "n/a", acc["actuate"] / n,
+            acc["barrier_wait"] / n,
+            advance_total / max(advance_count, 1),
             self._commands_late, self._commands_rejected)
+        if channels:
+            channels.clear()
+        self._advance_ms = (0.0, 0)
         self._timing_log = {"wall": wall, "step": step, "sense": 0.0,
                             "actuate": 0.0, "barrier_wait": 0.0,
                             "samples": 0}
@@ -543,6 +602,8 @@ class StkBridgeNode:
                     now - self.time_sync.epoch, exc, self._lockstep_hint())
                 self.health.record_error(str(exc))
                 continue
+
+            samples = self._retry_missing_channels(path, now, samples)
 
             if not samples:
                 # No state at this epoch. Publishing nothing is
@@ -637,6 +698,34 @@ def load_config(path: Optional[str]) -> Dict:
         return {}
     with open(path, "r", encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
+
+
+def check_attitude_pairing(report, config: Dict) -> None:
+    """Refuse to run commanding in one attitude frame and reading another.
+
+    Sensing reads attitude through the provider validation reports;
+    actuation commands in the form ``actuation.default_attitude_inertial``
+    configures. Validation prefers the configured form's pairing, so the
+    two only disagree when that pairing failed on this install -- and
+    running anyway would read back every commanded attitude rotated by
+    the Earth-rotation angle, silently.
+    """
+    if not report.attitude_provider:
+        return                      # validation disabled; it already warned
+    configured = bool((config.get("actuation") or {}).get(
+        "default_attitude_inertial", False))
+    if bool(report.attitude_command_inertial) == configured:
+        return
+    wanted = "AddAttitude Quat (inertial)" if configured \
+        else "AddAttitude CBFQuat (Earth-fixed)"
+    raise ConventionValidationError(
+        f"actuation is configured to command attitude with {wanted}, but "
+        f"validation paired the read-back with {report.attitude_provider!r}, "
+        "which belongs to the other command form -- the configured "
+        "pairing did not round-trip on this install. Commanding and "
+        "reading in different frames is wrong by the Earth-rotation angle "
+        "with nothing raising, so the bridge will not start. See the "
+        "quaternion_ordering result above.")
 
 
 def main(args=None) -> None:

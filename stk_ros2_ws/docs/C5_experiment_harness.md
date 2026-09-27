@@ -170,8 +170,9 @@ lockstep and fell back belongs to the free-run group rather than
 inflating a determinism claim it does not support.
 
 E1's treatment sets `sensing.force_attitude_provider` on the bridge,
-pairing an inertial read-back provider against the central-body-fixed
-command form the actuation path uses. The result is wrong by the
+pairing the Earth-fixed read-back provider (`ECF Attitude Quaternions`)
+against the inertial command form ACAV uses (`AddAttitude Quat`, see
+`config/bridge_params_acav.yaml`). The result is wrong by the
 Earth-rotation angle and **nothing raises** — which is the finding, and
 also why the knob fails loudly on an unrecognised provider name rather
 than falling back to the validated one: a typo that silently produced

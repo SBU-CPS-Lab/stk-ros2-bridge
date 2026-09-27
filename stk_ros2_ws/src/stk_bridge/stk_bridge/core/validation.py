@@ -179,8 +179,16 @@ class ConventionValidator:
                  test_object_path: Optional[str] = None,
                  fatal_checks: Optional[Dict[str, bool]] = None,
                  cleanup: bool = True,
-                 use_dedicated_object: bool = True):
+                 use_dedicated_object: bool = True,
+                 prefer_inertial_attitude: bool = False):
         self._backend = backend
+        #: The attitude command form actuation is configured to use. When
+        #: both pairings round-trip (they do on STK 12.6), the one that
+        #: matches it must win: the sensing side reads through whichever
+        #: provider validation reports, and the actuation side commands in
+        #: the configured form, so a tie resolved the other way leaves the
+        #: bridge commanding in one frame and reading back in another.
+        self._prefer_inertial = prefer_inertial_attitude
         self._requested_path = (conv.canonical_object_path(test_object_path)
                                 if test_object_path else None)
         self._path = self._requested_path or ""
@@ -290,6 +298,8 @@ class ConventionValidator:
                       default_fatal=False)
             self._run("monotonicity_enforced", self._check_monotonicity,
                       default_fatal=False)
+            self._run("attitude_history_clears", self._check_attitude_clear,
+                      default_fatal=False)
         finally:
             self._teardown_object()
 
@@ -297,6 +307,41 @@ class ConventionValidator:
         return self._report
 
     # -- individual checks -------------------------------------------------
+
+    def _check_attitude_clear(self) -> str:
+        """Does ``SetAttitude ClearData`` really drop real-time samples?
+
+        It must, for any run on a reused scenario: STK keeps an object's
+        real-time attitude samples across bridge sessions, and NACKs any
+        new sample earlier than the newest one it holds. The first live
+        run to reuse a scenario (2026-09-27) had every attitude command
+        rejected for the first 58 s of simulation time -- exactly as far
+        as the previous attempt had got -- while STK replayed that
+        attempt's attitude and the twin fought it into SAFE. The
+        actuation path now clears the history before an object's first
+        command; this check proves the clear works on this install,
+        rather than assuming a command that returns ACK did anything.
+        """
+        epoch = self._backend.get_scenario_epoch()
+        later = self._next_stamp(epoch)
+        earlier = later - 2.0
+        self._backend.enable_realtime_attitude(self._path)
+        self._backend.add_attitude_quaternion(
+            self._path, later, _test_quaternion(), inertial=False)
+        self._backend.clear_attitude_data(self._path)
+        try:
+            self._backend.add_attitude_quaternion(
+                self._path, earlier, _test_quaternion(), inertial=False)
+        except StkBridgeError as exc:
+            raise ConventionValidationError(
+                "after SetAttitude ClearData, a sample earlier than the "
+                f"cleared one was still rejected ({exc}). The clear did "
+                "not remove the history, so on a REUSED scenario every "
+                "attitude command before the previous run's last sample "
+                "will be rejected. Rebuild the scenario before each run "
+                "until this passes.") from exc
+        return ("ClearData removed the real-time attitude history: a "
+                "sample 2 s before the cleared one was accepted")
 
     def _check_ephemeris(self) -> str:
         """Ensure the test object actually has ephemeris.
@@ -481,6 +526,11 @@ class ConventionValidator:
             (True, dp.ATTITUDE_QUATERNION,
              "AddAttitude Quat <-> Attitude Quaternions"),
         )
+        # The configured command form's own pairing is tried first and
+        # wins any tie (strict < below), so a round-trip that works for
+        # both forms reports the provider that matches actuation.
+        if self._prefer_inertial:
+            pairings = pairings[::-1]
 
         attempts: List[str] = []
         best: Optional[tuple] = None
@@ -730,5 +780,8 @@ def validate_backend(backend: StkBackend, test_object_path: str,
         backend=backend,
         test_object_path=test_object_path,
         fatal_checks=settings.get("fatal") or {},
+        prefer_inertial_attitude=bool(
+            ((config or {}).get("actuation") or {}).get(
+                "default_attitude_inertial", False)),
     )
     return validator.validate()

@@ -340,6 +340,60 @@ samples the twin sends) matches the rate the twin integrated. The twin
 restarts every step from STK's reported rate, so a large mismatch there
 would show up as slews that never settle.
 
+### Second run (2026-09-27): attitude frames, and a reused scenario
+
+Scheduling worked this time -- every target was finalised -- but every
+one ended in SAFE with no access, and the satellite's attitude in STK
+looked aimless. Two causes:
+
+- **The twin and STK disagreed about the attitude frame** (the
+  colleague's diagnosis, confirmed in the code). The twin computes
+  attitude from ICRF position, velocity and target vectors, but the
+  bridge read attitude back in the Earth-fixed form (`ECF Attitude
+  Quaternions`) and wrote the twin's commands in the Earth-fixed form
+  (`AddAttitude CBFQuat`). The numbers went round unchanged, so the twin
+  believed it was on target, while STK's actual attitude was rotated by
+  the Earth-rotation angle: no access anywhere, and a phantom ~108 deg
+  pointing error at t=0 that started a pointless slew.
+  **ACAV is now inertial end to end**: the twin commands with
+  `AddAttitude Quat` and reads back `Attitude Quaternions`. The bridge
+  refuses to start if the attitude read-back does not match the
+  configured command form.
+- **The previous attempt's attitude was still in STK.** Both attempts
+  in this bundle used the same open scenario, and STK keeps an object's
+  real-time attitude samples between runs and rejects any sample earlier
+  than the newest it holds. Every command of the second attempt was
+  rejected until t=58 s -- as far as the first attempt had got -- while
+  STK replayed the first attempt's attitude, and the twin's fight
+  against it saturated the wheels into SAFE at t=10.6 s. The bridge now
+  clears that history before its first command, and a new startup check
+  (`attitude_history_clears`) proves the clear works on this install.
+
+Rebuild both sides again after pulling (same commands as above: `colcon
+build`, then `build_acav_twin`). Then, **in `bridge.log`, within the
+first minute:**
+
+- `validated: attitude='Attitude Quaternions'` -- not `ECF ...`;
+- `[ ok ] attitude_history_clears` in the validation summary. If it
+  says FAIL, rebuild the ACAV scenario in STK before every run until
+  that is resolved;
+- `cleared any real-time attitude samples ...` right after
+  `real-time attitude enabled`;
+- no `AddAttitude rejected` lines. The first, 10th, 100th, ... are
+  logged, with the likely cause;
+- the 60 s timing line now breaks sensing down per read (orbit,
+  attitude, angular rate) and adds the clock advance. Sensing was
+  ~0.9 s of every ~1 s step in this run, so that breakdown is what the
+  next speed-up will be aimed at.
+
+The bridge also stopped at step 5901 (t = 590.1 s) waiting for the
+twin, with no error from the bridge side. One possible cause is now
+handled: if one telemetry channel fails to read, the bridge retries it
+once and logs a warning, instead of silently publishing an incomplete
+step the twin would wait on forever. **Save the MATLAB Diagnostic
+Viewer and Command Window output with the next bundle.** If the twin
+itself stopped, that is the only place it will say why.
+
 ## 8. What is genuinely unverified here, so you know what to look for
 
 - **The manual MATLAB handoff (section 4, step 2-3).** This is the

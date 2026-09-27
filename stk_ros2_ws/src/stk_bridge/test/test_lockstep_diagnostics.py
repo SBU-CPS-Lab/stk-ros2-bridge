@@ -124,6 +124,7 @@ def _startup_node(step_index):
     node._step_lock = threading.Lock()
     node._step_size = 0
     node._last_startup_log = 0.0
+    node._advance_ms = (0.0, 0)
     from stk_bridge.core.step_timing import PhaseTimings
     node._timings = PhaseTimings()
     node.time_sync = Mock(step_index=step_index)

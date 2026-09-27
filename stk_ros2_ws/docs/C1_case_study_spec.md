@@ -32,7 +32,7 @@ Specifically, the bridge is load-bearing for two data paths:
 
 | Direction | Content | Why it can't be precomputed |
 |---|---|---|
-| Twin → STK | Achieved attitude, 10 Hz, `AddAttitude CBFQuat` | Depends on controller response to a schedule not known in advance |
+| Twin → STK | Achieved attitude, 10 Hz, `AddAttitude Quat` (inertial; read back through `Attitude Quaternions`) | Depends on controller response to a schedule not known in advance |
 | STK → Twin | Sensor access at the achieved attitude | Depends on the attitude just injected |
 
 ## 3. Honest scope
@@ -192,7 +192,7 @@ overnight-feasible. The full-orbit versions are not.
 
 | ID | Question | Design |
 |---|---|---|
-| **E1** | Does convention validation matter? | Nominal run vs. run with attitude read-back deliberately mis-paired (inertial provider against a CBFQuat command — the bug found during bridge bring-up). Expected: error inflated by the Earth-rotation angle, capture collapsing, **and nothing erroring**. |
+| **E1** | Does convention validation matter? | Nominal run vs. run with attitude read-back deliberately mis-paired (Earth-fixed provider against the inertial `Quat` command — the bug found during bridge bring-up, and, in its other direction, what the first live runs actually did). Expected: error inflated by the Earth-rotation angle, capture collapsing, **and nothing erroring**. |
 | **E2** | Does kinematic planning over-promise? | Same target set, two schedulers. Metrics: capture rate, coverage rate, over-promise gap, outcome breakdown. **Headline.** |
 | **E3** | Does lockstep deliver determinism? | 20 runs lockstep, 20 free-run, identical config. Compare `determinism_signature`. Expected: 1 distinct signature vs. many. |
 | **E4** | Can the loop tune the controller? | Gain sweep against E2's capture metric. Meaningful only because E3 established each evaluation is noise-free. |

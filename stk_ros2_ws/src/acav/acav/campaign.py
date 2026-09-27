@@ -183,11 +183,15 @@ class Campaign:
 # The matrices
 # ---------------------------------------------------------------------------
 
-#: The inertial read-back provider. Paired against the central-body-
-#: fixed command form the actuation path uses, it is wrong by the
-#: Earth-rotation angle -- the bug found during the bridge's own
-#: bring-up, and the treatment E1 applies deliberately.
-MISPAIRED_ATTITUDE_PROVIDER = "Attitude Quaternions"
+#: The Earth-fixed read-back provider. The ACAV loop commands attitude
+#: in the inertial form (``AddAttitude Quat``, see
+#: ``config/bridge_params_acav.yaml``), so reading it back through the
+#: Earth-fixed provider is wrong by the Earth-rotation angle -- the bug
+#: found during the bridge's own bring-up, and the treatment E1 applies
+#: deliberately. (It was "Attitude Quaternions" while ACAV still
+#: commanded in the Earth-fixed form; the mis-pairing is always the
+#: provider that does NOT match the command form.)
+MISPAIRED_ATTITUDE_PROVIDER = "ECF Attitude Quaternions"
 
 
 def build_e1_convention(scenario_path: str = "", backend: str = "com",
@@ -195,7 +199,7 @@ def build_e1_convention(scenario_path: str = "", backend: str = "com",
     """E1: does convention validation matter?
 
     Two runs, identical but for the attitude read-back provider. The
-    treatment pairs an inertial provider against a central-body-fixed
+    treatment pairs an Earth-fixed provider against an inertial
     command, which is wrong by the Earth-rotation angle -- and which
     raises nothing, reports no error and produces a plausible attitude.
     That silence is the finding: the expected result is that capture
@@ -210,9 +214,9 @@ def build_e1_convention(scenario_path: str = "", backend: str = "com",
         RunSpec(experiment="E1", scheduler=scheduler,
                 execution_mode=LOCKSTEP,
                 attitude_provider=MISPAIRED_ATTITUDE_PROVIDER,
-                notes="treatment: inertial read-back against a CBFQuat "
-                      "command -- wrong by the Earth-rotation angle, and "
-                      "nothing errors"),
+                notes="treatment: Earth-fixed read-back against an "
+                      "inertial (Quat) command -- wrong by the "
+                      "Earth-rotation angle, and nothing errors"),
     )
     return Campaign(
         campaign_id="E1_convention_validation",

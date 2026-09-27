@@ -84,6 +84,9 @@ validation:
     quaternion_ordering: true
     angular_rate_scale: false
     monotonicity_enforced: false
+    # Non-fatal, but read it: if it fails, a REUSED scenario rejects every
+    # attitude command until the previous run's last sample time.
+    attitude_history_clears: false
 
 sensing:
   satellites:
@@ -102,7 +105,16 @@ sensing:
     slow:   { rate_hz: 0.1 }
 
 actuation:
-  default_attitude_inertial: false
+  # INERTIAL, unlike the base bridge: the ACAV twin computes attitude from
+  # ICRF position, velocity and target vectors, so it must command
+  # AddAttitude Quat and read back through 'Attitude Quaternions'. The
+  # base pairing (CBFQuat / 'ECF Attitude Quaternions') is Earth-fixed;
+  # used with this twin, every attitude it commanded landed in STK rotated
+  # by the Earth-rotation angle (live run 2026-09-27: access=False for
+  # every target, and a phantom ~108 deg error at t=0). Validation prefers
+  # this pairing because of this setting, and the bridge refuses to start
+  # if the validated read-back does not match it.
+  default_attitude_inertial: true
   coalesce: true
 
 time:

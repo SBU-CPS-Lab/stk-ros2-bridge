@@ -31,6 +31,7 @@ frozen state that looks live.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -165,6 +166,9 @@ class SensingPipeline:
         self._report = report or ValidationReport()
         self._health: Dict[str, ChannelHealth] = {}
         self._realtime_objects: Dict[str, bool] = {}
+        self._read_failures = 0
+        #: channel -> (total ms, reads), for the bridge's timing log.
+        self.channel_timings: Dict[str, Tuple[float, int]] = {}
 
         self._attitude_spec = self._select_attitude_spec()
         self._rate_spec = self._select_rate_spec()
@@ -490,25 +494,47 @@ class SensingPipeline:
 
     # -- aggregate ---------------------------------------------------------
 
-    def read_all(self, object_path: str, when: StkTime) -> Dict[str, object]:
+    #: The fast-group channels ``read_all`` reads, in order.
+    FAST_CHANNELS = ("orbit", "attitude", "angular_rate")
+
+    def read_all(self, object_path: str, when: StkTime,
+                 channels=None) -> Dict[str, object]:
         """Every fast-group quantity for one object.
 
         Returns whatever succeeded. A missing key means that channel was
         stale or errored at this epoch -- callers publish only the keys
         present rather than substituting defaults, so a consumer can
         tell "no attitude yet" from "attitude is identity".
+
+        ``channels`` limits the read to a subset, so a caller can retry
+        just the ones that failed. Wall time per channel is accumulated
+        in ``channel_timings`` (reset by the caller that reports it).
         """
+        readers = {"orbit": self.read_orbit,
+                   "attitude": self.read_attitude,
+                   "angular_rate": self.read_angular_rate}
         result: Dict[str, object] = {}
-        for key, reader in (
-            ("orbit", self.read_orbit),
-            ("attitude", self.read_attitude),
-            ("angular_rate", self.read_angular_rate),
-        ):
-            try:
-                sample = reader(object_path, when)
-            except QueryError as exc:
-                LOGGER.debug("%s read failed on %s: %s", key, object_path, exc)
+        for key in self.FAST_CHANNELS:
+            if channels is not None and key not in channels:
                 continue
+            started = time.perf_counter()
+            try:
+                sample = readers[key](object_path, when)
+            except QueryError as exc:
+                # Not DEBUG: in lockstep a participant waiting for this
+                # channel's telemetry never acks, and the barrier timeout
+                # names the participant rather than the failed read.
+                self._read_failures += 1
+                if str(self._read_failures).rstrip("0") == "1":
+                    LOGGER.warning("%s read failed on %s: %s [failure %d]",
+                                   key, object_path, exc,
+                                   self._read_failures)
+                continue
+            finally:
+                total, count = self.channel_timings.get(key, (0.0, 0))
+                self.channel_timings[key] = (
+                    total + (time.perf_counter() - started) * 1000.0,
+                    count + 1)
             if sample is not None:
                 result[key] = sample
         return result

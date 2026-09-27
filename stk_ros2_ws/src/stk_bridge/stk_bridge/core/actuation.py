@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 from stk_bridge.backends.base import (
     PropagatorType,
@@ -87,11 +87,23 @@ class ActuationDispatcher:
     def __init__(self, backend: StkBackend, frames: FrameRegistry,
                  default_attitude_inertial: bool = False,
                  auto_enable_realtime: bool = True,
-                 min_step_s: float = 0.0):
+                 min_step_s: float = 0.0,
+                 clear_attitude_on_first_command: bool = True):
         self._backend = backend
         self._frames = frames
         self._default_inertial = default_attitude_inertial
         self._auto_enable = auto_enable_realtime
+        #: STK keeps an object's real-time attitude samples when the bridge
+        #: restarts against the same open scenario, and NACKs every new
+        #: sample earlier than the newest one it holds. Clearing once per
+        #: object per bridge session makes each run start from an empty
+        #: history. See validation._check_attitude_clear.
+        self._clear_on_first = clear_attitude_on_first_command
+        #: Objects already cleared this session. Separate from ObjectState
+        #: on purpose: reset() is local bookkeeping only (see its own
+        #: docstring) and must not start clearing STK-side data.
+        self._cleared: Set[str] = set()
+        self._rejections = 0
         #: Reject samples closer together than this. 0.0 disables. Useful
         #: when a publisher bursts faster than STK can usefully ingest.
         self._min_step_s = min_step_s
@@ -160,9 +172,19 @@ class ActuationDispatcher:
                 "real-time attitude is not enabled and auto_enable_realtime "
                 "is off; call SetPropagator or enable it explicitly first",
             )
+        self._enable_realtime_attitude(object_path, state)
+
+    def _enable_realtime_attitude(self, object_path: str,
+                                  state: ObjectState) -> None:
+        """Enable real-time attitude; the first time this session, clear it."""
         self._backend.enable_realtime_attitude(object_path)
         state.realtime_attitude_enabled = True
         LOGGER.info("real-time attitude enabled on %s", object_path)
+        if self._clear_on_first and object_path not in self._cleared:
+            self._cleared.add(object_path)
+            self._backend.clear_attitude_data(object_path)
+            LOGGER.info("cleared any real-time attitude samples an earlier "
+                        "run left on %s", object_path)
 
     # -- commands ----------------------------------------------------------
 
@@ -242,7 +264,16 @@ class ActuationDispatcher:
         except StkBridgeError as exc:
             state.attitude.rejected_by_stk += 1
             state.attitude.last_error = str(exc)
-            LOGGER.warning("AddAttitude rejected on %s: %s", path, exc)
+            self._rejections += 1
+            if str(self._rejections).rstrip("0") == "1":   # 1, 10, 100...
+                LOGGER.warning(
+                    "AddAttitude rejected on %s at %s: %s [rejection %d]. "
+                    "STK rejects a sample earlier than the newest one it "
+                    "already holds; a run that keeps being rejected is "
+                    "usually writing below an earlier run's attitude "
+                    "history on a reused scenario (see the "
+                    "attitude_history_clears validation result).",
+                    path, when, exc, self._rejections)
             return False
 
         state.attitude.last_stamp_s = when.epoch_seconds
@@ -322,8 +353,7 @@ class ActuationDispatcher:
         )
         state.realtime_propagator_set = True
 
-        self._backend.enable_realtime_attitude(path)
-        state.realtime_attitude_enabled = True
+        self._enable_realtime_attitude(path, state)
 
         LOGGER.info(
             "%s prepared for real-time control (analytic ephemeris is now "

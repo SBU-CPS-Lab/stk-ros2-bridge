@@ -242,9 +242,15 @@ function modelName = build_acav_twin(options)
         'Position', [720 100 730 180], 'Outputs', '4');
     add_line(modelName, 'GuidanceControl/2', 'DemuxQCmd/1');
 
+    % TRUE: qCmd is an attitude relative to the INERTIAL frame -- twin_step
+    % builds it from ICRF position, velocity and target vectors -- so the
+    % bridge must write it with AddAttitude Quat, not CBFQuat. It reads
+    % back through 'Attitude Quaternions' because bridge_params_acav.yaml
+    % sets actuation.default_attitude_inertial. Sent as FALSE, every
+    % command landed in STK rotated by the Earth-rotation angle.
     add_block('simulink/Sources/Constant', ...
         [modelName '/UseInertialFrame'], 'Position', [720 210 750 230], ...
-        'Value', 'false', 'OutDataTypeStr', 'boolean');
+        'Value', 'true', 'OutDataTypeStr', 'boolean');
 
     addBlankMessage(modelName, 'AttitudeCmdBlank', [790 40 940 60], ...
         'stk_msgs/AttitudeCommand');

@@ -346,16 +346,20 @@ class MockBackend(StkBackend):
     def _earth_rotation(self, when: float) -> Tuple[float, float, float, float]:
         """ECI->ECF rotation about z at ``when``. Quaternion (x,y,z,w).
 
-        Deliberately simplified (uniform sidereal rate, arbitrary zero
-        epoch) -- fidelity is irrelevant here. What matters is that it is
-        NON-IDENTITY and time-varying, so a mock that pairs an
-        ECF-commanded attitude with an inertial read-back produces a
-        large error, exactly as real STK does. Without this the mock
-        cannot catch the frame-pairing bug that a live STK 12.6 run
-        exposed.
+        The Earth Rotation Angle (IERS 2010) at ``when`` as UTC -- no
+        precession or nutation, which is irrelevant here. What matters is
+        that the ANGLE is realistic from the first second of a scenario,
+        because that is what makes a frame mis-pairing visible. An
+        earlier version started the angle at zero at the scenario epoch,
+        so pairing an Earth-fixed attitude with an inertial read-back
+        cost 0.04 deg after 10 s and ~3 deg after a 12-minute run, while
+        on real STK it was ~100 deg from the first step -- which is how
+        the ACAV loop ran commanding in one frame and reading in the
+        other without a single offline test noticing.
         """
-        omega = 7.2921159e-5
-        angle = (omega * (when - self._epoch)) % (2.0 * math.pi)
+        julian_ut1 = when / 86400.0 + 2440587.5
+        turns = 0.7790572732640 + 1.00273781191135448 * (julian_ut1 - 2451545.0)
+        angle = (2.0 * math.pi * turns) % (2.0 * math.pi)
         half = angle / 2.0
         return (0.0, 0.0, math.sin(half), math.cos(half))
 
