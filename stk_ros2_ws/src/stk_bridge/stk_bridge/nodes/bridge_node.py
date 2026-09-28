@@ -40,14 +40,16 @@ later correction reaches it.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import yaml
 
+from stk_bridge.core import conversions as conv
 from stk_bridge.exceptions import (
     ConventionValidationError,
     LockstepBarrierTimeoutError,
@@ -174,6 +176,9 @@ class StkBridgeNode:
         self._commands_rejected = 0
         self._last_startup_log = 0.0
         self._advance_ms = (0.0, 0)
+        self._commanded_paths: Set[str] = set()
+        self._commands_missing = 0
+        self._attitude_mismatches = 0
 
     # -- startup -----------------------------------------------------------
 
@@ -415,9 +420,52 @@ class StkBridgeNode:
                 self._publish_clock(now)
                 self._sense_and_publish(now)
                 self._publish_status(now)
+        # 5. The barrier is released, but the step is not complete until
+        #    each commanded object's attitude for the NEXT step is here:
+        #    see _await_attitude_commands. Part of the barrier wait, since
+        #    it is waiting on a participant.
+        self._await_attitude_commands(now)
         if not waited_for_startup:
             self._timings.record(
                 "barrier_wait", (time.perf_counter() - started) * 1000.0)
+
+    def _await_attitude_commands(self, now) -> None:
+        """Lockstep: wait for each commanded object's next-step attitude.
+
+        A participant publishes its attitude command and its barrier ack
+        on two topics, and ROS 2 does not order delivery across topics.
+        When the ack wins, the barrier releases, the bridge steps and
+        senses before the command lands, and STK -- holding no sample at
+        that time -- reports its BASIC attitude (nadir) instead: a jump of
+        up to 180 deg in one step. The twin then integrated from that
+        jump. On the third live run this happened on 7% of steps and spun
+        the vehicle up to ~800 deg/s. Waiting here removes the race
+        whatever order the two messages arrive in.
+
+        Only objects that have been commanded this session are waited
+        for, so the first step (before any command) and objects nobody
+        commands are unaffected. Enabled by
+        ``time.await_attitude_commands``.
+        """
+        section = self.config.get("time") or {}
+        if not section.get("await_attitude_commands", False):
+            return
+        if not self._commanded_paths or not self._running.is_set():
+            return
+        step_s = self.time_sync.config.step_s
+        wanted_s = now.epoch_seconds + 0.5 * step_s
+        timeout_s = float(section.get("command_wait_s", 5.0))
+        for path in sorted(self._commanded_paths):
+            if self.inbox.wait_for("attitude", path, wanted_s, timeout_s):
+                continue
+            self._commands_missing += 1
+            self._warn_limited(
+                "command-missing", logging.WARNING,
+                "no attitude command for %s stamped for the next step "
+                "arrived within %.1f s of the barrier releasing; STK will "
+                "report its basic attitude at t=%.3f s instead of the "
+                "twin's", path, timeout_s,
+                now + step_s - self.time_sync.epoch)
 
     def _free_running_iteration(self) -> None:
         # No barrier wait outside lockstep -- see BridgeStatus.msg's own
@@ -443,6 +491,9 @@ class StkBridgeNode:
         commands = self._screen_command_times(self.inbox.drain())
         if not commands:
             return
+        self._commanded_paths.update(
+            conv.canonical_object_path(command.object_path)
+            for channel, command in commands if channel == "attitude")
         try:
             self.worker.call(
                 lambda backend: apply_commands(self.actuation, commands),
@@ -497,6 +548,48 @@ class StkBridgeNode:
                     channel, command.object_path, offset_s)
             kept.append((channel, command))
         return kept
+
+    def _check_attitude_landed(self, path, now, samples) -> None:
+        """Lockstep: is STK's attitude at ``now`` the one written for it?
+
+        Once an object is commanded, STK should report exactly the sample
+        written for this step. Anything else -- no command for this step,
+        or a read-back that differs from it -- means the controller's
+        next step starts from an attitude it never commanded, which is
+        silent unless something says so.
+        """
+        from stk_bridge.core.time_sync import ExecutionMode
+
+        if (self.time_sync.mode is not ExecutionMode.LOCKSTEP
+                or path not in self._commanded_paths
+                or "attitude" not in samples):
+            return
+        written = self.actuation.last_attitude(path)
+        sample = samples["attitude"]
+        t_s = now - self.time_sync.epoch
+        if written is None or abs(written[0] - now.epoch_seconds) > 1e-6:
+            self._attitude_mismatches += 1
+            self._warn_limited(
+                "attitude-unwritten", logging.WARNING,
+                "no attitude was written to STK for %s at t=%.3f s before "
+                "it was sensed; STK reports its basic attitude there, not "
+                "the controller's", path, t_s)
+            return
+        try:
+            inertial_read = self.frames.is_inertial_attitude_reference(
+                sample.frame)
+        except Exception:           # unknown frame: cannot compare
+            return
+        if inertial_read != written[2]:
+            return                  # different frames: not comparable
+        error_deg = math.degrees(conv.quaternion_angle_between(
+            written[1], sample.quaternion_xyzw))
+        if error_deg > 0.1:
+            self._attitude_mismatches += 1
+            self._warn_limited(
+                "attitude-mismatch", logging.WARNING,
+                "STK reports an attitude for %s at t=%.3f s %.2f deg away "
+                "from the one written for that time", path, t_s, error_deg)
 
     def _retry_missing_channels(self, path, now, samples):
         """Lockstep only: re-read fast channels that a sensing pass missed.
@@ -575,13 +668,14 @@ class StkBridgeNode:
         LOGGER.info(
             "step %d: %.2f steps/s over the last %.0f s; per step: sense "
             "%.1f ms (per read, ms: %s), actuate %.1f ms, barrier wait "
-            "%.1f ms, clock advance %.1f ms; commands late %d, rejected %d "
-            "(run totals)",
+            "%.1f ms, clock advance %.1f ms; commands late %d, rejected %d, "
+            "missing %d; attitude not as written %d (run totals)",
             step, (step - acc["step"]) / elapsed, elapsed,
             acc["sense"] / n, per_channel or "n/a", acc["actuate"] / n,
             acc["barrier_wait"] / n,
             advance_total / max(advance_count, 1),
-            self._commands_late, self._commands_rejected)
+            self._commands_late, self._commands_rejected,
+            self._commands_missing, self._attitude_mismatches)
         if channels:
             channels.clear()
         self._advance_ms = (0.0, 0)
@@ -604,6 +698,7 @@ class StkBridgeNode:
                 continue
 
             samples = self._retry_missing_channels(path, now, samples)
+            self._check_attitude_landed(path, now, samples)
 
             if not samples:
                 # No state at this epoch. Publishing nothing is

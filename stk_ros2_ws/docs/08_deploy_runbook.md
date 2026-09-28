@@ -394,6 +394,49 @@ step the twin would wait on forever. **Save the MATLAB Diagnostic
 Viewer and Command Window output with the next bundle.** If the twin
 itself stopped, that is the only place it will say why.
 
+### Third run (2026-09-27): a race between the twin's two messages
+
+The fixes from the second run held -- attitude read back as `Attitude
+Quaternions`, `attitude_history_clears` passed (so ClearData works on
+this install), and no command was rejected -- but the vehicle still spun
+"illogically" and every target ended in SAFE. The attitude and command
+captures show why:
+
+- **On 7% of steps, STK's attitude was not the one the twin had just
+  commanded.** The twin publishes its attitude command and its lockstep
+  ack on two different topics, and ROS 2 does not guarantee they arrive
+  in order. When the ack arrived first, the bridge advanced and read the
+  next step's attitude before that step's command had landed -- and STK,
+  holding no sample for that moment, reported the scenario's basic
+  (nadir) attitude instead: a jump of up to 180 deg in one step.
+  (The bridge's "commands late" counter showed only 70 of these 265;
+  the rest were overwritten by the following command before being
+  applied.)
+- **The twin then took on the body rate STK computed across that jump.**
+  A 1.8 deg jump turned a 1.2 deg/s slew into a steady 8 deg/s spin; a
+  155 deg jump produced ~800 deg/s. No reaction wheel can remove that,
+  so the wheels saturated and SAFE latched.
+
+Fixed on both sides. The bridge now waits, after the barrier, for each
+commanded object's attitude for the next step before it advances
+(`time.await_attitude_commands`), so message order no longer matters;
+and it warns whenever STK's attitude at a step is not the one written
+for it. The twin now carries its own body rate from step to step, taking
+STK's only once, to start -- STK's rate is just a numerical derivative of
+the attitudes the twin itself wrote, so it carries no new information,
+and across a missing sample it is wildly wrong.
+
+After pulling: `colcon build` and restart MATLAB (or run `clear
+functions`) so the updated `+adcs/simulink_step.m` is loaded; the model
+itself does not need rebuilding. **In `bridge.log`**, the 60 s timing
+line now ends with `commands late 0, rejected 0, missing 0; attitude not
+as written 0` -- all four should stay at 0. Any non-zero value names the
+step and the cause in a warning just above it.
+
+The same timing line shows where each step's ~0.8 s goes: orbit read
+~380 ms, angular rate ~200 ms, attitude ~180 ms, everything else ~25 ms.
+Making the loop faster means reading STK less, not tuning ROS or MATLAB.
+
 ## 8. What is genuinely unverified here, so you know what to look for
 
 - **The manual MATLAB handoff (section 4, step 2-3).** This is the

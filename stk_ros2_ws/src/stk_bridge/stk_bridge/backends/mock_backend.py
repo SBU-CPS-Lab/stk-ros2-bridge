@@ -376,6 +376,13 @@ class MockBackend(StkBackend):
         if not candidates:
             return (0.0, 0.0, 0.0, 1.0)
         stamp, quaternion, was_inertial = max(candidates, key=lambda s: s[0])
+        if when - obj.attitude_samples[-1][0] > 1e-6:
+            # PAST the newest real-time sample, STK 12.6 does not hold it:
+            # on the third live run it reported its basic attitude instead
+            # (228 of 265 such reads; the other 37 held the last sample).
+            # A mock that held it made a missing command harmless offline,
+            # while live it was a jump of up to 180 deg.
+            return (0.0, 0.0, 0.0, 1.0)
         if was_inertial == inertial:
             return quaternion
 

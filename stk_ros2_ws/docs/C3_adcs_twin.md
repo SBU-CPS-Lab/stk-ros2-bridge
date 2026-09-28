@@ -259,6 +259,17 @@ one is unresolvable. Edit the builder, not the model.
   absolute epoch seconds rather than seconds since the window start
   (the function's documented contract), which would have fired every
   E5 fault on the first step. Both are fixed in `build_acav_twin`.
+- **The twin carries its own body rate.** `adcs.simulink_step` takes
+  STK's reported rate once, to initialise, then feeds `twin_step` the
+  `omegaNext` it produced the step before. STK holds only the attitude
+  samples the twin wrote, so its rate is a numerical derivative of the
+  twin's own trajectory -- no independent information -- and across a
+  missing sample (STK then reports its basic attitude) it is enormous:
+  the third live run turned a 155 deg read-back jump into a steady
+  ~800 deg/s spin. The attitude still closes through STK, which is what
+  E1's mis-pairing acts on. `twin_step` itself is unchanged, and so is
+  every fixture: the closed-loop fixtures already fed back the twin's own
+  `omegaNext`.
 - **The twin now closes its own loop.** See section 8: building the
   wiring exposed that `twin_step` never integrated the torque it
   computed, and that is fixed.

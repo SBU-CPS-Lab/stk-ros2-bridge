@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -82,7 +83,7 @@ class CommandInbox:
     """
 
     def __init__(self, coalesce: bool = True):
-        self._lock = threading.Lock()
+        self._lock = threading.Condition()
         self._pending: Dict[Tuple[str, str], object] = {}
         self._order: List[Tuple[str, str]] = []
         self._coalesce = coalesce
@@ -102,6 +103,34 @@ class CommandInbox:
                 return
             self._pending[key] = command
             self._order.append(key)
+            self._lock.notify_all()
+
+    def wait_for(self, channel: str, object_path: str, min_time_s: float,
+                 timeout_s: float) -> bool:
+        """Block until a pending command for this key is stamped at or
+        after ``min_time_s`` (epoch seconds). True if one arrived.
+
+        For lockstep: a participant publishes its command and its barrier
+        ack on two topics, and ROS 2 does not order delivery across
+        topics, so the ack can release the barrier before the command
+        lands. Waiting here for the command stamped for the next step
+        makes the step independent of that ordering.
+        """
+        key = (channel, conv.canonical_object_path(object_path))
+        deadline = time.monotonic() + timeout_s
+
+        def arrived() -> bool:
+            command = self._pending.get(key)
+            return (command is not None
+                    and command.time.epoch_seconds >= min_time_s)
+
+        with self._lock:
+            while not arrived():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    return False
+                self._lock.wait(timeout=remaining)
+            return True
 
     def drain(self) -> List[Tuple[str, object]]:
         """Remove and return all pending commands, in arrival order."""

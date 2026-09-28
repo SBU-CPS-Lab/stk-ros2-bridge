@@ -39,5 +39,26 @@ function test_simulink_adapter()
     [~,first] = adcs.simulink_step([0 0 0 1],[0 0 0],pos,vel,target,true,0,true,'');
     [~,again] = adcs.simulink_step([0 0 0 1],[0 0 0],pos,vel,target,true,0,true,'');
     assert(isequal(first,again),'Simulation restart must reset controller state.');
-    fprintf('PASS: zero startup and invalid telemetry are gated; 12 steps match; reset works.\n');
+    % After the first valid step the twin carries its own body rate: a
+    % rate STK reports (a derivative of the twin's own samples, enormous
+    % across a missing sample -- third live run) must not enter the
+    % dynamics. Two runs from the same start, one fed the true rate and
+    % one fed garbage after step 1, must command identical attitudes.
+    runs = cell(1, 2);
+    for variant = 1:2
+        qv = [0 0 0 1];
+        for k = 1:6
+            t = (k-1)*cfg.stepS;
+            fed = [0 0 0];
+            if variant == 2 && k > 1
+                fed = [27 -31 19];          % rad/s -- a derivative spike
+            end
+            [~, qv] = adcs.simulink_step(qv, fed, pos, vel, target, true, ...
+                t, k == 1, '');
+        end
+        runs{variant} = qv;
+    end
+    assert(norm(runs{1} - runs{2}) < 1e-12, ...
+        'A reported-rate spike after initialisation changed the commanded attitude.');
+    fprintf('PASS: zero startup and invalid telemetry are gated; 12 steps match; reset works; the twin carries its own rate.\n');
 end

@@ -79,6 +79,11 @@ class ObjectState:
     realtime_attitude_enabled: bool = False
     realtime_propagator_set: bool = False
     has_attitude_sample: bool = False
+    #: The last attitude STK accepted: (epoch seconds, quaternion xyzw,
+    #: inertial). Lets the step loop check that what STK reports at a
+    #: time is what was written for it.
+    last_attitude: Optional[Tuple[float, Tuple[float, float, float, float],
+                                  bool]] = None
 
 
 class ActuationDispatcher:
@@ -279,7 +284,14 @@ class ActuationDispatcher:
         state.attitude.last_stamp_s = when.epoch_seconds
         state.attitude.accepted += 1
         state.has_attitude_sample = True
+        state.last_attitude = (when.epoch_seconds, tuple(normalized),
+                               bool(use_inertial))
         return True
+
+    def last_attitude(self, object_path: str):
+        """``(epoch_s, quaternion_xyzw, inertial)`` last accepted, or None."""
+        state = self._objects.get(conv.canonical_object_path(object_path))
+        return None if state is None else state.last_attitude
 
     def set_angular_velocity(self, object_path: str, when: StkTime,
                              angular_velocity_radps: Tuple[float, float, float]

@@ -31,6 +31,9 @@ def _node(mode=ExecutionMode.LOCKSTEP, sim_s=10.0, config=None):
     node._warn_counts = {}
     node._commands_late = 0
     node._commands_rejected = 0
+    node._commanded_paths = set()
+    node._commands_missing = 0
+    node._attitude_mismatches = 0
     node.time_sync = SimpleNamespace(
         mode=mode, config=SimpleNamespace(step_s=0.1),
         epoch=StkTime(EPOCH), step_index=int(sim_s / 0.1),

@@ -4,11 +4,24 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh] = 
 % Keep dynamic profile structs and YAML/JSON loading in MATLAB; the
 % Simulink boundary exposes only fixed-size numeric outputs. Reset is
 % asserted by the block on every simulation start, preventing stale state.
-    persistent cfg state lastTime lastOutput
+%
+% Body rate: STK's reported rate is read ONCE, to initialise, and after
+% that the twin carries its own (twin_step's omegaNext). STK holds only
+% the attitude samples this twin wrote, so the rate it reports is a
+% numerical derivative of the twin's own trajectory -- no independent
+% information -- and it is catastrophic when one sample is missing: STK
+% then reports its basic attitude for that step, and the derivative across
+% that jump is enormous. On the third live run a 155 deg jump became a
+% steady ~800 deg/s spin that no wheel could remove. The attitude still
+% closes through STK (qMeas), which is what E1's mis-pairing acts on; the
+% rate is the vehicle's own state, as a gyro would measure it. This is
+% also what the closed-loop fixtures already assume: they feed back
+% twin_step's own omegaNext as the next step's rate.
+    persistent cfg state lastTime lastOutput omegaOwn
     if reset || isempty(cfg)
         cfg = adcs.config([], runConfigPath);
         state = adcs.initial_state();
-        lastTime = []; lastOutput = {};
+        lastTime = []; lastOutput = {}; omegaOwn = [];
     end
     % ROS subscribers initially output a zero-filled bus. Do not advance
     % dynamics or acknowledge a step until all required numerics are valid.
@@ -34,11 +47,15 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh] = 
         return
     end
     fresh = true;
-    in = struct('quaternion', qMeas, 'omega', omega, ...
+    if isempty(omegaOwn)
+        omegaOwn = omega(:).';     % first valid step: initialise from STK
+    end
+    in = struct('quaternion', qMeas, 'omega', omegaOwn, ...
         'position', pos, 'velocity', vel, 'targetEci', targetEci, ...
         'haveTarget', haveTarget, 't', t);
     out = adcs.twin_step(in, cfg, state);
     state = out.state;
+    omegaOwn = out.omegaNext(:).';
     torque = out.torque;
     qCmd = out.quaternionCmd;
     names = {'NADIR', 'SLEW', 'SETTLE', 'IMAGE', 'SAFE'};
