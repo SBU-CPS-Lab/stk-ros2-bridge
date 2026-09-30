@@ -437,6 +437,29 @@ The same timing line shows where each step's ~0.8 s goes: orbit read
 ~380 ms, angular rate ~200 ms, attitude ~180 ms, everything else ~25 ms.
 Making the loop faster means reading STK less, not tuning ROS or MATLAB.
 
+### Ground-target coordinates and moving-target tracking
+
+The 2026-09-28 T1 miss had a geometric cause: a Target's ungrouped fixed
+`Cartesian Position` provider returned Earth-fixed coordinates even when the
+request specified `ICRF`. The bridge previously ignored that frame request.
+The controller converged on a fictitious inertial point: at t=60 s its real
+sensor-to-T1 error was about 41.57 degrees despite a small reported error.
+The COM adapter now resolves the object's Center through VGT in the requested
+central-body system at each requested epoch, failing explicitly if unavailable.
+
+The scheduler caches time-varying ICRF target positions at 10 s intervals and
+interpolates them at the current simulation time, rather than freezing the
+position at the future image epoch. The twin estimates the desired attitude's
+angular rate between steps and uses it as tracking feedforward in NADIR,
+SETTLE and IMAGE. The MATLAB implementation and Python reference agree; wheel
+torque/momentum limits and capture tolerances are unchanged.
+
+Restart the bridge and scheduler after rebuilding their packages if needed.
+Stop the old Simulink model, clear `adcs.simulink_step`, and regenerate/open
+the model for the new run. No custom message definition changed. Check both
+the twin's pointing error through t=58..60 s and the scheduler's T1 access
+result; an `IMAGE` label alone is not evidence of successful capture.
+
 ## 8. What is genuinely unverified here, so you know what to look for
 
 - **The manual MATLAB handoff (section 4, step 2-3).** This is the

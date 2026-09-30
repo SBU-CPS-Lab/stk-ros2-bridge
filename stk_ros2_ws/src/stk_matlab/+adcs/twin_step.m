@@ -106,6 +106,20 @@ function out = twin_step(in, cfg, state)
             [1 0 0], in.velocity);
     end
 
+    % Track the moving line of sight, rather than damping its required
+    % angular velocity to zero. Express the reference rate in actual body axes.
+    desiredRate = [0 0 0];
+    if isfield(state, 'previousDesired') && ~isempty(state.previousDesired) && ...
+            in.t > state.previousDesiredTime
+        delta = adcs.quat.multiply(adcs.quat.conjugate(state.previousDesired), qDesired);
+        [axis, angle] = adcs.quat.toAxisAngle(delta);
+        referenceRate = axis * (angle / (in.t-state.previousDesiredTime));
+        desiredRate = adcs.quat.toBody(in.quaternion, ...
+            adcs.quat.toInertial(qDesired, referenceRate));
+    end
+    state.previousDesired = qDesired;
+    state.previousDesiredTime = in.t;
+
     boresightErrorRad = adcs.quat.boresightError(in.quaternion, ...
         qDesired, cfg.boresightBody);
     rateMagnitude = norm(in.omega);
@@ -149,7 +163,7 @@ function out = twin_step(in, cfg, state)
             omegaRef = [0 0 0];
         otherwise
             qRef = qDesired;
-            omegaRef = [0 0 0];
+            omegaRef = desiredRate;
     end
 
     if strcmp(state.mode, 'SAFE')

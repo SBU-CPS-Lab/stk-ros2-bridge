@@ -77,6 +77,15 @@ LOGGER = logging.getLogger(__name__)
 #: pointing.settle_hold_s, so the tracker's retention window is not on
 #: the hairline against the hold window it has to score.
 RETENTION_MARGIN_S = 5.0
+TARGET_POSITION_STEP_S = 10.0  # Earth-rotation interpolation error below 0.5 m.
+
+
+def interpolate_target_position(samples, time_s):
+    """ICRF ground-target position at the current simulation epoch."""
+    u = max(0.0, min(time_s / TARGET_POSITION_STEP_S, len(samples) - 1))
+    i = int(u)
+    j = min(i + 1, len(samples) - 1)
+    return tuple(a + (u-i) * (b-a) for a, b in zip(samples[i], samples[j]))
 
 #: Delay, seconds, after a target's image epoch before this node asks
 #: STK whether it had access at that epoch. STK's real-time attitude
@@ -227,7 +236,7 @@ class SchedulerNode:
                 spec.bridge.get("barrier_participants", []))
 
         self._epoch: Optional[StkTime] = None
-        self._target_positions: Dict[str, "tuple[float, float, float]"] = {}
+        self._target_positions: Dict[str, list] = {}
         self._requested_positions: Set[str] = set()
         self._access_requested: Set[str] = set()
         self._results: Dict[str, TargetResult] = {}
@@ -386,7 +395,8 @@ class SchedulerNode:
         message.header.frame_id = "icrf"
 
         if active is not None and active.target_id in self._target_positions:
-            x, y, z = self._target_positions[active.target_id]
+            x, y, z = interpolate_target_position(
+                self._target_positions[active.target_id], sim_time_s)
             message.target_id = active.target_id
             message.target_position_m.x = x
             message.target_position_m.y = y
@@ -478,13 +488,17 @@ class SchedulerNode:
         self._requested_positions.add(entry.target_id)
 
         target_path = target_object_path(entry.target_id)
-        when = self._epoch + entry.t_image_s
+        # Ground targets move in ICRF: cache their trajectory, not a
+        # single position at the future imaging epoch.
+        when = self._epoch
         request = QueryDataProvider.Request()
         request.request = DataProviderRequest(
             object_path=target_path, provider_name="Cartesian Position",
             group_name="ICRF", element_names=[],
             start_time=conv.stk_time_to_ros(when),
-            stop_time=conv.stk_time_to_ros(when), step_s=1.0)
+            stop_time=conv.stk_time_to_ros(when + math.ceil(
+                self._spec.window_duration_s / TARGET_POSITION_STEP_S) * TARGET_POSITION_STEP_S),
+            step_s=TARGET_POSITION_STEP_S)
 
         if not self._client_query.wait_for_service(timeout_sec=0.0):
             LOGGER.warning(
@@ -524,17 +538,20 @@ class SchedulerNode:
                 object_path=target_path, provider_name="Cartesian Position",
                 columns=columns, row_count=result.row_count)
             mapping = dp.resolve_columns(dp.CARTESIAN_POSITION, data)
-            x = dp.first_value(data, dp.CARTESIAN_POSITION, mapping, "x")
-            y = dp.first_value(data, dp.CARTESIAN_POSITION, mapping, "y")
-            z = dp.first_value(data, dp.CARTESIAN_POSITION, mapping, "z")
-        except StkBridgeError as exc:
+            samples = list(zip(*(tuple(float(v) for v in columns[mapping[c]])
+                                 for c in ("x", "y", "z"))))
+            expected = math.ceil(self._spec.window_duration_s / TARGET_POSITION_STEP_S) + 1
+            if len(samples) != expected or not all(
+                    math.isfinite(v) for row in samples for v in row):
+                raise ValueError(f"expected {expected} valid time-varying positions, got {len(samples)}")
+        except (StkBridgeError, ValueError, KeyError) as exc:
             LOGGER.error("could not parse %s's position result: %s",
-                        target_id, exc)
+                         target_id, exc)
             return
 
-        self._target_positions[target_id] = (x, y, z)
-        LOGGER.info("%s inertial position resolved: (%.1f, %.1f, %.1f) m",
-                   target_id, x, y, z)
+        self._target_positions[target_id] = samples
+        LOGGER.info("%s ICRF trajectory resolved: %d positions, %.1f s spacing",
+                    target_id, len(samples), TARGET_POSITION_STEP_S)
 
     # -- access checks ------------------------------------------------------
 

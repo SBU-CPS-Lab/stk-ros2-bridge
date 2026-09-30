@@ -56,12 +56,14 @@ from acav.attitude import (
     dot,
     normalize,
     quat_align,
+    quat_conjugate,
     quat_derivative,
     quat_error,
     quat_from_axis_angle,
     quat_multiply,
     quat_normalize,
     rotate_to_inertial,
+    rotate_to_body,
     scale,
 )
 from acav.fault_injection import WheelFault
@@ -587,6 +589,8 @@ class TwinState:
     #: running total survives a dropped sample where a consumer-side
     #: integration would silently lose that step's contribution.
     wheel_energy_J: float = 0.0
+    previous_desired: Optional[Quaternion] = None
+    previous_desired_time: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -680,6 +684,15 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
         q_desired = nadir_attitude(inputs.position_m, inputs.velocity_m_s,
                                    config.boresight_body)
 
+    desired_rate = (0.0, 0.0, 0.0)
+    if (state.previous_desired is not None and
+            inputs.time_s > state.previous_desired_time):
+        delta = quat_multiply(quat_conjugate(state.previous_desired), q_desired)
+        axis, angle = axis_angle_from_quat(delta)
+        reference_rate = scale(axis, angle / (inputs.time_s - state.previous_desired_time))
+        desired_rate = rotate_to_body(inputs.quaternion,
+                                     rotate_to_inertial(q_desired, reference_rate))
+
     error = boresight_error_rad(inputs.quaternion, q_desired,
                                 config.boresight_body)
     rate_magnitude = math.sqrt(dot(inputs.omega_rad_s, inputs.omega_rad_s))
@@ -720,7 +733,7 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
         # keep the wheels loaded against a target they cannot reach.
         q_ref, omega_ref = inputs.quaternion, (0.0, 0.0, 0.0)
     else:
-        q_ref, omega_ref = q_desired, (0.0, 0.0, 0.0)
+        q_ref, omega_ref = q_desired, desired_rate
 
     torque = control_torque(config, mode_state.mode, inputs.quaternion,
                             inputs.omega_rad_s, q_ref, omega_ref)
@@ -754,7 +767,9 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
         state=TwinState(mode_state=mode_state,
                         wheel_momentum_Nms=wheels.momentum_Nms,
                         wheel_energy_J=energy,
-                        fault_applied=state.fault_applied),
+                        fault_applied=state.fault_applied,
+                        previous_desired=q_desired,
+                        previous_desired_time=inputs.time_s),
         boresight_error_rad=error,
         mode_changed=mode_changed,
         wheels_saturated=saturated)

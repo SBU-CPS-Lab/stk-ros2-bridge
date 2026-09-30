@@ -502,8 +502,41 @@ class ComBackend(StkBackend):
                              f"no such data provider ({exc})") from exc
 
         provider = self._select_group_member(provider, query)
+        if (query.provider_name == "Cartesian Position" and
+                query.group_element and not hasattr(provider, "ExecSingle")):
+            # Target/Facility Cartesian Position is ungrouped and fixed.
+            # Its values are body-fixed, even if the request said ICRF.
+            # Resolve the center geometrically at the requested epoch.
+            return self._fixed_position_in_frame(obj, query)
         result = self._exec_provider(provider, query)
         return self._extract(result, query)
+
+    def _fixed_position_in_frame(self, obj, query):
+        try:
+            body = self._root.CentralBodies.Item(obj.CentralBodyName)
+            system = body.Vgt.Systems.Item(query.group_element)
+            point = obj.Vgt.Points.Item("Center")
+            start = query.start or self.get_scenario_epoch()
+            stop = query.stop or start
+            if not query.is_instantaneous and query.step_s <= 0:
+                raise ValueError("step_s must be positive")
+            count = (1 if query.is_instantaneous else
+                     int(math.floor((stop - start) / query.step_s + 1e-7)) + 1)
+            columns = {name: [] for name in (query.elements or ("Time", "x", "y", "z"))}
+            for i in range(count):
+                stamp = proto.format_utcg(start + i * query.step_s)
+                position = point.LocateInSystem(stamp, system).Position
+                row = {"Time": stamp, "x": position.X,
+                       "y": position.Y, "z": position.Z}
+                for name in columns:
+                    columns[name].append(row[name])
+            return DataProviderData(object_path=query.object_path,
+                                    provider_name=query.provider_name,
+                                    columns=columns, row_count=count)
+        except Exception as exc:
+            raise QueryError(query.provider_name, query.object_path,
+                             f"cannot resolve fixed-object position in "
+                             f"{query.group_element!r}: {exc}") from exc
 
     def _select_group_member(self, provider: Any,
                              query: DataProviderQuery) -> Any:

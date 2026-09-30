@@ -9,12 +9,46 @@ a second round trip to the Windows machine.
 """
 
 import math
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from stk_bridge.backends.base import DataProviderQuery, StkTime
 from stk_bridge.backends.com_backend import ComBackend
 from stk_bridge.exceptions import QueryError
+
+
+def test_fixed_position_resolves_requested_axes_and_each_epoch():
+    backend = ComBackend()
+    point = Mock()
+    point.LocateInSystem.side_effect = [
+        SimpleNamespace(Position=SimpleNamespace(X=x, Y=2, Z=3)) for x in (10, 11, 12)]
+    obj = SimpleNamespace(CentralBodyName='Earth',
+                          Vgt=SimpleNamespace(Points=Mock()))
+    obj.Vgt.Points.Item.return_value = point
+    obj.DataProviders = Mock()
+    obj.DataProviders.Item.return_value = FixedProvider()
+    backend._get_object = Mock(return_value=obj)
+    body = Mock()
+    backend._root = SimpleNamespace(CentralBodies=Mock())
+    backend._root.CentralBodies.Item.return_value = body
+    request = query(provider_name='Cartesian Position', group_element='ICRF',
+                    stop=StkTime(1717237802), step_s=1)
+    data = backend.query_data_provider(request)
+    body.Vgt.Systems.Item.assert_called_once_with('ICRF')
+    assert data.columns['x'] == [10, 11, 12]
+    assert data.row_count == 3
+    assert point.LocateInSystem.call_count == 3
+
+
+def test_missing_requested_fixed_object_frame_is_not_silently_ignored():
+    backend = ComBackend()
+    backend._root = Mock()
+    backend._root.CentralBodies.Item.side_effect = RuntimeError('unknown frame')
+    with pytest.raises(QueryError, match='cannot resolve fixed-object position'):
+        backend._fixed_position_in_frame(SimpleNamespace(CentralBodyName='Earth'),
+            query(provider_name='Cartesian Position', group_element='bad-frame'))
 
 
 class FixedProvider:
