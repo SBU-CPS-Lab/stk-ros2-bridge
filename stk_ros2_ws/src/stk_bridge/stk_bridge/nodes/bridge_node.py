@@ -53,6 +53,7 @@ from stk_bridge.core import conversions as conv
 from stk_bridge.exceptions import (
     ConventionValidationError,
     LockstepBarrierTimeoutError,
+    LockstepCommandError,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -337,7 +338,7 @@ class StkBridgeNode:
                 else:
                     self._free_running_iteration()
                 self._loop_iterations += 1
-            except LockstepBarrierTimeoutError as exc:
+            except (LockstepBarrierTimeoutError, LockstepCommandError) as exc:
                 LOGGER.error("lockstep aborted; time will not advance: %s", exc)
                 self.health.record_error(str(exc), fatal=True)
                 self._running.clear()
@@ -361,9 +362,29 @@ class StkBridgeNode:
             step_size = self._step_size
             self._step_size = 0.0
 
+        # A barrier ack can arrive before the command on another DDS topic.
+        # The first step has no preceding telemetry/controller output.
+        time_config = self.config.get("time") or {}
+        required = []
+        if (self.time_sync.step_index > 0 and
+                time_config.get("require_attitude_command_each_step", False)):
+            required = ["attitude"]
+            stamp = self.time_sync.now() + (step_size or self.time_sync.config.step_s)
+            missing = self.inbox.wait_for_commands(
+                required, self.sensing_config.satellites, stamp,
+                self.time_sync.config.barrier_timeout_s)
+            if missing:
+                raise LockstepCommandError(self.time_sync.step_index + 1,
+                                           f"missing commands: {missing}")
         # 1. Apply commands computed for the previous step.
         with self._timings.timed("actuate"):
-            self._apply_commands()
+            result = self._apply_commands()
+            if required and (not result or any(
+                    result["rejected"].get(channel, 0) or
+                    result["applied"].get(channel, 0) < len(self.sensing_config.satellites)
+                    for channel in required)):
+                raise LockstepCommandError(self.time_sync.step_index + 1,
+                                           "required command was not accepted by STK")
         # 2. Advance. Not one of E6's three reported phases (it is STK's
         #    own clock update), but timed for the log: it is part of what
         #    a step costs.
@@ -485,7 +506,7 @@ class StkBridgeNode:
 
     # -- loop stages -------------------------------------------------------
 
-    def _apply_commands(self) -> None:
+    def _apply_commands(self):
         from stk_bridge.interfaces.ros_subscribers import apply_commands
 
         commands = self._screen_command_times(self.inbox.drain())
@@ -495,10 +516,11 @@ class StkBridgeNode:
             conv.canonical_object_path(command.object_path)
             for channel, command in commands if channel == "attitude")
         try:
-            self.worker.call(
+            result = self.worker.call(
                 lambda backend: apply_commands(self.actuation, commands),
                 "apply_commands")
             self.health.record_success()
+            return result
         except Exception as exc:
             LOGGER.warning("failed to apply %d command(s): %s",
                            len(commands), exc)

@@ -419,7 +419,7 @@ captures show why:
 
 Fixed on both sides. The bridge now waits, after the barrier, for each
 commanded object's attitude for the next step before it advances
-(`time.await_attitude_commands`), so message order no longer matters;
+(`time.require_attitude_command_each_step` in ACAV), so message order no longer matters;
 and it warns whenever STK's attitude at a step is not the one written
 for it. The twin now carries its own body rate from step to step, taking
 STK's only once, to start -- STK's rate is just a numerical derivative of
@@ -436,6 +436,26 @@ step and the cause in a warning just above it.
 The same timing line shows where each step's ~0.8 s goes: orbit read
 ~380 ms, angular rate ~200 ms, attitude ~180 ms, everything else ~25 ms.
 Making the loop faster means reading STK less, not tuning ROS or MATLAB.
+
+### Attitude dynamics ownership and the AngVels rejection
+
+The MATLAB twin integrates and retains both achieved quaternion and
+instantaneous body rate. STK provides orbit/access and attitude readback;
+its rate derived from quaternion samples must not replace the integrator's
+endpoint rate. The twin checks each readback against its previous achieved
+command (including equivalent opposite quaternion signs). A time gap or
+attitude mismatch stops the twin with an explicit diagnostic.
+
+Do not send `AddAttitude Quat` followed by `AddAttitude AngVels` at the same
+epoch. AngVels propagates to a later time; it does not set an existing
+sample's rate. This caused the 2026-09-27 run to abort at step 2.
+The model publishes only the achieved quaternion. The attitude-command
+lockstep gate remains enabled; no angular-rate command is required.
+
+After updating, stop and close the old model and regenerate it with
+`build_acav_twin`. No ROS message definitions changed. In this configuration
+`/stk/.../angular_rate` remains STK's kinematic telemetry, not the twin's
+instantaneous integrated rate.
 
 ### Ground-target coordinates and moving-target tracking
 

@@ -23,9 +23,8 @@ function modelName = build_acav_twin(options)
 %   MATLAB Function "GuidanceControl"  -> adcs.twin_step
 %           |
 %   Reaction wheels + rigid-body dynamics (adcs.wheels,
-%   adcs.rigid_body_step) -- present so the twin can run open-loop for
-%   development; in the closed loop STK is the truth and these are
-%   bypassed by the ForcedTruth switch.
+%   adcs.rigid_body_step) -- the twin owns integrated attitude and body
+%   rate. STK provides orbit/access and verifies attitude readback.
 %           |
 %   ROS2 Publish   /stk/cmd/attitude       -> AttitudeCommand
 %   ROS2 Publish   /acav/twin_status       -> stk_msgs/TwinStatus (mode +
@@ -285,7 +284,6 @@ function modelName = build_acav_twin(options)
         sprintf('/%s/cmd/attitude', options.Prefix), ...
         'stk_msgs/AttitudeCommand');
     add_line(modelName, 'AttitudeCmdStamp/1', 'AttitudeCmdPub/1');
-
     % -- status out: stk_msgs/TwinStatus ---------------------------------
     % Carries the wheel state as well as mode and pointing error, because
     % the run-level quantities acav/metrics.py reports (peak momentum,

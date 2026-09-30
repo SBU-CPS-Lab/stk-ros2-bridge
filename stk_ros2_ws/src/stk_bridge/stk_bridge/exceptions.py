@@ -202,6 +202,13 @@ class FrameResolutionError(StkBridgeError):
 # Time synchronization
 # ---------------------------------------------------------------------------
 
+class LockstepCommandError(StkBridgeError):
+    """A required lockstep command was absent or rejected before advance."""
+
+    def __init__(self, step_index: int, reason: str):
+        super().__init__(f"lockstep command failed at step {step_index}: {reason}")
+
+
 class LockstepBarrierTimeoutError(StkBridgeError):
     """A lockstep step did not receive acknowledgement from all configured
     barrier participants within the configured timeout. Raised by

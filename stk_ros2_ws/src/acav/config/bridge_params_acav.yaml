@@ -129,13 +129,8 @@ time:
   publish_clock: true
   auto_step: true
   wait_for_startup_participants: true
-  # The twin publishes its attitude command and its barrier ack on two
-  # topics; ROS 2 does not order them, and when the ack won the bridge
-  # sensed before the command landed and STK reported its basic (nadir)
-  # attitude instead -- 7% of steps on the third live run, each a jump of
-  # up to 180 deg. Wait for the next step's command after the barrier.
-  await_attitude_commands: true
-  command_wait_s: 5.0
+  # Ack and command arrive on separate topics; wait for the next attitude.
+  require_attitude_command_each_step: true
 
 health:
   critical_channels: [orbit_position, attitude]

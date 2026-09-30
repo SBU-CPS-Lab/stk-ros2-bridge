@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -83,7 +82,8 @@ class CommandInbox:
     """
 
     def __init__(self, coalesce: bool = True):
-        self._lock = threading.Condition()
+        self._lock = threading.Lock()
+        self._changed = threading.Condition(self._lock)
         self._pending: Dict[Tuple[str, str], object] = {}
         self._order: List[Tuple[str, str]] = []
         self._coalesce = coalesce
@@ -97,40 +97,38 @@ class CommandInbox:
                 if self._coalesce:
                     self._stats.coalesced += 1
                     self._pending[key] = command
+                    self._changed.notify_all()
                     return
                 # Not coalescing: keep the oldest so ordering is
                 # preserved, and let the drain apply them in sequence.
                 return
             self._pending[key] = command
             self._order.append(key)
-            self._lock.notify_all()
+            self._changed.notify_all()
 
-    def wait_for(self, channel: str, object_path: str, min_time_s: float,
-                 timeout_s: float) -> bool:
-        """Block until a pending command for this key is stamped at or
-        after ``min_time_s`` (epoch seconds). True if one arrived.
-
-        For lockstep: a participant publishes its command and its barrier
-        ack on two topics, and ROS 2 does not order delivery across
-        topics, so the ack can release the barrier before the command
-        lands. Waiting here for the command stamped for the next step
-        makes the step independent of that ordering.
-        """
+    def wait_for(self, channel, object_path, min_time_s, timeout_s):
+        """Compatibility gate for configurations using await_attitude_commands."""
         key = (channel, conv.canonical_object_path(object_path))
-        deadline = time.monotonic() + timeout_s
+        with self._changed:
+            return self._changed.wait_for(
+                lambda: key in self._pending and
+                self._pending[key].time.epoch_seconds >= min_time_s,
+                timeout=timeout_s)
 
-        def arrived() -> bool:
-            command = self._pending.get(key)
-            return (command is not None
-                    and command.time.epoch_seconds >= min_time_s)
+    def wait_for_commands(self, channels, paths, stamp, timeout_s):
+        """Wait for exact next-step commands, independently of barrier acks."""
+        expected = [(channel, conv.canonical_object_path(path))
+                    for channel in channels for path in paths]
 
-        with self._lock:
-            while not arrived():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0.0:
-                    return False
-                self._lock.wait(timeout=remaining)
-            return True
+        def missing():
+            return [f"{channel} for {path}" for channel, path in expected
+                    if (channel, path) not in self._pending or
+                    abs(self._pending[(channel, path)].time.epoch_seconds
+                        - stamp.epoch_seconds) > 1e-4]
+
+        with self._changed:
+            self._changed.wait_for(lambda: not missing(), timeout=timeout_s)
+            return missing()
 
     def drain(self) -> List[Tuple[str, object]]:
         """Remove and return all pending commands, in arrival order."""
