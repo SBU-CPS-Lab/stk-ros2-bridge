@@ -12,17 +12,12 @@ happened against ``acav/metrics.py``'s capture criterion using the
 twin's own telemetry plus STK's access answer, obtained from the bridge
 it is a client of.
 
-It is also a lockstep barrier participant -- ``acav_scenario.yaml``
-names it in ``bridge.barrier_participants`` -- so it must acknowledge
-every step or the whole run stalls against the bridge's barrier
-timeout. That single obligation shapes the concurrency here: the
-lockstep ack is published unconditionally, every tick, from the very
-top of the step callback, before anything that could plausibly be slow
-(a service call) is even considered. Service calls (target position
-lookups, access checks) are all fire-and-forget (``call_async`` plus a
-done-callback that updates state when the answer eventually arrives),
-exactly so a slow STK round trip can never be the reason a step's ack
-is late.
+It is also a lockstep barrier participant. During startup it withholds
+its first acknowledgement until target trajectories have been resolved,
+one asynchronous query at a time. The bridge remains at its initial epoch
+and replays cached telemetry. Once geometry is ready, normal ticks publish
+the setpoint and acknowledge without blocking on STK. Access queries remain
+asynchronous during the run.
 
 Design decisions worth being explicit about
 ---------------------------------------------
@@ -370,7 +365,8 @@ class SchedulerNode:
         # start in either order) would otherwise leave a target's
         # position permanently unrequested. Each call is a no-op for
         # any target already resolved or already in flight.
-        self._request_all_target_positions()
+        if not self._prepare_target_positions():
+            return  # Keep the initial barrier closed until geometry is ready.
         self._publish_setpoint(sim_time_s)
         self._check_access_due(sim_time_s)
         self._check_run_complete(sim_time_s)
@@ -474,9 +470,32 @@ class SchedulerNode:
 
     # -- target geometry --------------------------------------------------
 
+    def _prepare_target_positions(self):
+        import time
+        pending = [e for e in self._plan.attempted
+                   if e.target_id not in self._target_positions]
+        if not pending:
+            if not getattr(self, '_geometry_ready', False):
+                LOGGER.info("target geometry ready; releasing initial lockstep barrier")
+                self._geometry_ready = True
+                self._last_tick_wall_s = None
+            return True
+        if not hasattr(self, '_geometry_started'):
+            self._geometry_started = time.monotonic()
+        if time.monotonic() - self._geometry_started > 180.0:
+            raise RuntimeError("Target geometry preparation timed out before control started: "
+                               + ', '.join(e.target_id for e in pending))
+        self._request_all_target_positions()
+        return False
+
     def _request_all_target_positions(self) -> None:
+        # A single COM worker also applies attitude commands. Do not queue
+        # every target behind it, and do not release the startup barrier yet.
         for entry in self._plan.attempted:
+            if entry.target_id in self._target_positions:
+                continue
             self._request_target_position(entry)
+            return
 
     def _request_target_position(self, entry: ScheduleEntry) -> None:
         from stk_msgs.msg import DataProviderRequest
@@ -517,19 +536,12 @@ class SchedulerNode:
         try:
             response = future.result()
         except Exception as exc:                          # noqa: BLE001
-            LOGGER.error("QueryDataProvider for %s failed: %s; retrying",
-                         target_id, exc)
-            self._requested_positions.discard(target_id)
-            return
+            raise RuntimeError(f"Target geometry preparation failed for {target_id}: {exc}") from exc
 
         result = response.result
         if not result.success or result.row_count == 0:
-            LOGGER.error(
-                "could not get %s's Cartesian Position/ICRF (%s); this "
-                "target's captures cannot be evaluated and its setpoint "
-                "will hold at nadir for the whole run", target_id,
-                result.error_message or "no rows")
-            return
+            raise RuntimeError(f"Target geometry preparation failed for {target_id}: "
+                               + (result.error_message or "no rows"))
 
         try:
             columns = _unflatten(result.column_names, result.flattened_data,
@@ -545,9 +557,7 @@ class SchedulerNode:
                     math.isfinite(v) for row in samples for v in row):
                 raise ValueError(f"expected {expected} valid time-varying positions, got {len(samples)}")
         except (StkBridgeError, ValueError, KeyError) as exc:
-            LOGGER.error("could not parse %s's position result: %s",
-                         target_id, exc)
-            return
+            raise RuntimeError(f"Invalid target geometry for {target_id}: {exc}") from exc
 
         self._target_positions[target_id] = samples
         LOGGER.info("%s ICRF trajectory resolved: %d positions, %.1f s spacing",

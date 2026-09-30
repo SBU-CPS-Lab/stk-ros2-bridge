@@ -39,10 +39,13 @@ def test_startup_retry_republishes_without_advancing_or_resetting_barrier():
     node.time_sync.await_barrier.side_effect = [LockstepBarrierTimeoutError(1,['matlab_twin']), None]
     for name in ['_apply_commands','_publish_clock','_sense_and_publish','_run_rate_groups','_publish_status']:
         setattr(node,name,Mock())
+    node._startup_samples = {'sat': {'attitude': object()}}
+    node.publishers = {'sat': Mock()}
     node._lockstep_iteration()
+    node.publishers['sat'].publish_samples.assert_called_once_with(node._startup_samples['sat'])
     node.time_sync.step.assert_called_once()
     assert node._publish_clock.call_count == 2
-    assert node._sense_and_publish.call_count == 2
+    assert node._sense_and_publish.call_count == 1
 
 
 def _timed_node(barrier_outcomes):

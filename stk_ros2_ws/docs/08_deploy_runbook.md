@@ -500,3 +500,13 @@ result; an `IMAGE` label alone is not evidence of successful capture.
 
 Send the log bundle either way -- a run that failed cleanly with a
 clear log is exactly as useful here as one that succeeded.
+
+### Geometry preparation before lockstep control
+
+The scheduler resolves one target trajectory at a time before acknowledging
+the initial step. The bridge replays the original initial telemetry at the
+same timestamp while waiting, without adding COM sensing work to the queue.
+Preparation has a separate 180-second deadline; missing or invalid geometry
+aborts the scheduler rather than starting a run with incomplete targets.
+Look for `target geometry ready; releasing initial lockstep barrier` in
+`scheduler.log`. Normal command timeouts and capture criteria are unchanged.

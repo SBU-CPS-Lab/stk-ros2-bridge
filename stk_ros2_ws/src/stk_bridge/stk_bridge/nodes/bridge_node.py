@@ -439,7 +439,10 @@ class StkBridgeNode:
                     LOGGER.info("waiting at initial step for lockstep "
                                 "participants: %s", exc)
                 self._publish_clock(now)
-                self._sense_and_publish(now)
+                # Same epoch: replay its original samples, without COM work
+                # competing with the scheduler's startup geometry queries.
+                for path, samples in getattr(self, '_startup_samples', {}).items():
+                    self.publishers[path].publish_samples(samples)
                 self._publish_status(now)
         # 5. The barrier is released, but the step is not complete until
         #    each commanded object's attitude for the NEXT step is here:
@@ -735,6 +738,10 @@ class StkBridgeNode:
                     now - self.time_sync.epoch, self._lockstep_hint())
                 continue
 
+            if self.time_sync.step_index == 1:
+                if not hasattr(self, '_startup_samples'):
+                    self._startup_samples = {}
+                self._startup_samples[path] = samples
             publishers.publish_samples(samples)
             if self.tf is not None:
                 self.tf.broadcast_samples(path, samples)

@@ -39,3 +39,34 @@ def test_moving_line_of_sight_does_not_have_zero_rate_tracking_bias():
         if t >= 58:
             errors.append(math.degrees(out.boresight_error_rad))
     assert max(errors) < .1
+
+
+def test_geometry_preparation_serializes_requests_and_holds_barrier():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from acav.scheduler_node import SchedulerNode
+    n = SchedulerNode.__new__(SchedulerNode)
+    n._plan = SimpleNamespace(attempted=[SimpleNamespace(target_id='T1'), SimpleNamespace(target_id='T2')])
+    n._target_positions = {}
+    n._request_target_position = Mock()
+    assert not n._prepare_target_positions()
+    assert [c.args[0].target_id for c in n._request_target_position.call_args_list] == ['T1']
+    n._target_positions['T1'] = [(1,2,3)]
+    assert not n._prepare_target_positions()
+    assert n._request_target_position.call_args.args[0].target_id == 'T2'
+    n._target_positions['T2'] = [(1,2,3)]
+    assert n._prepare_target_positions()
+    assert n._last_tick_wall_s is None
+
+
+def test_geometry_preparation_has_bounded_wait():
+    import time
+    import pytest
+    from types import SimpleNamespace
+    from acav.scheduler_node import SchedulerNode
+    n = SchedulerNode.__new__(SchedulerNode)
+    n._plan = SimpleNamespace(attempted=[SimpleNamespace(target_id='T3')])
+    n._target_positions = {}
+    n._geometry_started = time.monotonic()-181
+    with pytest.raises(RuntimeError, match='T3'):
+        n._prepare_target_positions()
