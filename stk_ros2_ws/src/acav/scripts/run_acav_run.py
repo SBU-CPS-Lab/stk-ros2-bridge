@@ -11,13 +11,14 @@ that can be run by hand for a single E6 measurement run.
 
 Written in the same spirit as ``check_environment.py``/
 ``verify_acav_scenario.py``: runnable straight out of a source checkout,
-no colcon build and no sourced workspace needed to invoke it (ROS 2
-itself, of course, still needs to be sourced for ``ros2 launch``/
-``ros2 run`` to work).
+help is available without a build. On Windows an actual run loads the
+built workspace's install/setup.bat in a child process and validates
+ROS message type support before starting the bridge.
 """
 
 import os
 import sys
+import subprocess
 
 
 def _bootstrap_source_checkout() -> None:
@@ -35,4 +36,14 @@ _bootstrap_source_checkout()
 from acav.deploy_run_cli import main  # noqa: E402  (after path bootstrap)
 
 if __name__ == "__main__":
+    workspace = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    workspace = os.path.dirname(workspace)
+    if (os.name == 'nt' and not any(a in sys.argv for a in ('-h', '--help'))
+            and os.environ.get('ACAV_RUN_WORKSPACE') != workspace):
+        from acav.ros_environment import run_with_workspace
+        try:
+            sys.exit(run_with_workspace(__file__, sys.argv[1:], workspace))
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
+            print(f'ROS workspace setup failed: {exc}', file=sys.stderr)
+            sys.exit(2)
     sys.exit(main())
