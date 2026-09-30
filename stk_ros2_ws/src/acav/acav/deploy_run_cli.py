@@ -106,6 +106,7 @@ class Deps:
     subprocess, or a human at a keyboard -- see test_deploy_run_cli.py.
     """
 
+    start_recorder: Callable = None
     check_idle: Callable[[str], None] = None
     popen: Callable[..., "subprocess.Popen"] = subprocess.Popen
     wait_for_bridge_connected: Callable[[str, float, str], "ConnectResult"] = None
@@ -114,6 +115,9 @@ class Deps:
     sleep: Callable[[float], None] = time.sleep
 
     def __post_init__(self) -> None:
+        if self.start_recorder is None:
+            from acav.topic_recorder import TopicRecorder
+            self.start_recorder = TopicRecorder
         if self.check_idle is None:
             self.check_idle = _check_graph_idle
         if self.wait_for_bridge_connected is None:
@@ -309,11 +313,14 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
         summary["steps"].append({"step": step, "ok": ok, "detail": detail})
         (run_log.info if ok else run_log.error)("%s: %s", step, detail or "ok")
 
+    recorder = None
     bridge_proc = None
     scheduler_proc = None
     scheduler_returncode = EXIT_STEP_FAILED
     try:
         deps.check_idle(config.prefix)
+        recorder = deps.start_recorder(config, log_dir)
+        run_log.info("topic capture started: %s", log_dir)
         with _open_log(log_dir, "bridge.log") as bridge_log:
             run_log.info("launching bridge: %s",
                          " ".join(bridge_launch_argv(config)))
@@ -392,6 +399,9 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=15)
+        if recorder is not None:
+            recorder.close()
+            record("topic_capture", not recorder.error, recorder.error or "files saved")
         summary["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         summary["output_exists"] = os.path.exists(config.output)
         with open(os.path.join(log_dir, "summary.json"), "w",

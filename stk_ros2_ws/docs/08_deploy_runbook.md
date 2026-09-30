@@ -165,13 +165,17 @@ ros2 run acav run_acav_campaign plan `
 ros2 run acav run_acav_campaign run `
     --experiment E6 --output-dir results\E6 --repeats 5 -- `
     python src\acav\scripts\run_acav_run.py `
-        --run-id {run_id} --experiment {experiment} --scheduler {scheduler} `
-        --execution-mode {execution_mode} --seed {seed} `
-        --output {output} --scenario {scenario} --backend {backend} `
-        --attitude-provider {attitude_provider} --run-config {run_config} `
-        --gains-json {gains_json} --fault-json {fault_json} `
+        --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
+        --execution-mode '{execution_mode}' --seed '{seed}' `
+        --output '{output}' --scenario '{scenario}' --backend '{backend}' `
+        --attitude-provider '{attitude_provider}' --run-config '{run_config}' `
+        --gains-json '{gains_json}' --fault-json '{fault_json}' `
         --bridge-config src\acav\config\bridge_params_acav.yaml
 ```
+
+In PowerShell, keep every `{placeholder}` inside single quotes as shown.
+Unquoted braces are parsed as script blocks instead of literal arguments.
+The continuation backtick must be the last character on its line.
 
 `plan` launches nothing -- it just prints the matrix and writes
 `results\E6\campaign.json`, so confirm the run count and IDs are what
@@ -323,22 +327,18 @@ rate and the sense / actuate / barrier-wait breakdown -- the first run
 managed only ~1.1 steps/s, and that line is how we find out where the
 time goes.
 
-**What to capture on the next run**, in addition to the log bundle: in
-separate terminals, from just before pressing Enter until the run ends,
-
-```powershell
-ros2 topic echo /stk/status > status.txt
-ros2 topic echo /stk/sss_1/attitude > attitude.txt
-ros2 topic echo /stk/sss_1/angular_rate > rate.txt
-ros2 topic echo /stk/cmd/attitude > cmd.txt
-ros2 topic echo /acav/twin_status > twin_status.txt
-```
-
-The attitude, rate and command captures answer the next open question:
-whether the body rate STK reports back (it derives it from the attitude
-samples the twin sends) matches the rate the twin integrated. The twin
-restarts every step from STK's reported rate, so a large mismatch there
-would show up as slews that never settle.
+**Automatic topic capture:** `run_acav_run.py` now records the five topics
+before starting the bridge, without additional terminals. The run's `.logs`
+folder (for example `results/E6_smoke/E6-smoke-1.logs/`) contains UTF-8
+`status.txt`, `attitude.txt`, `rate.txt`, `cmd.txt`, and `twin_status.txt`.
+Messages use YAML with `---` separators, like `ros2 topic echo`.
+Capture stops during normal teardown, errors, or Ctrl+C. `topics_summary.json`
+records received-message counts and recorder errors; an empty file means no
+message was received, not proof that the publisher was healthy. These passive
+best-effort subscriptions do not participate in the lockstep barrier and are
+not a lossless recording guarantee. Reusing the same run/output path replaces
+its logs; use a new run/output path to preserve a previous run. For multiple
+configured satellites, attitude/rate filenames include the satellite namespace.
 
 ### Second run (2026-09-27): attitude frames, and a reused scenario
 

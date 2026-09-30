@@ -28,6 +28,10 @@ from acav.deploy_run_cli import (
 @pytest.fixture(autouse=True)
 def offline_graph(monkeypatch):
     monkeypatch.setattr(deploy_run_cli, "_check_graph_idle", lambda prefix: None)
+    from types import SimpleNamespace
+    import acav.topic_recorder
+    monkeypatch.setattr(acav.topic_recorder, "TopicRecorder",
+                        lambda *args: SimpleNamespace(close=lambda: None, error=None))
 
 
 class FakeProcess:
@@ -133,7 +137,7 @@ class TestExecuteRunHappyPath:
             summary = json.load(handle)
         steps = {s["step"]: s["ok"] for s in summary["steps"]}
         assert steps == {"bridge_connected": True, "twin_acking": True,
-                         "scheduler_exit": True}
+                         "scheduler_exit": True, "topic_capture": True}
         assert bridge_proc.terminated
 
     def test_logs_land_next_to_the_output_by_default(self, tmp_path):
@@ -294,3 +298,22 @@ def test_interrupt_stops_scheduler_and_bridge(tmp_path):
     with pytest.raises(KeyboardInterrupt):
         execute_run(_config(tmp_path), deps)
     assert bridge.terminated and scheduler.terminated
+
+
+def test_topic_recorder_starts_before_bridge_and_closes_on_connection_failure(tmp_path):
+    from types import SimpleNamespace
+    events = []
+    recorder = SimpleNamespace(error=None, close=lambda: events.append('closed'))
+    def start(config, directory):
+        events.append('recording')
+        assert directory == config.resolved_log_dir()
+        return recorder
+    def launch(*args, **kwargs):
+        events.append('bridge')
+        return FakeProcess()
+    code = execute_run(_config(tmp_path), Deps(
+        start_recorder=start, popen=launch,
+        wait_for_bridge_connected=lambda *args: ConnectResult(False),
+        prompt=lambda message: None))
+    assert code != 0
+    assert events == ['recording', 'bridge', 'closed']
