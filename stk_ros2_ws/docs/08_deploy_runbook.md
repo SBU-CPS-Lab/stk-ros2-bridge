@@ -501,6 +501,22 @@ result; an `IMAGE` label alone is not evidence of successful capture.
 Send the log bundle either way -- a run that failed cleanly with a
 clear log is exactly as useful here as one that succeeded.
 
+### E1: explicit convention-guard ablation
+
+E1's forced-provider treatment now writes `attitude_mismatch_policy:
+e1_readback_ablation` into its run configuration, together with the experiment
+and provider identity. MATLAB warns at startup, retains measured attitude in
+feedback and allows the intentional command/read-back disagreement. The E1
+control and all ordinary runs retain strict endpoint validation. Time-gap
+checks and actuator/SAFE limits remain active in both arms. MATLAB rejects the
+ablation policy outside an explicitly identified E1 treatment.
+
+Interpret this as a counterfactual **without** the convention guard, not as
+evidence that the protected nominal pipeline silently accepts a wrong frame.
+Keep the run configuration with the results. Capture degradation is a
+hypothesis to measure, not a guaranteed outcome; a SAFE transition is also a
+possible treatment response. Regenerate the twin for each run configuration.
+
 ### Geometry preparation before lockstep control
 
 The scheduler resolves one target trajectory at a time before acknowledging

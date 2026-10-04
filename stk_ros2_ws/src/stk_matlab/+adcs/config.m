@@ -68,6 +68,7 @@ function cfg = config(scenarioPath, runConfigPath)
 
     % -- per-run overrides (E4's gains, E5's fault) -------------------
     cfg.wheelFault = [];
+    cfg.attitudeMismatchPolicy = 'strict';
     if nargin >= 2 && ~isempty(runConfigPath)
         cfg = applyRunConfig(cfg, runConfigPath);
     end
@@ -104,6 +105,19 @@ function cfg = applyRunConfig(cfg, runConfigPath)
     end
 
     raw = jsondecode(fileread(runConfigPath));
+
+    if isfield(raw, 'attitude_mismatch_policy')
+        policy = char(raw.attitude_mismatch_policy);
+        if ~strcmp(policy, 'strict')
+            if ~strcmp(policy, 'e1_readback_ablation') || ...
+                    ~isfield(raw, 'experiment') || ~strcmp(raw.experiment, 'E1') || ...
+                    ~isfield(raw, 'attitude_provider') || isempty(raw.attitude_provider)
+                error('adcs:config:MismatchPolicy', ...
+                    'Read-back ablation is allowed only for an explicit E1 forced-provider treatment.');
+            end
+        end
+        cfg.attitudeMismatchPolicy = policy;
+    end
 
     if isfield(raw, 'gains') && ~isempty(raw.gains)
         gains = raw.gains;

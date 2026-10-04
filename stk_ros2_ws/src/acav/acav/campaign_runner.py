@@ -178,6 +178,12 @@ def write_run_config(run: RunSpec, output_path: str) -> str:
         "run_id": run.run_id,
         "gains": dict(run.gains),
         "fault": None if run.fault is None else run.fault.to_dict(),
+        "experiment": run.experiment,
+        "attitude_provider": run.attitude_provider,
+        # Explicit guard ablation, never enabled by an ordinary run.
+        "attitude_mismatch_policy": (
+            "e1_readback_ablation" if run.experiment == "E1" and
+            run.attitude_provider else "strict"),
     }
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)

@@ -12,6 +12,10 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
         cfg = adcs.config([], runConfigPath);
         state = adcs.initial_state();
         lastTime = []; lastOutput = {};
+        if strcmp(cfg.attitudeMismatchPolicy, 'e1_readback_ablation')
+            warning('adcs:simulink_step:E1Ablation', ...
+                'E1 treatment: mismatch guard disabled; measured attitude drives feedback. Not a nominal run.');
+        end
     end
     % ROS subscribers initially output a zero-filled bus. Do not advance
     % dynamics or acknowledge a step until all required numerics are valid.
@@ -48,12 +52,15 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
         qEndpoint = lastOutput{2};
         qRead = qMeas(:)'/norm(qMeas);
         residual = min(norm(qRead-qEndpoint), norm(qRead+qEndpoint));
-        if residual > 5e-5 % approximately 1e-4 rad attitude disagreement
+        ablation = strcmp(cfg.attitudeMismatchPolicy, 'e1_readback_ablation');
+        if residual > 5e-5 && ~ablation % approximately 1e-4 rad disagreement
             error('adcs:simulink_step:AttitudeMismatch', ...
                 ['STK attitude does not match the previous achieved command ' ...
                  '(quaternion residual %.6g). Check timestamps and reference frames.'], residual);
         end
-        qMeas = qEndpoint;
+        if ~ablation
+            qMeas = qEndpoint;
+        end
         omega = lastOutput{8};
     end
     fresh = true;

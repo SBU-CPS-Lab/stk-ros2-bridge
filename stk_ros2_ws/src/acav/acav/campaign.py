@@ -201,9 +201,10 @@ def build_e1_convention(scenario_path: str = "", backend: str = "com",
     Two runs, identical but for the attitude read-back provider. The
     treatment pairs an Earth-fixed provider against an inertial
     command, which is wrong by the Earth-rotation angle -- and which
-    raises nothing, reports no error and produces a plausible attitude.
-    That silence is the finding: the expected result is that capture
-    collapses while every component reports itself healthy.
+    produces a plausible but incorrect attitude. The treatment explicitly
+    ablates the twin's mismatch guard and feeds measured attitude back;
+    the control retains the guard. This is a deliberately unsafe-convention
+    counterfactual, not the behaviour of the protected nominal pipeline.
 
     Requires the bridge to honour ``sensing.force_attitude_provider``.
     """
@@ -216,14 +217,14 @@ def build_e1_convention(scenario_path: str = "", backend: str = "com",
                 attitude_provider=MISPAIRED_ATTITUDE_PROVIDER,
                 notes="treatment: Earth-fixed read-back against an "
                       "inertial (Quat) command -- wrong by the "
-                      "Earth-rotation angle, and nothing errors"),
+                      "Earth-rotation angle; explicit twin mismatch-guard ablation"),
     )
     return Campaign(
         campaign_id="E1_convention_validation",
         experiment="E1",
         description=("Nominal run against one with the attitude read-back "
                      "deliberately mis-paired. Expect capture to collapse "
-                     "with no component reporting a fault."),
+                     "under an explicit mismatch-guard ablation; nominal runs retain fail-fast protection."),
         runs=runs, scenario_path=scenario_path, backend=backend)
 
 
