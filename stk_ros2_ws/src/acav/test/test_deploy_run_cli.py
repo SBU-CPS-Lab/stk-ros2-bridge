@@ -116,6 +116,21 @@ class TestArgvBuilding:
 
 
 class TestExecuteRunHappyPath:
+    def test_bridge_is_stopped_before_waiting_for_manual_twin_stop(self, tmp_path):
+        bridge, scheduler = FakeProcess(), FakeProcess()
+        procs = iter([bridge, scheduler])
+        prompts = []
+        def prompt(message):
+            prompts.append(message)
+            if 'Scheduler finished' in message:
+                assert bridge.terminated
+                assert bridge.waited
+        deps = Deps(popen=lambda *a, **k: next(procs),
+                    wait_for_bridge_connected=lambda *a: ConnectResult(True, 'com'),
+                    wait_for_twin_ack=lambda *a: True, prompt=prompt)
+        assert execute_run(_config(tmp_path), deps) == 0
+        assert len(prompts) == 2
+
     def test_a_clean_run_returns_ok_and_writes_a_summary(self, tmp_path):
         config = _config(tmp_path)
         bridge_proc = FakeProcess()

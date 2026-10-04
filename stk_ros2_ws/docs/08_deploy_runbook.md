@@ -501,6 +501,20 @@ result; an `IMAGE` label alone is not evidence of successful capture.
 Send the log bundle either way -- a run that failed cleanly with a
 clear log is exactly as useful here as one that succeeded.
 
+### End-of-run shutdown and errors
+
+The runner stops the bridge immediately after the scheduler exits, **before**
+asking you to stop Simulink. Waiting for that keypress with a live lockstep
+bridge used to generate a missing-ack timeout after the run had finished.
+Actual scheduler failures and bridge failures during a run still fail the run.
+
+Some older Windows ROS logs additionally contain `Failed to remove timer jump
+callback` during teardown. That is a distinct ROS cleanup diagnostic, not a
+capture result or proof that all earlier errors can be ignored. Keep it in
+the log bundle and assess run completion from the scheduler exit, result
+record and timestamps. The startup/termination ordering fix does not claim
+to repair that ROS runtime diagnostic.
+
 ### Interpreting wheel saturation in the paper
 
 `wheel_saturation_events` counts observed false-to-true transitions of the

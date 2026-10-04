@@ -290,6 +290,17 @@ def _open_log(log_dir: str, name: str):
     return open(os.path.join(log_dir, name), "w", encoding="utf-8")
 
 
+def _stop_process(process, name, logger):
+    if process is not None and process.poll() is None:
+        logger.info("stopping %s", name)
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=15)
+
+
 def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
     deps = deps or Deps()
     log_dir = config.resolved_log_dir()
@@ -382,6 +393,10 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 record("scheduler_exit", scheduler_returncode == 0,
                        f"returncode={scheduler_returncode}")
 
+            # The scheduler no longer participates in the barrier. Stop the
+            # bridge before waiting for a human, otherwise a successful run
+            # can acquire a spurious missing-ack timeout during teardown.
+            _stop_process(bridge_proc, "bridge", run_log)
             deps.prompt(
                 "\n"
                 "=== Scheduler finished. Stop the Simulink twin now "
@@ -391,14 +406,7 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
         return EXIT_OK if scheduler_returncode == 0 else EXIT_STEP_FAILED
     finally:
         for name, process in (("scheduler", scheduler_proc), ("bridge", bridge_proc)):
-            if process is not None and process.poll() is None:
-                run_log.info("stopping %s", name)
-                process.terminate()
-                try:
-                    process.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=15)
+            _stop_process(process, name, run_log)
         if recorder is not None:
             recorder.close()
             record("topic_capture", not recorder.error, recorder.error or "files saved")
