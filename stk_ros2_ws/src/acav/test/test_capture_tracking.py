@@ -191,6 +191,17 @@ class TestRunAggregate:
             aggregate.observe(self._sample(saturated=saturated))
         assert aggregate.wheel_saturation_events == 2
 
+    def test_torque_clipping_counts_without_momentum_saturation_or_safe(self):
+        from acav.twin_reference import ReactionWheels
+        wheels = ReactionWheels(max_torque_Nm=.001, momentum_capacity_Nms=.02)
+        aggregate = RunAggregate(momentum_capacity_Nms=.02)
+        _, limited = wheels.command((.01, 0, 0), .1)
+        aggregate.observe(self._sample(momentum=wheels.momentum_Nms,
+                                       saturated=limited, mode='SLEW'))
+        assert aggregate.wheel_saturation_events == 1
+        assert max(aggregate.peak_momentum_fraction) < .01
+        assert not aggregate.entered_safe_mode
+
     def test_safe_mode_is_sticky(self):
         aggregate = RunAggregate(momentum_capacity_Nms=0.02)
         aggregate.observe(self._sample(mode="SLEW"))

@@ -501,6 +501,23 @@ result; an `IMAGE` label alone is not evidence of successful capture.
 Send the log bundle either way -- a run that failed cleanly with a
 clear log is exactly as useful here as one that succeeded.
 
+### Interpreting wheel saturation in the paper
+
+`wheel_saturation_events` counts observed false-to-true transitions of the
+aggregate `wheels_saturated` flag. Report it as **actuator-limiting episodes**,
+not the number of momentum saturations, failed wheels, or SAFE entries.
+Torque clipping alone can raise the flag while momentum remains well below
+capacity and the spacecraft continues a normal slew. Momentum blocking and
+wheel-health restrictions can also raise it. Continuous limiting is one
+episode even if several wheels are involved; missing telemetry can hide or
+merge episodes. The current boolean cannot separate the causes.
+
+Use `peak_momentum_fraction` per axis for capacity utilisation and
+`entered_safe_mode` for the SAFE outcome. Existing E6 event counts need no
+numerical rewrite; their interpretation and figure/table captions must use
+this definition. Changing the count to mean capacity hits would invalidate
+comparisons with old records.
+
 ### E1: explicit convention-guard ablation
 
 E1's forced-provider treatment now writes `attitude_mismatch_policy:

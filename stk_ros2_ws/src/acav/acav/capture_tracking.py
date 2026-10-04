@@ -102,11 +102,11 @@ class RunAggregate:
             self.peak_momentum_fraction[axis] = max(
                 self.peak_momentum_fraction[axis], fraction)
 
-        # A saturation EVENT is a wheel entering saturation, not a step
-        # spent in it. Counting steps would make the number a function of
-        # the telemetry rate -- a run sampled twice as often would report
-        # twice the faults -- and two runs at different rates would not
-        # be comparable, which is exactly what E5 needs them to be.
+        # Count observed rising edges of the aggregate actuator-limited flag.
+        # It includes torque clipping, momentum blocking and wheel failure;
+        # it is NOT a count of individual wheels or momentum-capacity hits.
+        # Continuous saturation is one episode. Lost samples can merge or
+        # hide episodes, so this is a telemetry-observed count, not fault truth.
         if sample.wheels_saturated and not self._saturated_previously:
             self.wheel_saturation_events += 1
         self._saturated_previously = sample.wheels_saturated
