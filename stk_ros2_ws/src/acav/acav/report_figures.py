@@ -399,28 +399,31 @@ def e6_latency_figure(breakdown: Dict[str, Any]):
             "No reportable runs with a measured breakdown yet.")
     values = [0.0 if v != v else v for v in values]
 
-    fig, ax = _figure(width=6.4, height=2.6)
+    fig, ax = _figure(width=7.0, height=3.5)
     left = 0.0
     for value, (_, label, color) in zip(values, phases):
         ax.barh([0], [value], left=left, color=color, height=0.45,
-               label=label)
-        if value > 0:
-            ax.annotate(f"{label}\n{value:.1f} ms",
-                       (left + value / 2, 0), ha="center", va="center",
-                       fontsize=8, color="white", fontweight="bold")
+               label=f"{label}: {value:.1f} ms")
         left += value
 
     ax.set_yticks([])
     ax.set_xlim(0, left * 1.05 if left > 0 else 1)
     ax.set_xlabel("Mean wall time per step (ms)")
-    total = left
-    step_rate = 1000.0 / total if total > 0 else float("nan")
-    ax.set_title(f"E6 -- {total:.1f} ms/step measured "
-                f"({step_rate:.1f} steps/s achievable)")
+    total = breakdown.get("mean_step_latency_ms", float("nan"))
+    if math.isfinite(total) and total > 0:
+        ax.set_title(f"E6 -- measured total {total:.1f} ms/step")
+        note = (f"Component sum: {left:.1f} ms; total minus sum: {total-left:.1f} ms\n"
+                "Total and components have separate timing/aggregation boundaries.")
+    else:
+        ax.set_title("E6 -- measured latency components")
+        note = f"Component sum: {left:.1f} ms; end-to-end total unavailable."
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.28), ncol=3,
+              fontsize=8, frameon=False)
+    fig.text(.5, .02, note, ha="center", va="bottom", fontsize=8)
     ax.grid(False)
     for spine in ("left",):
         ax.spines[spine].set_visible(False)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, .15, 1, 1))
     return fig
 
 

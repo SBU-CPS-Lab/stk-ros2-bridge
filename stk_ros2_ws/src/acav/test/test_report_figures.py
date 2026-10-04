@@ -167,7 +167,19 @@ class TestSaveAll:
     def test_it_writes_every_requested_format(self, tmp_path):
         fig = e6_latency_figure({})
         written = save_all({"x": fig}, str(tmp_path), formats=("png", "svg"))
-        names = {p.split("/")[-1] for p in written}
+        from pathlib import Path
+        names = {Path(p).name for p in written}
         assert names == {"x.png", "x.svg"}
         for path in written:
-            assert (tmp_path / path.split("/")[-1]).exists()
+            assert Path(path).exists()
+
+
+def test_e6_title_uses_measured_total_not_component_sum():
+    fig = e6_latency_figure(dict(mean_step_latency_ms=927.4,
+                                mean_sense_latency_ms=891.6,
+                                mean_actuate_latency_ms=18.7,
+                                mean_barrier_wait_ms=13.0))
+    assert '927.4' in fig.axes[0].get_title()
+    assert '923.3' in fig.texts[0].get_text()
+    assert len(fig.axes[0].get_legend().texts) == 3
+    assert not fig.axes[0].texts  # no overlapping labels inside tiny bars

@@ -216,7 +216,7 @@ it is a good first sanity check even on the machine that just ran the
 campaign:
 
 ```powershell
-ros2 run acav run_acav_campaign report --experiment E6 --output-dir results\E6
+ros2 run acav run_acav_campaign report --experiment E6 --output-dir results\E6 --repeats 5
 ```
 
 If this prints `"unreportable": N` greater than zero, check those
