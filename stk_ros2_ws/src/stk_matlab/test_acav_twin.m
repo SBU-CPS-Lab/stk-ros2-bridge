@@ -185,9 +185,9 @@ function cases = fixtureCases(value)
 end
 
 function results = record(results, name, ok, detail)
-    entry = struct('name', name, 'status', "pass", 'detail', detail);
+    entry = struct('name', name, 'status', 'pass', 'detail', detail);
     if ~ok
-        entry.status = "FAIL";
+        entry.status = 'FAIL';
     end
     results(end+1) = entry; %#ok<AGROW>
     marker = "  ok  ";

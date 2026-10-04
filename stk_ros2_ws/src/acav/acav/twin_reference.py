@@ -387,6 +387,14 @@ class SlewProfile:
                               quat_from_axis_angle(self.axis_body, angle))
         return quat_normalize(q_ref), scale(self.axis_body, rate)
 
+    def tracking_reference(self, elapsed_s, desired, actual, desired_rate):
+        """Transport the profile with the moving LOS; rate is in actual body axes."""
+        q_static, omega_profile = self.reference_at(elapsed_s)
+        transport = quat_multiply(desired, quat_conjugate(self.finish))
+        q_ref = quat_normalize(quat_multiply(transport, q_static))
+        omega = rotate_to_body(actual, rotate_to_inertial(q_ref, omega_profile))
+        return q_ref, tuple(a + b for a, b in zip(omega, desired_rate))
+
     @property
     def complete_at(self) -> float:
         return self.duration_s
@@ -724,7 +732,8 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
                              slew_requested, profile_done)
     mode_changed = mode_state.mode is not previous_mode
 
-    if mode_changed and mode_state.mode is MissionMode.SLEW:
+    if (mode_state.mode is MissionMode.SLEW and
+            (mode_changed or state.previous_target_key != target_key)):
         mode_state = replace(
             mode_state,
             profile=SlewProfile.between(inputs.quaternion, q_desired,
@@ -732,8 +741,9 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
             slew_started_s=inputs.time_s)
 
     if mode_state.mode is MissionMode.SLEW:
-        q_ref, omega_ref = mode_state.profile.reference_at(
-            inputs.time_s - mode_state.slew_started_s)
+        q_ref, omega_ref = mode_state.profile.tracking_reference(
+            inputs.time_s - mode_state.slew_started_s,
+            q_desired, inputs.quaternion, desired_rate)
     elif mode_state.mode is MissionMode.SAFE:
         # Stop pointing at anything. Holding the last reference would
         # keep the wheels loaded against a target they cannot reach.

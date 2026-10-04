@@ -155,7 +155,7 @@ function out = twin_step(in, cfg, state)
         momentumFraction, slewRequested, profileDone, cfg);
     modeChanged = ~strcmp(previousMode, state.mode);
 
-    if modeChanged && strcmp(state.mode, 'SLEW')
+    if strcmp(state.mode, 'SLEW') && (modeChanged || targetChanged)
         state.profile = adcs.slew_profile(in.quaternion, qDesired, ...
             cfg.profileAlphaRadS2, cfg.profileOmegaMaxRadS);
         state.slewStarted = in.t;
@@ -166,6 +166,13 @@ function out = twin_step(in, cfg, state)
         case 'SLEW'
             [qRef, omegaRef] = state.profile.referenceAt( ...
                 in.t - state.slewStarted);
+            % Move the profile with today's LOS instead of ending at the
+            % target's old inertial direction. Sum rates in actual body axes.
+            transport = adcs.quat.multiply(qDesired, ...
+                adcs.quat.conjugate(state.profile.finish));
+            qRef = adcs.quat.normalize(adcs.quat.multiply(transport, qRef));
+            omegaRef = adcs.quat.toBody(in.quaternion, ...
+                adcs.quat.toInertial(qRef, omegaRef)) + desiredRate;
         case 'SAFE'
             % Null the rates and stop pointing at anything. Holding the
             % last reference would keep the wheels loaded against a
