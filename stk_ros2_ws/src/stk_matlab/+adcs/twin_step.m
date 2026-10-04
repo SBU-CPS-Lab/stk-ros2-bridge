@@ -18,6 +18,7 @@ function out = twin_step(in, cfg, state)
 %        .velocity     [x y z] inertial velocity, m/s
 %        .targetEci    [x y z] inertial target position, m (0 if none)
 %        .haveTarget   logical
+%        .targetId     stable target identity (optional for legacy callers)
 %        .t            seconds since the window start
 % cfg    from adcs.config()
 % state  .mode         'NADIR' | 'SLEW' | 'SETTLE' | 'IMAGE' | 'SAFE'
@@ -108,8 +109,14 @@ function out = twin_step(in, cfg, state)
 
     % Track the moving line of sight, rather than damping its required
     % angular velocity to zero. Express the reference rate in actual body axes.
+    % Different targets must never share a finite-difference rate history.
+    % Position itself cannot identify a target: it moves continuously in ICRF.
+    targetId = '';
+    if in.haveTarget && isfield(in, 'targetId'), targetId = char(in.targetId); end
+    targetKey = {logical(in.haveTarget), targetId};
     desiredRate = [0 0 0];
-    if isfield(state, 'previousDesired') && ~isempty(state.previousDesired) && ...
+    if isfield(state, 'previousTargetKey') && isequal(state.previousTargetKey, targetKey) && ...
+            isfield(state, 'previousDesired') && ~isempty(state.previousDesired) && ...
             in.t > state.previousDesiredTime
         delta = adcs.quat.multiply(adcs.quat.conjugate(state.previousDesired), qDesired);
         [axis, angle] = adcs.quat.toAxisAngle(delta);
@@ -117,6 +124,7 @@ function out = twin_step(in, cfg, state)
         desiredRate = adcs.quat.toBody(in.quaternion, ...
             adcs.quat.toInertial(qDesired, referenceRate));
     end
+    state.previousTargetKey = targetKey;
     state.previousDesired = qDesired;
     state.previousDesiredTime = in.t;
 

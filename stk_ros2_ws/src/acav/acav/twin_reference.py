@@ -559,6 +559,7 @@ class TwinInputs:
     time_s: float
     target_eci_m: Vector3 = (0.0, 0.0, 0.0)
     have_target: bool = False
+    target_id: str = ""
 
 
 @dataclass
@@ -591,6 +592,7 @@ class TwinState:
     wheel_energy_J: float = 0.0
     previous_desired: Optional[Quaternion] = None
     previous_desired_time: Optional[float] = None
+    previous_target_key: Optional[tuple] = None
 
 
 @dataclass(frozen=True)
@@ -684,8 +686,10 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
         q_desired = nadir_attitude(inputs.position_m, inputs.velocity_m_s,
                                    config.boresight_body)
 
+    target_key = (inputs.have_target, inputs.target_id if inputs.have_target else "")
     desired_rate = (0.0, 0.0, 0.0)
-    if (state.previous_desired is not None and
+    if (state.previous_target_key == target_key and
+            state.previous_desired is not None and
             inputs.time_s > state.previous_desired_time):
         delta = quat_multiply(quat_conjugate(state.previous_desired), q_desired)
         axis, angle = axis_angle_from_quat(delta)
@@ -769,7 +773,8 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
                         wheel_energy_J=energy,
                         fault_applied=state.fault_applied,
                         previous_desired=q_desired,
-                        previous_desired_time=inputs.time_s),
+                        previous_desired_time=inputs.time_s,
+                        previous_target_key=target_key),
         boresight_error_rad=error,
         mode_changed=mode_changed,
         wheels_saturated=saturated)

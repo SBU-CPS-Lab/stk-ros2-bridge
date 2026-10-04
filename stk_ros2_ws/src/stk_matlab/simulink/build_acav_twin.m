@@ -208,14 +208,16 @@ function modelName = build_acav_twin(options)
 
     % UnpackTelemetry outputs, in order: qMeas, omega, pos, vel,
     % targetEci, haveTarget, t, objectPath, stepIndex, pathLength,
-    % pathReceived, stampSec, stampNsec. The first seven feed
+    % pathReceived, stampSec, stampNsec, targetId. The first seven feed
     % GuidanceControl 1:1; the rest bypass it and are picked up directly
     % by the publish chains below, since adcs.twin_step has no use for
-    % them.
+    % them. Target identity also feeds GuidanceControl input 8.
     for k = 1:7
         add_line(modelName, sprintf('UnpackTelemetry/%d', k), ...
             sprintf('GuidanceControl/%d', k));
     end
+
+    add_line(modelName, 'UnpackTelemetry/14', 'GuidanceControl/8');
 
     % The torque IS integrated -- inside adcs.twin_step, which runs it
     % through the wheels and the rigid-body step to produce qCmd. What
@@ -543,7 +545,7 @@ function source = guidanceControlSource(runConfigPath)
     end
     source = strjoin({
         'function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh] = ...'
-        '        fcn(qMeas, omega, pos, vel, targetEci, haveTarget, t)'
+        '        fcn(qMeas, omega, pos, vel, targetEci, haveTarget, t, targetId)'
         '%#codegen'
         '    coder.extrinsic(''adcs.simulink_step'');'
         '    persistent started'
@@ -552,7 +554,7 @@ function source = guidanceControlSource(runConfigPath)
         '    torque = zeros(1,3); qCmd = [0 0 0 1]; mode = 1;'
         '    err = 0; momentum = zeros(1,3); saturated = false; energy = 0; ready = false; fresh = false;'
         sprintf(['    [torque,qCmd,mode,err,momentum,saturated,energy,ready,fresh] = ' ...
-            'adcs.simulink_step(qMeas,omega,pos,vel,targetEci,haveTarget,t,reset,''%s'');'], ...
+            'adcs.simulink_step(qMeas,omega,pos,vel,targetEci,haveTarget,t,reset,''%s'',targetId);'], ...
             strrep(char(runConfigPath), '''', ''''''))
         'end'
         }, newline);
@@ -579,7 +581,7 @@ function source = unpackTelemetrySource()
     % the ScenarioTime stamp in integer sec/nanosec for the same reason.
     source = strjoin({
         'function [qMeas, omega, pos, vel, targetEci, haveTarget, t, ...'
-        '    objectPath, stepIndex, pathLength, pathReceived, stampSec, stampNsec] = ...'
+        '    objectPath, stepIndex, pathLength, pathReceived, stampSec, stampNsec, targetId] = ...'
         '    fcn(attitudeMsg, orbitMsg, setpointMsg, rateMsg, timeMsg)'
         '%#codegen'
         '    qMeas = [attitudeMsg.orientation.x, attitudeMsg.orientation.y, ...'
@@ -591,6 +593,12 @@ function source = unpackTelemetrySource()
         '    targetEci = [setpointMsg.target_position_m.x, ...'
         '        setpointMsg.target_position_m.y, setpointMsg.target_position_m.z];'
         '    haveTarget = setpointMsg.has_target;'
+        '    targetId = zeros(size(setpointMsg.target_id), ''uint8'');'
+        '    n = double(setpointMsg.target_id_SL_Info.CurrentLength);'
+        '    if setpointMsg.target_id_SL_Info.ReceivedLength > n'
+        '        error(''Target ID exceeds the ROS bus string capacity.'');'
+        '    end'
+        '    targetId(1:n) = setpointMsg.target_id(1:n);'
         '    stampSec = double(timeMsg.sim_time.sec);'
         '    stampNsec = double(timeMsg.sim_time.nanosec);'
         '    t = (stampSec - double(timeMsg.scenario_epoch.sec)) + ...'

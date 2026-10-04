@@ -1,9 +1,12 @@
 function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, omegaCmd] = ...
-    simulink_step(qMeas, omega, pos, vel, targetEci, haveTarget, t, reset, runConfigPath)
+    simulink_step(qMeas, omega, pos, vel, targetEci, haveTarget, t, reset, runConfigPath, targetId)
 %SIMULINK_STEP MATLAB-hosted adapter for Normal-mode Simulink simulation.
 % Keep dynamic profile structs and YAML/JSON loading in MATLAB; the
 % Simulink boundary exposes only fixed-size numeric outputs. Reset is
 % asserted by the block on every simulation start, preventing stale state.
+    if nargin < 10, targetId = ''; end
+    targetId = char(targetId(:).');
+    targetId = targetId(targetId ~= char(0));
     persistent cfg state lastTime lastOutput
     if reset || isempty(cfg)
         cfg = adcs.config([], runConfigPath);
@@ -56,7 +59,7 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
     fresh = true;
     in = struct('quaternion', qMeas, 'omega', omega, ...
         'position', pos, 'velocity', vel, 'targetEci', targetEci, ...
-        'haveTarget', haveTarget, 't', t);
+        'haveTarget', haveTarget, 't', t, 'targetId', targetId);
     out = adcs.twin_step(in, cfg, state);
     state = out.state;
     torque = out.torque;
