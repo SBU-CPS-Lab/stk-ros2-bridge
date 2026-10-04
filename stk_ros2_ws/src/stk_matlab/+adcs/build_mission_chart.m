@@ -82,6 +82,7 @@ function chart = build_mission_chart(model, blockName, position)
     addTransition(chart, states.NADIR,  states.SLEW,   '[slewRequested]');
     addTransition(chart, states.IMAGE,  states.SLEW,   '[slewRequested]');
     addTransition(chart, states.SLEW,   states.SETTLE, '[profileDone]');
+    addTransition(chart, states.SETTLE, states.SLEW, '[slewRequested]');
     addTransition(chart, states.SETTLE, states.IMAGE, ...
         '[boresightError <= settleEntry]');
 

@@ -37,7 +37,7 @@ function [modeOut, enteredAt] = mission_mode(modeIn, enteredAtIn, nowS, ...
         return
     end
 
-    if slewRequested && (strcmp(modeIn, 'NADIR') || strcmp(modeIn, 'IMAGE'))
+    if slewRequested && (strcmp(modeIn, 'NADIR') || strcmp(modeIn, 'IMAGE') || strcmp(modeIn, 'SETTLE'))
         modeOut = 'SLEW';
         enteredAt = nowS;
         return

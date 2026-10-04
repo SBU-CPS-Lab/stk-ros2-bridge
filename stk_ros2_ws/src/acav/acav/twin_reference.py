@@ -523,7 +523,7 @@ def update_mode(state: ModeState, config: TwinConfig, now_s: float,
         return state
 
     if slew_requested and state.mode in (MissionMode.NADIR,
-                                         MissionMode.IMAGE):
+                                         MissionMode.IMAGE, MissionMode.SETTLE):
         return ModeState(mode=MissionMode.SLEW, entered_at_s=now_s,
                          profile=state.profile, slew_started_s=now_s)
 
@@ -711,7 +711,9 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
     # restart the ramp continuously and never converge.
     slew_requested = (inputs.have_target
                       and error > config.settle_entry_rad
-                      and mode_state.mode is not MissionMode.SLEW)
+                      and mode_state.mode is not MissionMode.SLEW
+                      and (mode_state.mode is not MissionMode.SETTLE
+                           or state.previous_target_key != target_key))
     profile_done = (mode_state.profile is None
                     or (inputs.time_s - mode_state.slew_started_s)
                     >= mode_state.profile.duration_s)
