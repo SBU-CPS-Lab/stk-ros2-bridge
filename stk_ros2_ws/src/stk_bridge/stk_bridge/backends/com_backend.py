@@ -74,6 +74,8 @@ class ComBackend(StkBackend):
         self._root: Any = None
         self._enums: Dict[str, Any] = {}
         self._info = BackendInfo(backend_type=BackendType.COM)
+        # COM handles only, never telemetry values. Owned by the COM worker.
+        self._provider_cache = {}
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -132,6 +134,7 @@ class ComBackend(StkBackend):
             raise
 
     def disconnect(self) -> None:
+        self._provider_cache.clear()
         self._connected = False
         self._root = None
         if self._stk is not None:
@@ -364,6 +367,7 @@ class ComBackend(StkBackend):
             raise QueryError("CurrentScenario", "/", str(exc)) from exc
 
     def new_scenario(self, name: str) -> None:
+        self._provider_cache.clear()
         self.require_connected()
         try:
             self._root.NewScenario(name)
@@ -371,6 +375,7 @@ class ComBackend(StkBackend):
             raise CommandError("NewScenario", name, str(exc)) from exc
 
     def load_scenario(self, path: str) -> None:
+        self._provider_cache.clear()
         self.require_connected()
         try:
             self._root.LoadScenario(path)
@@ -389,6 +394,7 @@ class ComBackend(StkBackend):
                                str(exc)) from exc
 
     def close_scenario(self) -> None:
+        self._provider_cache.clear()
         self.require_connected()
         try:
             self._root.CloseScenario()
@@ -434,6 +440,7 @@ class ComBackend(StkBackend):
 
     def create_object(self, object_type: str, name: str,
                       parent_path: str = "") -> str:
+        self._provider_cache.clear()
         self.require_connected()
         parent = (self._get_object(parent_path) if parent_path
                   else self._root.CurrentScenario)
@@ -458,6 +465,7 @@ class ComBackend(StkBackend):
         return str(child.Path)
 
     def delete_object(self, object_path: str) -> None:
+        self._provider_cache.clear()
         obj = self._get_object(object_path)
         try:
             obj.Unload()
@@ -494,22 +502,33 @@ class ComBackend(StkBackend):
         ``Group`` attribute is probed rather than assumed, because
         whether a given provider is grouped varies by object type.
         """
-        obj = self._get_object(query.object_path)
+        self.require_connected()
+        key = (query.object_path, query.provider_name, query.group_element)
+        if key not in self._provider_cache:
+            obj = self._get_object(query.object_path)
+            try:
+                provider = obj.DataProviders.Item(query.provider_name)
+            except Exception as exc:
+                raise QueryError(query.provider_name, query.object_path,
+                                 f"no such data provider ({exc})") from exc
+            provider = self._select_group_member(provider, query)
+            fixed_position = (query.provider_name == "Cartesian Position" and
+                              query.group_element and not hasattr(provider, "ExecSingle"))
+            if len(self._provider_cache) >= 256:
+                self._provider_cache.clear()
+            self._provider_cache[key] = (obj, provider, fixed_position)
+        obj, provider, fixed_position = self._provider_cache[key]
         try:
-            provider = obj.DataProviders.Item(query.provider_name)
-        except Exception as exc:
-            raise QueryError(query.provider_name, query.object_path,
-                             f"no such data provider ({exc})") from exc
-
-        provider = self._select_group_member(provider, query)
-        if (query.provider_name == "Cartesian Position" and
-                query.group_element and not hasattr(provider, "ExecSingle")):
-            # Target/Facility Cartesian Position is ungrouped and fixed.
-            # Its values are body-fixed, even if the request said ICRF.
-            # Resolve the center geometrically at the requested epoch.
-            return self._fixed_position_in_frame(obj, query)
-        result = self._exec_provider(provider, query)
-        return self._extract(result, query)
+            if fixed_position:
+                # Still resolve fixed-object geometry at EVERY requested epoch.
+                return self._fixed_position_in_frame(obj, query)
+            result = self._exec_provider(provider, query)
+            return self._extract(result, query)
+        except Exception:
+            # Do not hide an execution failure or return old telemetry. Resolve
+            # fresh handles on the next query in case the object was replaced.
+            self._provider_cache.pop(key, None)
+            raise
 
     def _fixed_position_in_frame(self, obj, query):
         try:
@@ -762,6 +781,7 @@ class ComBackend(StkBackend):
         (SetPosition/AddAttitude) is likewise Connect-based for the same
         reason -- see the note on :meth:`set_position`.
         """
+        self._provider_cache.clear()
         if propagator is PropagatorType.REALTIME:
             self._capabilities.require("realtime_propagator")
             # Confirmed against STK 12.6: the `SetPropagator ... RealTime`
@@ -1092,6 +1112,7 @@ class ComBackend(StkBackend):
         self._execute(" ".join(args))
 
     def enable_realtime_attitude(self, object_path: str) -> None:
+        self._provider_cache.clear()
         self._execute(f"SetAttitude {object_path} Standard")
 
     def clear_attitude_data(self, object_path: str) -> None:
@@ -1133,6 +1154,7 @@ class ComBackend(StkBackend):
 
     def execute_connect(self, command: str,
                         timeout_s: Optional[float] = None) -> ConnectResponse:
+        self._provider_cache.clear()  # arbitrary commands may replace objects
         # timeout_s is accepted for interface symmetry but has no meaning
         # in-process: ExecuteCommand is a blocking COM call with no
         # client-side timeout available.

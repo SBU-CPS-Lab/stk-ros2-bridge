@@ -501,6 +501,21 @@ result; an `IMAGE` label alone is not evidence of successful capture.
 Send the log bundle either way -- a run that failed cleanly with a
 clear log is exactly as useful here as one that succeeded.
 
+### COM sensing optimisation and comparison
+
+The COM backend reuses resolved Data Provider handles for the same object,
+provider and reference frame. It still executes each query at its requested
+epoch and extracts fresh results; telemetry values are never cached. Scenario
+replacement, object creation/deletion, propagator changes, arbitrary Connect
+commands and disconnect clear the handle cache. A failed query evicts its
+handle and propagates the error. Do not edit or replace scenario objects
+manually during a run; restart the bridge after external structural edits.
+
+The integration step, controller gains, sample rates and capture criteria are
+unchanged. This removes repeated COM object/provider discovery, but the live
+speedup must be measured in the next E6 run. Keep old and new E6 records in
+separate result directories so the report does not mix software versions.
+
 ### End-of-run shutdown and errors
 
 The runner stops the bridge immediately after the scheduler exits, **before**

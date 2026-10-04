@@ -19,8 +19,58 @@ from stk_bridge.backends.com_backend import ComBackend
 from stk_bridge.exceptions import QueryError
 
 
+def test_provider_handles_are_reused_but_every_epoch_is_executed():
+    backend = ComBackend()
+    backend._connected = True
+    provider = TimeVarProvider()
+    obj = SimpleNamespace(DataProviders=Mock())
+    obj.DataProviders.Item.return_value = provider
+    backend._get_object = Mock(return_value=obj)
+    backend._extract = Mock(side_effect=lambda result, request: request.start)
+    first = query()
+    second = query(start=first.start + .1)
+    assert backend.query_data_provider(first) == first.start
+    assert backend.query_data_provider(second) == second.start
+    assert backend._get_object.call_count == 1
+    assert obj.DataProviders.Item.call_count == 1
+    assert len(provider.calls) == 2
+    assert provider.calls[0] != provider.calls[1]
+
+
+def test_provider_cache_separates_frames_and_drops_failed_handles():
+    backend = ComBackend()
+    backend._connected = True
+    backend._get_object = Mock(return_value=SimpleNamespace(DataProviders=Mock()))
+    backend._select_group_member = Mock(return_value=TimeVarProvider())
+    backend._extract = Mock(return_value='fresh')
+    backend.query_data_provider(query(group_element='ICRF'))
+    backend.query_data_provider(query(group_element='Fixed'))
+    assert backend._get_object.call_count == 2
+    backend._extract.side_effect = RuntimeError('stale handle')
+    with pytest.raises(RuntimeError, match='stale handle'):
+        backend.query_data_provider(query(group_element='ICRF'))
+    backend._extract.side_effect = None
+    backend.query_data_provider(query(group_element='ICRF'))
+    assert backend._get_object.call_count == 3
+
+
+@pytest.mark.parametrize('operation', ['new_scenario', 'load_scenario',
+                                      'close_scenario', 'delete_object',
+                                      'execute_connect', 'disconnect'])
+def test_provider_cache_invalidated_on_lifecycle_changes(operation):
+    backend = ComBackend()
+    backend._connected = True
+    backend._root = Mock()
+    backend._execute = Mock()
+    backend._provider_cache['old'] = object()
+    args = [] if operation in ('close_scenario','disconnect') else ['example']
+    getattr(backend, operation)(*args)
+    assert not backend._provider_cache
+
+
 def test_fixed_position_resolves_requested_axes_and_each_epoch():
     backend = ComBackend()
+    backend._connected = True
     point = Mock()
     point.LocateInSystem.side_effect = [
         SimpleNamespace(Position=SimpleNamespace(X=x, Y=2, Z=3)) for x in (10, 11, 12)]
