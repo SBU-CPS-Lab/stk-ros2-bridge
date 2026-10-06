@@ -124,3 +124,30 @@ class TestReportSummary:
         assert not summary["attributable"]
         if "" in versions:
             assert "not recorded" in summary["versions"]
+
+
+class TestSchedulerProvenance:
+    """What the scheduler actually writes, through its real _write_output."""
+
+    def _write(self, tmp_path, monkeypatch, scenario_path=""):
+        from types import SimpleNamespace
+        from acav.scheduler_node import SchedulerNode
+        monkeypatch.setenv(code_version.ENV_VAR, "d" * 40)
+        node = SchedulerNode.__new__(SchedulerNode)
+        out = str(tmp_path / "run.json")
+        node._options = SimpleNamespace(
+            output_json=out, experiment="E6", scenario_path=scenario_path,
+            gains_json="{}", fault_json="null", attitude_provider="")
+        node._backend_type, node._stk_version = "com", "12.6.0"
+        node._execution_mode, node._started_utc = "lockstep", ""
+        node._write_output(RunResult(run_id="r", scheduler="dynamics_aware"))
+        return read_record(out).provenance
+
+    def test_the_default_scenario_is_fingerprinted(self, tmp_path, monkeypatch):
+        # Every campaign so far ran with no explicit scenario path, and
+        # every record's scenario_sha256 came out empty.
+        from acav.run_record import scenario_digest
+        from acav.spec import AcavSpec
+        provenance = self._write(tmp_path, monkeypatch)
+        assert provenance.scenario_sha256 == scenario_digest(AcavSpec.locate(None))
+        assert provenance.code_version == "d" * 40

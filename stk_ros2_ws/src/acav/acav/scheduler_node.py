@@ -734,11 +734,16 @@ class SchedulerNode:
         )
 
         digest = ""
-        if self._options.scenario_path:
-            try:
-                digest = scenario_digest(self._options.scenario_path)
-            except OSError as error:
-                LOGGER.warning("could not hash the scenario file: %s", error)
+        # The file the spec was actually loaded from: the default one when
+        # no path was given -- which is how every campaign so far ran, and
+        # why their records carry no scenario fingerprint at all.
+        scenario_file = self._options.scenario_path or "(default)"
+        try:
+            scenario_file = AcavSpec.locate(self._options.scenario_path or None)
+            digest = scenario_digest(scenario_file)
+        except (OSError, FileNotFoundError, ValueError) as error:
+            LOGGER.warning("could not hash the scenario file %s: %s",
+                           scenario_file, error)
 
         record = RunRecord(
             result=result,
