@@ -103,6 +103,12 @@ class Provenance:
     #: older record has exactly one correct reading -- the validated
     #: pairing -- so nothing can be misinterpreted.
     attitude_provider: str = ""
+    #: The code that produced the run (see acav.code_version): a git
+    #: commit, ``<commit>+dirty``, or ``unknown (...)``. Empty in records
+    #: written before it was recorded -- added without a RECORD_VERSION
+    #: bump for the same reason as attitude_provider: absence has one
+    #: reading ("not recorded") and changes nothing else in the record.
+    code_version: str = ""
     started_utc: str = ""
     finished_utc: str = ""
     #: Free-text, e.g. which machine, which STK licence features.
@@ -117,6 +123,7 @@ class Provenance:
             "gains": dict(self.gains),
             "fault": self.fault,
             "attitude_provider": self.attitude_provider,
+            "code_version": self.code_version,
             "started_utc": self.started_utc,
             "finished_utc": self.finished_utc,
             "notes": self.notes,
@@ -133,6 +140,7 @@ class Provenance:
                    for k, v in (raw.get("gains") or {}).items()},
             fault=raw.get("fault"),
             attitude_provider=str(raw.get("attitude_provider", "") or ""),
+            code_version=str(raw.get("code_version", "") or ""),
             started_utc=str(raw.get("started_utc", "")),
             finished_utc=str(raw.get("finished_utc", "")),
             notes=str(raw.get("notes", "")),

@@ -155,6 +155,25 @@ class TestExecuteRunHappyPath:
                          "scheduler_exit": True, "topic_capture": True}
         assert bridge_proc.terminated
 
+    def test_the_code_version_is_resolved_recorded_and_exported(
+            self, tmp_path, monkeypatch):
+        from acav import code_version
+        # A stale value in the operator's shell must not be trusted.
+        monkeypatch.setenv(code_version.ENV_VAR, "stale")
+        config = _config(tmp_path)
+        deps = Deps(
+            popen=lambda *a, **k: FakeProcess(),
+            wait_for_bridge_connected=lambda *a, **k: ConnectResult(True, "com"),
+            wait_for_twin_ack=lambda *a, **k: True,
+            prompt=lambda message: None,
+        )
+        execute_run(config, deps)
+        with open(os.path.join(config.resolved_log_dir(), "summary.json")) as f:
+            recorded = json.load(f)["code_version"]
+        assert recorded != "stale" and not recorded.startswith("unknown")
+        # Exported for the bridge and scheduler started after it.
+        assert os.environ[code_version.ENV_VAR] == recorded
+
     def test_logs_land_next_to_the_output_by_default(self, tmp_path):
         config = _config(tmp_path)
         deps = Deps(

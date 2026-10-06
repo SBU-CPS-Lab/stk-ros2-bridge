@@ -314,8 +314,21 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
         "%(asctime)s %(levelname)s %(message)s"))
     run_log.addHandler(handler)
 
+    # Resolved here, from this checkout, and exported so the bridge and
+    # scheduler (which may run from an install tree) record the same value.
+    from acav import code_version
+    version = code_version.describe(prefer_env=False)
+    os.environ[code_version.ENV_VAR] = version
+    run_log.info("code version: %s", version)
+    if not code_version.is_clean(version):
+        run_log.warning(
+            "code version is %s, not a plain commit: results from this run "
+            "cannot be attributed to a committed version of the code",
+            version)
+
     summary = {
         "run_id": config.run_id, "experiment": config.experiment,
+        "code_version": version,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "steps": [],
     }

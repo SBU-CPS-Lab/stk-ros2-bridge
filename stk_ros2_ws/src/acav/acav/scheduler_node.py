@@ -102,6 +102,12 @@ FINALIZE_GRACE_WALL_S = 15.0
 TWIN_STAMP_TOLERANCE_S = 5.0
 
 
+def _code_version() -> str:
+    from acav.code_version import describe
+
+    return describe()
+
+
 def _utc_now() -> str:
     """An ISO-8601 UTC timestamp, for the run's provenance."""
     import datetime
@@ -744,6 +750,7 @@ class SchedulerNode:
                 scenario_sha256=digest,
                 gains=_parse_json_object(self._options.gains_json, "gains"),
                 attitude_provider=self._options.attitude_provider,
+                code_version=_code_version(),
                 fault=_parse_json_value(self._options.fault_json, "fault"),
                 started_utc=self._started_utc,
                 finished_utc=_utc_now()))

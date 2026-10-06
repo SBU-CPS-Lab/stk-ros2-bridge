@@ -180,6 +180,7 @@ def write_run_config(run: RunSpec, output_path: str) -> str:
         "fault": None if run.fault is None else run.fault.to_dict(),
         "experiment": run.experiment,
         "attitude_provider": run.attitude_provider,
+        "code_version": _code_version(),
         # Explicit guard ablation, never enabled by an ordinary run.
         "attitude_mismatch_policy": (
             "e1_readback_ablation" if run.experiment == "E1" and
@@ -288,6 +289,12 @@ def check_record(run: RunSpec, record: RunRecord) -> List[str]:
     return problems
 
 
+def _code_version() -> str:
+    from acav.code_version import describe
+
+    return describe()
+
+
 def write_manifest(campaign: Campaign, output_dir: str) -> str:
     """Write the campaign definition next to its results.
 
@@ -299,8 +306,10 @@ def write_manifest(campaign: Campaign, output_dir: str) -> str:
     import json
 
     path = os.path.join(output_dir, "campaign.json")
+    manifest = campaign.to_dict()
+    manifest["code_version"] = _code_version()
     with open(path, "w", encoding="utf-8") as handle:
-        json.dump(campaign.to_dict(), handle, indent=2)
+        json.dump(manifest, handle, indent=2)
         handle.write("\n")
     return path
 

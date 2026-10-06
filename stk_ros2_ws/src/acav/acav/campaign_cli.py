@@ -113,6 +113,27 @@ def load_results(output_dir: str) -> List[RunRecord]:
     return records
 
 
+def code_version_summary(records: List[RunRecord]) -> dict:
+    """Which code produced these records, and whether that is one commit.
+
+    ``attributable`` is true only when every record names the same plain
+    commit: records from older code (no version recorded), from modified
+    code (``+dirty``) or from more than one commit cannot be attributed to
+    a single published version, which a paper's methods section needs.
+    """
+    from acav.code_version import is_clean
+
+    by_version: dict = {}
+    for record in records:
+        version = record.provenance.code_version or "not recorded"
+        by_version.setdefault(version, []).append(record.result.run_id)
+    versions = sorted(by_version)
+    return {
+        "versions": {v: sorted(ids) for v, ids in by_version.items()},
+        "attributable": len(versions) == 1 and is_clean(versions[0]),
+    }
+
+
 def analyse(experiment: str, records: List[RunRecord],
             total_targets: int) -> dict:
     """The experiment's own question, answered from its records."""
@@ -120,6 +141,7 @@ def analyse(experiment: str, records: List[RunRecord],
         "experiment": experiment,
         "records": len(records),
         "unreportable": [r.result.run_id for r in unreportable(records)],
+        "code_versions": code_version_summary(records),
     }
 
     if experiment == "E3":
@@ -339,6 +361,15 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             "the paper to publishing no number the mock produced: %s",
             len(report["unreportable"]), report["unreportable"])
         return 1
+
+    if not report["code_versions"]["attributable"]:
+        # Reported, not fatal: the numbers are still the numbers. But the
+        # paper must cite the code that produced them, and this campaign
+        # cannot be cited as one commit.
+        LOGGER.warning(
+            "these records do not come from one clean commit: %s. Re-run "
+            "from a single committed version before citing the results.",
+            sorted(report["code_versions"]["versions"]))
 
     missing = len(campaign.runs) - len(records)
     if missing > 0:
