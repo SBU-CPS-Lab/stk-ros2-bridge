@@ -197,6 +197,17 @@ Every run's logs land in `results\E6\<run_id>.logs\` (see
 `run.log` (this orchestration's own narrative and step-by-step
 outcome), `bridge.log`, `scheduler.log`, and `summary.json`.
 
+### Before a campaign whose results will be cited
+
+Run it from a **clean checkout of one commit on `main`**: `git status`
+must show no modified tracked files. Every run now records the code
+version it ran (the commit, or `<commit>+dirty` when tracked files were
+modified): in `run.log`, `summary.json`, the run configuration, the
+record's `provenance.code_version` and the campaign's `campaign.json`.
+`run_acav_campaign report` warns unless all of a campaign's records come
+from one clean commit. Results already obtained, and what is still to be
+run, are recorded in `09_live_runs_and_results.md`.
+
 ## 6. Sending results back for analysis
 
 Zip and send the whole `results\E6\` directory, not just the JSON

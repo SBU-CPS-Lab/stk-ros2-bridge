@@ -112,7 +112,11 @@ back 20% costs ~12% on the slew and buys back several seconds of
 settling.
 
 `test_twin_reference.py::test_every_acav_slew_fits_the_scheduler_s_budget`
-guards this. If a gain change breaks it, E2's headline becomes an
+guards this. **The table was measured with fixed targets.** In the live
+loop the target direction moves, and the guidance now compensates for it
+(section 9): live slews end within ~1.4° and enter IMAGE immediately, so
+these settling margins describe the original fixed-target design, not
+the measured live behaviour. If a gain change breaks it, E2's headline becomes an
 artifact, so the test fails rather than the study quietly degrading.
 
 **Honest caveat for the paper.** A 1.0 rad/s bandwidth is optimistic for
@@ -158,7 +162,7 @@ no single version had seen both halves.
 
 | | |
 |---|---|
-| `test_acav_twin` | **47/47 pass** — the MATLAB reproduces every fixture, closed-loop trajectories and the per-step orchestration included |
+| `test_acav_twin` | **52/52 pass** (fixture version 6, R2024a, 2026-10-06) — the MATLAB reproduces every fixture: closed-loop trajectories, the per-step orchestration, and the moving-geometry cases of section 9 |
 | `adcs.build_mission_chart` | builds; SAFE latches (0 outgoing), reachable from all four nominal states, all guards at execution order 1 |
 | `build_acav_twin` | writes a fully wired `.slx` **and passes Simulink's diagram update** (R2024a on Linux here, R2023b on the deploy machine), with `ros2genmsg` run first |
 | `test_simulink_adapter` | **passes** — `adcs.simulink_step`, the Normal-mode adapter the model calls, matches `adcs.twin_step` over 12 closed-loop steps, gates invalid/zero startup telemetry, and resets on simulation start |
@@ -358,3 +362,61 @@ back as the next step's measurement, exactly as the deployed loop does
 through STK. A twin that computes a torque without integrating it shows
 up there as a boresight error that refuses to decrease, which is the
 regression boundary that was missing.
+
+## 9. Moving targets: guidance changes made during live bring-up
+
+The design above was verified against fixed geometry. In the live loop
+both the satellite and a ground target move in the inertial frame (orbit
+and Earth rotation), and the first live campaigns showed what that does
+to a design that ignores it. The changes, all made on both sides (Python
+reference and MATLAB):
+
+- **Desired-rate feedforward.** The rate of the desired attitude is
+  estimated by differencing it between steps and fed forward in NADIR,
+  SETTLE and IMAGE, instead of a zero reference rate that leaves a
+  standing tracking error on a moving line of sight.
+- **Transported slew profiles.** A slew was planned to the target
+  direction at its start; by its end the direction had moved, and live
+  slews finished ~10° short, then settled at the torque limit. The
+  planned profile is now rotated by the motion of the desired attitude
+  (`q_desired · finish*`), which is the identity at the start of the slew
+  and lands on the current target direction at its end. The profile rate
+  is re-expressed in the actual body axes and the line-of-sight rate is
+  added.
+- **Target identity.** The setpoint's target ID reaches the twin. A
+  change of target (or its loss, or reacquisition) resets the rate
+  history, so no finite difference spans two targets. A change re-plans
+  the slew mid-SLEW, and from SETTLE starts a new one. A change on the
+  exact step the previous slew's profile ends also re-plans: that step's
+  profile is not counted as done for the new target. Without that rule
+  the change was consumed as the mode moved SLEW → SETTLE and the
+  feedback loop alone closed the whole new slew. The moving-geometry
+  fixtures found this before any live run met it.
+- **The twin owns attitude and rate.** STK's read-back is checked against
+  the twin's own previous output each step (any mismatch beyond ~1e-4 rad
+  stops the twin), and the dynamics continue from the twin's integrated
+  endpoint. STK's body rate is a numerical derivative of the attitudes
+  the twin wrote and carries no independent information. E1's treatment
+  is the only exception (an explicit, configured ablation of the
+  mismatch guard; see `C5_experiment_harness.md`).
+
+Measured in the live E6 campaign of 2026-10-05: every slew ended within
+~1.4° of its target and went straight to IMAGE; all five attempted
+targets were captured at ~0.002° error (`09_live_runs_and_results.md`).
+
+**Cross-check coverage.** Fixture version 6 adds `moving_twin_step`: a
+circular polar orbit and targets fixed on a rotating Earth, evaluated by
+the same formulas on both sides, in five closed-loop cases. The cases are
+tracking a moving target, a re-target mid-slew, a re-target on the step a
+slew ends, a re-target in SETTLE, and loss of target to nadir. Each case
+compares checkpoints and also every mode transition and every slew
+(re)plan time, so a re-plan one side makes and the other does not fails
+by name. `test_moving_fixtures.py` asserts that each case still exercises
+the path it exists for. Reverting the slew-end re-plan rule on the MATLAB
+side alone makes `retarget_as_slew_ends` fail (3.3° attitude difference
+at t = 12.5 s), which shows the section discriminates.
+
+Known residual behaviour: when the last target is done and the setpoint
+drops to nadir, the change is absorbed in IMAGE by feedback at the torque
+limit (no slew is planned without a target). Nothing is imaged then; the
+live E6 runs show it at t ≈ 400–409 s.

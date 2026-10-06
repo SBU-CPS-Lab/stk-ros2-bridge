@@ -39,10 +39,13 @@ and `stk_bridge` (Python, MATLAB, ROS interfaces, YAML, docs):
 | 6 | config, launch, tests, MATLAB/Simulink side, docs | ✅ |
 
 **The ACAV case study (C1-C6), built on top of the bridge, is also
-implemented and offline-tested.** No campaign has yet run against live
-STK -- see [`src/acav/README.md`](src/acav/README.md) for phase-by-phase
-status and [`docs/08_deploy_runbook.md`](docs/08_deploy_runbook.md) for
-running one.
+implemented and offline-tested, and runs closed-loop against live STK.**
+Experiment E6 has been run live; E1-E5 have not. See
+[`docs/09_live_runs_and_results.md`](docs/09_live_runs_and_results.md)
+for every live run and result so far,
+[`src/acav/README.md`](src/acav/README.md) for phase-by-phase status, and
+[`docs/08_deploy_runbook.md`](docs/08_deploy_runbook.md) for running a
+campaign.
 
 Test suite (bridge + case study, offline, no ROS or STK needed):
 
@@ -51,9 +54,11 @@ cd stk_ros2_ws
 python -m pytest src/acav/test src/stk_bridge/test -q
 ```
 
-740 passed, 3 skipped as of the last C6 increment (the skips are
+870 passed, 4 skipped as of 2026-10-06 (three skips are
 `builtin_interfaces` import guards for running outside a sourced ROS 2
-workspace -- see `src/stk_bridge/test/test_conversions.py`).
+workspace -- see `src/stk_bridge/test/test_conversions.py`; the fourth,
+`test_qos_lockstep.py`, needs `rclpy`). The MATLAB twin cross-check,
+`test_acav_twin`, passes 52/52.
 
 Several of this project's design decisions were corrected against a
 **live STK 12.6 install** partway through development, not assumed from
@@ -131,6 +136,7 @@ of `src/acav/test` except for `scheduler_node.py` and
 | `06_troubleshooting.md` | Every STK-12.6-specific finding from this project's bring-up |
 | `07_extending_backends.md` | Adding a backend or capability without breaking layering |
 | `08_deploy_runbook.md` | Running an ACAV campaign on the Windows STK machine, and what to send back |
+| `09_live_runs_and_results.md` | Every live STK run so far: verifier runs, closed-loop bring-up, the E6 campaigns, what is still unrun |
 | `C1_case_study_spec.md` | The ACAV case study's claim, scenario contract, and honest limitations |
 | `C3_adcs_twin.md` | The ADCS twin: Python reference + MATLAB/Simulink model |
 | `C4_scheduler.md` | The target scheduler (kinematic vs. dynamics-aware) |

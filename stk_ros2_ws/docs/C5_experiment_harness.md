@@ -290,6 +290,12 @@ nothing, and E3's comparison rested entirely on per-target outcomes.
   labelled for what it actually is rather than filled with the backend
   round-trip time, which would have mislabelled one component as the
   whole.
-- **No campaign has been run against live STK.** Everything here is
-  verified against an injected launcher. The first real campaign is the
-  test of section 5's refusals.
+- **One experiment has run live: E6** (two five-run campaigns; see
+  `09_live_runs_and_results.md`). E1–E5 have not.
+- **Code version and scenario fingerprint.** Every record now carries
+  `provenance.code_version` (git commit, `+dirty`, or `unknown`, from
+  `acav/code_version.py`) and a `scenario_sha256` of the file actually
+  loaded, also when no scenario path is given. The run configuration,
+  the campaign manifest and `summary.json` carry the code version too,
+  and `report` warns unless a campaign's records come from one clean
+  commit. The E6 campaigns predate both and record neither.

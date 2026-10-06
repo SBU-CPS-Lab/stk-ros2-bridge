@@ -241,6 +241,10 @@ repeatedly.
   `quaternionCmd` defect that wiring exposed (the twin computed a torque
   but never integrated it, so the vehicle could not slew) is fixed and
   now fixture-covered; see `docs/C3_adcs_twin.md` section 8.
-- **No live-STK run yet.** Everything above is verified against the
-  mock/free-run combination this environment can reach. The first real
-  E2 run is the actual test of sections 2–4's design.
+- **E2 has not run live yet.** The scheduler has run live in lockstep
+  with the dynamics-aware policy (the E6 campaigns,
+  `09_live_runs_and_results.md`); the kinematic policy and the
+  comparison itself have not. Live runs also changed one input: target
+  positions are now a time-varying ICRF trajectory sampled every 10 s and
+  interpolated, resolved before the first lockstep step is released,
+  instead of one position at the imaging epoch.

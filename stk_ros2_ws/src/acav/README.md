@@ -27,12 +27,12 @@ behind each one.
 | C5 | The experiment harness: provenance, seeded faults, run matrices, the campaign CLI | `run_record.py`, `fault_injection.py`, `campaign.py`, `campaign_runner.py`, `campaign_cli.py` |
 | C6 | Analysis and figures from a campaign directory | `report_figures.py`, `report_style.py`, wired into `campaign_cli.py`'s `report` verb |
 
-All six are implemented and offline-tested (602 tests, this package
-alone). **No campaign has been run against live STK yet** — everything
-above has been verified against the twin's own reference and an
-injected launcher standing in for the real one. Running one for real is
-what [`../../docs/08_deploy_runbook.md`](../../docs/08_deploy_runbook.md)
-is for.
+All six are implemented and offline-tested (660 tests, this package
+alone). **Experiment E6 has been run live**; E1–E5 have not. Every live
+run and its result is recorded in
+[`../../docs/09_live_runs_and_results.md`](../../docs/09_live_runs_and_results.md);
+how to run a campaign is in
+[`../../docs/08_deploy_runbook.md`](../../docs/08_deploy_runbook.md).
 
 ## Running it offline (no STK, no MATLAB, no ROS)
 

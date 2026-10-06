@@ -135,8 +135,10 @@ original by construction (see `RunSpec.run_id`, not by re-matching
 faults, which would also pair two *unrelated* runs that happened to
 share one).
 
-**No figure has been generated from a live-STK campaign.** Everything
-above is synthetic or mock-launcher data, by construction (C1 section
-8: no number the mock produces may appear in the paper, and no figure
-does yet, because none has been drawn from a reportable run). The first
-real figures are the point of `docs/08_deploy_runbook.md`.
+**One live figure exists: E6**, from the campaign of 2026-10-05 (five
+reportable COM runs; measured total 658.1 ms per step, of which sense
+621.5 ms, actuate 18.9 ms, barrier wait 13.0 ms). Its title shows the
+measured end-to-end total; the component sum is disclosed separately
+because the two are timed over different boundaries. The figures for
+E1–E5 do not exist yet. Results and their caveats:
+`09_live_runs_and_results.md`.
