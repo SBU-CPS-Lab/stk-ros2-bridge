@@ -40,7 +40,7 @@ function varargout = test_acav_twin(fixturePath)
     end
 
     fx = jsondecode(fileread(fixturePath));
-    EXPECTED_VERSION = 5;
+    EXPECTED_VERSION = 6;
     if fx.version ~= EXPECTED_VERSION
         error('test_acav_twin:StaleFixtures', ...
             ['fixture version %d, this test expects %d. Regenerate the ' ...
@@ -64,6 +64,7 @@ function varargout = test_acav_twin(fixturePath)
     results = modeCases(results, fx);
     results = wheelFaultCases(results, fx, tol);
     results = twinStepCases(results, fx, 1e-6);
+    results = movingTwinStepCases(results, fx, 1e-6);
     results = closedLoopCases(results, fx);
     results = missionChart(results);
 
@@ -510,6 +511,119 @@ function results = twinStepCases(results, fx, tol)
                 next - 1, numel(checkpoints));
         end
         results = record(results, ['twin step: ' c.name], ok, detail);
+    end
+end
+
+function results = movingTwinStepCases(results, fx, tol)
+%MOVINGTWINSTEPCASES twin_step against MOVING geometry and target changes.
+%
+% The twin_step cases hold position, velocity and target fixed, so the
+% paths that exist because the geometry moves were never cross-checked:
+% the desired-rate feedforward, the slew profile transported with the
+% line of sight, and the target-identity logic (re-plan on a change mid-
+% SLEW, as a slew ends, or in SETTLE; reset on loss of target). Besides
+% the checkpoints, every mode transition and every slew (re)plan time
+% must match exactly, so a replan one side makes and the other does not
+% is a named failure, not a drift several seconds later.
+    cfg = twinCfgFromFixture(fx);
+    cfg.wheelFault = [];
+    geometry = fx.moving_geometry;
+    cases = fixtureCases(fx.moving_twin_step);
+
+    for k = 1:numel(cases)
+        c = cases{k};
+        schedule = fixtureCases(c.schedule);
+        checkpoints = fixtureCases(c.checkpoints);
+        expectedModes = fixtureCases(c.mode_transitions);
+        expectedSlews = c.slew_starts_s(:).';
+
+        q = c.initial_quaternion(:).';
+        w = [0 0 0];
+        state = adcs.initial_state();
+        next = 1; ok = true; detail = '';
+        modes = {}; modeTimes = []; slews = []; previousSlew = NaN;
+        previousMode = '';
+        steps = round(c.duration_s / cfg.stepS);
+
+        for index = 0:steps
+            t = index * cfg.stepS;
+            targetId = '';
+            for j = 1:numel(schedule)
+                if t + 1e-9 >= schedule{j}.start_s
+                    targetId = char(schedule{j}.target_id);
+                end
+            end
+            [position, velocity, targetEci] = movingGeometry(geometry, t, targetId);
+            in = struct('quaternion', q, 'omega', w, ...
+                        'position', position, 'velocity', velocity, ...
+                        'targetEci', targetEci, 'haveTarget', ~isempty(targetId), ...
+                        't', t, 'targetId', targetId);
+            out = adcs.twin_step(in, cfg, state);
+
+            if ~strcmp(out.state.mode, previousMode)
+                modes{end + 1} = out.state.mode; %#ok<AGROW>
+                modeTimes(end + 1) = t; %#ok<AGROW>
+                previousMode = out.state.mode;
+            end
+            if strcmp(out.state.mode, 'SLEW') && ...
+                    ~isequal(out.state.slewStarted, previousSlew)
+                slews(end + 1) = out.state.slewStarted; %#ok<AGROW>
+            end
+            previousSlew = out.state.slewStarted;
+
+            if next <= numel(checkpoints) && ...
+                    abs(t - checkpoints{next}.time_s) < cfg.stepS / 2
+                [ok, detail] = compareTwinStep(checkpoints{next}, q, w, ...
+                    state, out, tol);
+                if ~ok
+                    break
+                end
+                next = next + 1;
+            end
+
+            state = out.state;
+            q = out.quaternionCmd;
+            w = out.omegaNext;
+        end
+
+        if ok && next <= numel(checkpoints)
+            ok = false;
+            detail = sprintf('reached %d of %d checkpoints', next - 1, numel(checkpoints));
+        end
+        if ok
+            expected = cellfun(@(e) char(e.mode), expectedModes, 'UniformOutput', false);
+            expectedT = cellfun(@(e) e.time_s, expectedModes);
+            if ~isequal(modes, expected) || any(abs(modeTimes - expectedT(:).') > cfg.stepS / 2)
+                ok = false;
+                detail = sprintf('mode transitions [%s] at [%s], expected [%s] at [%s]', ...
+                    strjoin(modes, ' '), num2str(modeTimes), ...
+                    strjoin(expected, ' '), num2str(expectedT(:).'));
+            elseif numel(slews) ~= numel(expectedSlews) || ...
+                    any(abs(slews - expectedSlews) > cfg.stepS / 2)
+                ok = false;
+                detail = sprintf('slew (re)plans at [%s], expected [%s]', ...
+                    num2str(slews), num2str(expectedSlews));
+            end
+        end
+        results = record(results, ['moving twin step: ' c.name], ok, detail);
+    end
+end
+
+function [position, velocity, targetEci] = movingGeometry(g, t, targetId)
+%MOVINGGEOMETRY Mirrors twin_fixtures.moving_geometry: a circular polar
+% orbit, and a target fixed on a rotating Earth (zeros when none).
+    angle = g.orbit_rate_rad_s * t;
+    r = g.orbit_radius_m; w = g.orbit_rate_rad_s;
+    position = [r * cos(angle), 0, r * sin(angle)];
+    velocity = [-r * w * sin(angle), 0, r * w * cos(angle)];
+    targetEci = [0 0 0];
+    if ~isempty(targetId)
+        target = g.targets.(targetId);
+        longitude = target.lon_rad + g.earth_rate_rad_s * t;
+        re = g.earth_radius_m;
+        targetEci = [re * cos(target.lat_rad) * cos(longitude), ...
+                     re * cos(target.lat_rad) * sin(longitude), ...
+                     re * sin(target.lat_rad)];
     end
 end
 

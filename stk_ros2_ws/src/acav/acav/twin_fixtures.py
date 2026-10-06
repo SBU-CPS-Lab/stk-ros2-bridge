@@ -73,7 +73,7 @@ from acav.twin_reference import (
 #:    (the health/saturation schedule) and a faulted twin_step case, so
 #:    the MATLAB's zero-based axis handling and its one-shot saturation
 #:    are both pinned rather than assumed.
-FIXTURE_VERSION = 5
+FIXTURE_VERSION = 6
 
 
 def _q(values) -> List[float]:
@@ -111,6 +111,8 @@ def build_fixtures(spec: AcavSpec) -> Dict:
         "mode_chart": _mode_cases(config),
         "wheel_fault": _wheel_fault_cases(),
         "twin_step": _twin_step_cases(config),
+        "moving_geometry": MOVING_GEOMETRY,
+        "moving_twin_step": _moving_twin_step_cases(config),
         "closed_loop": _closed_loop_cases(config),
     }
 
@@ -441,6 +443,146 @@ def _twin_step_cases(config: TwinConfig) -> List[Dict]:
             "duration_s": duration_s,
             "fault": None if fault is None else fault.to_dict(),
             "checkpoints": checkpoints,
+        })
+    return cases
+
+
+#: Geometry for the moving cases: a circular polar orbit and targets fixed
+#: on a rotating Earth. Simple enough that MATLAB evaluates the same
+#: formulas (see movingGeometry in test_acav_twin.m) rather than reading
+#: thousands of recorded positions.
+MOVING_GEOMETRY = {
+    "orbit_radius_m": 6_878_137.0,
+    "orbit_rate_rad_s": 2.0 * math.pi / 5677.0,
+    "earth_radius_m": 6_371_000.0,
+    "earth_rate_rad_s": 7.2921159e-5,
+    "targets": {
+        "TA": {"lat_rad": math.radians(1.0), "lon_rad": math.radians(1.5)},
+        "TB": {"lat_rad": math.radians(3.0), "lon_rad": math.radians(-1.5)},
+    },
+}
+
+
+def moving_geometry(time_s: float, target_id: str):
+    """(position, velocity, target ECI) at ``time_s``; target is zeros if
+    ``target_id`` is empty. Mirrored by movingGeometry in test_acav_twin.m."""
+    g = MOVING_GEOMETRY
+    angle = g["orbit_rate_rad_s"] * time_s
+    r, w = g["orbit_radius_m"], g["orbit_rate_rad_s"]
+    position = (r * math.cos(angle), 0.0, r * math.sin(angle))
+    velocity = (-r * w * math.sin(angle), 0.0, r * w * math.cos(angle))
+    if not target_id:
+        return position, velocity, (0.0, 0.0, 0.0)
+    t = g["targets"][target_id]
+    longitude = t["lon_rad"] + g["earth_rate_rad_s"] * time_s
+    re = g["earth_radius_m"]
+    target = (re * math.cos(t["lat_rad"]) * math.cos(longitude),
+              re * math.cos(t["lat_rad"]) * math.sin(longitude),
+              re * math.sin(t["lat_rad"]))
+    return position, velocity, target
+
+
+def _target_at(schedule, time_s: float) -> str:
+    """The scheduled target id at ``time_s`` ('' for none)."""
+    current = ""
+    for start_s, target_id in schedule:
+        if time_s + 1e-9 >= start_s:
+            current = target_id
+    return current
+
+
+def _run_moving(config: TwinConfig, schedule, duration_s: float,
+                checkpoint_every_s: float):
+    position, velocity, _ = moving_geometry(0.0, "")
+    q = nadir_attitude(position, velocity, config.boresight_body)
+    initial_q = q
+    omega = (0.0, 0.0, 0.0)
+    state = TwinState()
+    checkpoints, transitions, slew_starts = [], [], []
+    previous_mode, previous_slew = None, None
+    steps = int(round(duration_s / config.step_s))
+    every = int(round(checkpoint_every_s / config.step_s))
+    for index in range(steps + 1):
+        now = index * config.step_s
+        target_id = _target_at(schedule, now)
+        position, velocity, target = moving_geometry(now, target_id)
+        result = twin_step(config, TwinInputs(
+            quaternion=q, omega_rad_s=omega, position_m=position,
+            velocity_m_s=velocity, time_s=now, target_eci_m=target,
+            have_target=bool(target_id), target_id=target_id), state)
+        mode = result.state.mode_state.mode.value
+        if mode != previous_mode:
+            transitions.append({"time_s": now, "mode": mode})
+            previous_mode = mode
+        if mode == "SLEW" and (
+                result.state.mode_state.slew_started_s != previous_slew):
+            slew_starts.append(result.state.mode_state.slew_started_s)
+        previous_slew = result.state.mode_state.slew_started_s
+        if index % every == 0:
+            checkpoints.append({
+                "time_s": now,
+                "quaternion": _q(q),
+                "rate_rad_s": list(omega),
+                "wheel_momentum_Nms": list(state.wheel_momentum_Nms),
+                "mode": mode,
+                "torque_Nm": list(result.torque_Nm),
+                "boresight_error_rad": result.boresight_error_rad,
+                "wheels_saturated": result.wheels_saturated,
+                "wheel_energy_J": result.state.wheel_energy_J,
+            })
+        state = result.state
+        q = result.quaternion_cmd
+        omega = result.rate_next_rad_s
+    return initial_q, checkpoints, transitions, slew_starts
+
+
+def _moving_twin_step_cases(config: TwinConfig) -> List[Dict]:
+    """twin_step against MOVING geometry, closed-loop, with target changes.
+
+    The ``twin_step`` cases hold position, velocity and target fixed, so
+    every path that exists because the geometry moves was invisible to
+    the cross-check: the desired-rate feedforward (zero when the desired
+    attitude never moves), the slew profile transported with the line of
+    sight (the identity), and the target-identity logic -- re-planning a
+    slew when the target changes mid-SLEW or in SETTLE, and resetting
+    the rate history on a change or loss of target. Those paths decided
+    the second live E6 campaign's results, and the two implementations
+    agreed only because they were compared by hand.
+
+    Each case records checkpoints (same convention as ``twin_step``),
+    every mode transition, and every slew (re)plan time, so a replan
+    that one implementation makes and the other does not is a named
+    failure rather than a drift several seconds later.
+    """
+    # The two SETTLE-related switch times are found by running the TA-only
+    # case -- hand-picked times would silently stop testing them whenever
+    # the control design changes. ``settle_s`` is the step whose OUTPUT is
+    # SETTLE (its input mode is still SLEW, the old profile just ending);
+    # one step later the input mode is SETTLE itself.
+    _, _, transitions, _ = _run_moving(config, [(0.0, "TA")], 30.0, 30.0)
+    settle_s = next(t["time_s"] for t in transitions if t["mode"] == "SETTLE")
+    in_settle_s = round(settle_s + config.step_s, 9)
+
+    cases = []
+    for name, schedule, duration_s in (
+        ("track_moving_target", [(0.0, "TA")], 30.0),
+        ("retarget_mid_slew", [(0.0, "TA"), (4.0, "TB")], 35.0),
+        ("retarget_as_slew_ends", [(0.0, "TA"), (settle_s, "TB")],
+         settle_s + 25.0),
+        ("retarget_in_settle", [(0.0, "TA"), (in_settle_s, "TB")],
+         in_settle_s + 25.0),
+        ("target_lost_to_nadir", [(0.0, "TA"), (20.0, "")], 35.0),
+    ):
+        initial_q, checkpoints, transitions, slew_starts = _run_moving(
+            config, schedule, duration_s, 2.5)
+        cases.append({
+            "name": name,
+            "schedule": [{"start_s": s, "target_id": t} for s, t in schedule],
+            "duration_s": duration_s,
+            "initial_quaternion": _q(initial_q),
+            "checkpoints": checkpoints,
+            "mode_transitions": transitions,
+            "slew_starts_s": slew_starts,
         })
     return cases
 

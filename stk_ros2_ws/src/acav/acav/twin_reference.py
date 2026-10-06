@@ -722,9 +722,18 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
                       and mode_state.mode is not MissionMode.SLEW
                       and (mode_state.mode is not MissionMode.SETTLE
                            or state.previous_target_key != target_key))
-    profile_done = (mode_state.profile is None
-                    or (inputs.time_s - mode_state.slew_started_s)
-                    >= mode_state.profile.duration_s)
+    # A slew towards the PREVIOUS target is not "done" for the new one.
+    # Without this, a target change on the step the old profile ends
+    # moved SLEW -> SETTLE, consumed the change, and left the feedback
+    # loop alone to close the full new slew at the torque limit (found
+    # by the moving_twin_step fixture). Keeping SLEW lets the re-plan
+    # below start the new profile on this same step.
+    target_changed = state.previous_target_key != target_key
+    profile_done = ((mode_state.profile is None
+                     or (inputs.time_s - mode_state.slew_started_s)
+                     >= mode_state.profile.duration_s)
+                    and not (mode_state.mode is MissionMode.SLEW
+                             and inputs.have_target and target_changed))
 
     previous_mode = mode_state.mode
     mode_state = update_mode(mode_state, config, inputs.time_s, error,
