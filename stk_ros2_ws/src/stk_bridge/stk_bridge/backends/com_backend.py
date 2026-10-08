@@ -33,6 +33,8 @@ import logging
 import math
 import platform
 import sys
+import time
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 from stk_bridge.backends.base import (
@@ -76,6 +78,11 @@ class ComBackend(StkBackend):
         self._info = BackendInfo(backend_type=BackendType.COM)
         # COM handles only, never telemetry values. Owned by the COM worker.
         self._provider_cache = {}
+        self._query_timings = {}
+        self._query_timings_since = time.perf_counter()
+        self._extraction_counts = {"bulk": 0, "fallback": 0, "bulk_failed": 0}
+        self._extraction_timings = {}
+        self._extraction_since = time.perf_counter()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -134,6 +141,7 @@ class ComBackend(StkBackend):
             raise
 
     def disconnect(self) -> None:
+        self._flush_extraction_profile()
         self._provider_cache.clear()
         self._connected = False
         self._root = None
@@ -522,13 +530,42 @@ class ComBackend(StkBackend):
             if fixed_position:
                 # Still resolve fixed-object geometry at EVERY requested epoch.
                 return self._fixed_position_in_frame(obj, query)
-            result = self._exec_provider(provider, query)
-            return self._extract(result, query)
+            started = time.perf_counter()
+            try:
+                result = self._exec_provider(provider, query)
+            finally:
+                self._record_query_timing(query, "execute", time.perf_counter() - started)
+            started = time.perf_counter()
+            try:
+                return self._extract(result, query)
+            finally:
+                self._record_query_timing(query, "extract", time.perf_counter() - started)
         except Exception:
             # Do not hide an execution failure or return old telemetry. Resolve
             # fresh handles on the next query in case the object was replaced.
             self._provider_cache.pop(key, None)
             raise
+
+    def _record_query_timing(self, query, phase, elapsed):
+        """Aggregate attempted provider calls, including failures, on the COM worker.
+
+        Execution excludes handle resolution; extraction includes metadata and
+        Python conversion. Fixed-object LocateInSystem queries are not included.
+        No telemetry or COM result objects are retained.
+        """
+        key = (query.provider_name, query.group_element, phase)
+        count, total = self._query_timings.get(key, (0, 0.0))
+        self._query_timings[key] = (count + 1, total + elapsed)
+        now = time.perf_counter()
+        if now - self._query_timings_since >= 60.0:
+            details = "; ".join(
+                f"{name}/{frame or '-'} {part}: n={n}, mean_ms={1000 * seconds / n:.3f}"
+                for (name, frame, part), (n, seconds) in self._query_timings.items())
+            LOGGER.info("COM provider profile (interval): %s; extraction paths=%s",
+                        details, self._extraction_counts)
+            self._query_timings.clear()
+            self._extraction_counts = dict.fromkeys(self._extraction_counts, 0)
+            self._query_timings_since = now
 
     def _fixed_position_in_frame(self, obj, query):
         try:
@@ -619,8 +656,12 @@ class ComBackend(StkBackend):
 
         start = (proto.format_utcg(query.start) if query.start
                  else str(self._root.CurrentScenario.StartTime))
-        stop = (proto.format_utcg(query.stop) if query.stop
-                else str(self._root.CurrentScenario.StopTime))
+        # Instantaneous reads do not need StopTime: avoid two COM property
+        # accesses on every single-epoch telemetry query.
+        stop = None
+        if not query.is_instantaneous:
+            stop = (proto.format_utcg(query.stop) if query.stop
+                    else str(self._root.CurrentScenario.StopTime))
         try:
             if query.elements:
                 if query.is_instantaneous:
@@ -635,7 +676,43 @@ class ComBackend(StkBackend):
             raise QueryError(query.provider_name, query.object_path,
                              f"execution failed: {exc}") from exc
 
-    def _extract(self, result: Any, query: DataProviderQuery
+    @contextmanager
+    def _extraction_stage(self, query, stage):
+        started = time.perf_counter()
+        failed = 0
+        try:
+            yield
+        except Exception:
+            failed = 1
+            raise
+        finally:
+            elapsed = time.perf_counter() - started
+            key = (query.provider_name, query.group_element, stage)
+            n, total, peak, errors = self._extraction_timings.get(key, (0, 0., 0., 0))
+            self._extraction_timings[key] = (n + 1, total + elapsed,
+                                            max(peak, elapsed), errors + failed)
+
+    def _flush_extraction_profile(self):
+        if not self._extraction_timings:
+            return
+        for (name, frame, stage), (n, total, peak, errors) in self._extraction_timings.items():
+            LOGGER.info("COM extraction detail: provider=%s frame=%s stage=%s "
+                        "n=%d mean_ms=%.4f max_ms=%.4f errors=%d",
+                        name, frame or '-', stage, n, 1000 * total / n,
+                        1000 * peak, errors)
+        self._extraction_timings.clear()
+        self._extraction_since = time.perf_counter()
+
+    def _extract(self, result: Any, query: DataProviderQuery) -> DataProviderData:
+        try:
+            with self._extraction_stage(query, 'total'):
+                return self._extract_profiled(result, query)
+        finally:
+            # Flush only after a complete extraction, never within a stage.
+            if time.perf_counter() - self._extraction_since >= 60.0:
+                self._flush_extraction_profile()
+
+    def _extract_profiled(self, result: Any, query: DataProviderQuery
                  ) -> DataProviderData:
         """Pull a DR result into plain Python columns.
 
@@ -649,49 +726,79 @@ class ComBackend(StkBackend):
 
         datasets = None
         try:
-            datasets = result.DataSets
+            with self._extraction_stage(query, 'datasets'):
+                datasets = result.DataSets
         except Exception as exc:
             raise QueryError(query.provider_name, query.object_path,
                              f"result has no DataSets ({exc})") from exc
 
         names: List[str] = []
+        selected_datasets = []
         try:
-            for index in range(datasets.Count):
-                names.append(str(datasets.Item(index).ElementName))
+            # STK 12.6 exposes the complete ordered names in one COM call.
+            # Read them afresh: no cross-epoch schema cache or stale mapping.
+            with self._extraction_stage(query, 'element_names'):
+                names = [str(name) for name in datasets.ElementNames]
         except Exception:
-            names = list(query.elements)
+            try:
+                with self._extraction_stage(query, 'count'):
+                    count = datasets.Count
+                for index in range(count):
+                    with self._extraction_stage(query, 'item'):
+                        dataset = datasets.Item(index)
+                    with self._extraction_stage(query, 'name'):
+                        names.append(str(dataset.ElementName))
+                    selected_datasets.append(dataset)
+            except Exception:
+                names = list(query.elements)
+                selected_datasets = []
 
         if self._capabilities.numpy_bulk_extraction and len(names) > 1:
             try:
-                array = datasets.ToNumpyArray()
-                for index, name in enumerate(names):
-                    columns[name] = [_coerce(v) for v in array[:, index]]
-                row_count = len(next(iter(columns.values()), []))
-                return DataProviderData(
-                    object_path=query.object_path,
-                    provider_name=query.provider_name,
-                    columns=columns, row_count=row_count,
-                )
+                with self._extraction_stage(query, 'bulk_fetch'):
+                    array = datasets.ToNumpyArray()
+                    if array.ndim != 2 or array.shape[1] != len(names):
+                        raise ValueError('Bulk data shape does not match element names')
+                with self._extraction_stage(query, 'python_conversion'):
+                    for index, name in enumerate(names):
+                        columns[name] = [_coerce(v) for v in array[:, index]]
+                    row_count = len(next(iter(columns.values()), []))
+                self._extraction_counts["bulk"] += 1
+                with self._extraction_stage(query, 'output'):
+                    return DataProviderData(
+                        object_path=query.object_path,
+                        provider_name=query.provider_name,
+                        columns=columns, row_count=row_count,
+                    )
             except Exception:
+                self._extraction_counts["bulk_failed"] += 1
                 LOGGER.debug("ToNumpyArray unavailable; using GetValues",
                              exc_info=True)
                 self._capabilities.numpy_bulk_extraction = False
 
         try:
-            for index in range(datasets.Count):
-                dataset = datasets.Item(index)
-                name = str(dataset.ElementName)
-                columns[name] = [_coerce(v) for v in dataset.GetValues()]
+            self._extraction_counts["fallback"] += 1
+            columns = {}
+            if not selected_datasets:
+                with self._extraction_stage(query, 'fallback_metadata'):
+                    selected_datasets = [datasets.Item(i) for i in range(datasets.Count)]
+                    names = [str(dataset.ElementName) for dataset in selected_datasets]
+            for name, dataset in zip(names, selected_datasets):
+                with self._extraction_stage(query, 'fallback_fetch'):
+                    values = dataset.GetValues()
+                with self._extraction_stage(query, 'python_conversion'):
+                    columns[name] = [_coerce(v) for v in values]
         except Exception as exc:
             raise QueryError(query.provider_name, query.object_path,
                              f"could not read datasets ({exc})") from exc
 
         row_count = len(next(iter(columns.values()), []))
-        return DataProviderData(
-            object_path=query.object_path,
-            provider_name=query.provider_name,
-            columns=columns, row_count=row_count,
-        )
+        with self._extraction_stage(query, 'output'):
+            return DataProviderData(
+                object_path=query.object_path,
+                provider_name=query.provider_name,
+                columns=columns, row_count=row_count,
+            )
 
     def list_data_providers(self, object_path: str) -> Dict[str, List[str]]:
         """Enumerate this object's data providers and their group members.

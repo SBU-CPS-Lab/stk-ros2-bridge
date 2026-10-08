@@ -1043,6 +1043,78 @@ unchanged. This removes repeated COM object/provider discovery, but the live
 speedup must be measured in the next E6 run. Keep old and new E6 records in
 separate result directories so the report does not mix software versions.
 
+### Measuring COM provider execution and extraction
+
+The extraction fast path now reads `DataSets.ElementNames` once per result,
+using the API exposed by the installed STK 12.6 wrapper. It avoids per-column
+`Item`/`ElementName` calls while keeping names fresh on every epoch, including
+column reorderings. No schema cache is needed. If that API is unavailable,
+the previous metadata walk remains available. Bulk array dimensions must match
+the names; otherwise the adapter falls back to actual per-column metadata and
+values, rather than silently applying an incompatible mapping.
+
+Benchmark this against the `E6_profile_02` diagnostic using a fresh directory
+and run ID (for example `E6_profile_03` / `E6-profile-3`). Rebuild only
+`stk_bridge`, keep scenario/controller/timestep unchanged, and collect ten
+minutes of ordinary loop activity after geometry preparation. In the detail
+logs, `element_names` should replace the repeated `item`/`name` stages for the
+bulk path. Compare per-provider total extraction and step/sensing latency;
+do not include setup intervals or claim a speedup from unit-test wall time.
+Then complete a full run to compare target outcomes, pointing errors and the
+determinism signature before accepting this as a validated optimisation.
+
+For detailed extraction profiling, look for `COM extraction detail` in the
+same log. Approximately every 60 seconds of extraction activity, these lines
+report count, mean/max milliseconds and errors for each provider/frame/stage:
+`datasets`, `count`, `item`, `name`, `bulk_fetch`, `python_conversion`,
+`output`, and `total`. Fallback paths additionally report `fallback_metadata`
+and `fallback_fetch`. Counts for item/name are per column, not per query;
+compare accumulated time (mean multiplied by count), not just their means.
+Total includes instrumentation overhead; nested stage totals exclude it.
+Bulk fetch measures the entire library call, not an isolated COM transport.
+The remaining interval is flushed on normal backend disconnect; forced process
+termination may lose it. No extra COM reads are made to collect these timings.
+
+A diagnostic run can be stopped after ten minutes of ordinary lockstep
+activity, excluding geometry preparation and its overlapping first interval.
+Use a new output directory such as `results/E6_profile_02`. This deliberately
+incomplete run is profiling evidence, not a completed E6 experiment. Check
+that the new detail lines appear before investing in a full run. Rebuild
+`stk_bridge` normally; deleting build/install or regenerating MATLAB messages
+is unnecessary for this Python-only instrumentation.
+
+The COM backend now emits `COM provider profile (interval)` in `bridge.log`
+approximately once per 60 seconds of provider activity. Each provider/frame
+has separate `execute` and `extract` counts and mean milliseconds. Execution
+measures the provider call; extraction includes column metadata, data retrieval
+and Python conversion. Handle lookup, fixed-object `LocateInSystem`, other
+sensing work and queue delays are outside these timings. Failed attempts are
+included. Interval boundaries may split a query's two phases; do not expect
+identical counts in every line.
+
+`extraction paths` reports successful `bulk` conversions, `fallback` attempts
+and `bulk_failed` attempts. A bulk failure disables bulk extraction for that
+backend instance, retaining the existing fallback behavior. The fallback now
+reuses column handles and names within the same result instead of looking
+them up twice. No telemetry values or column schema are cached across epochs.
+Single-epoch queries also avoid resolving an unused scenario stop time when
+no stop was supplied; ordinary sensing already supplies both timestamps, so
+that change should not be counted as a major hot-path speedup.
+
+The supplied `E6_run.zip` baseline contains five reportable campaign runs
+(plus a separate smoke run). All five captured 5/5 targets and share one
+determinism signature. Across the five campaign records, mean step latency
+is 658.06 ms and mean sensing latency is 621.45 ms (94.4% of step latency).
+They contain no `code_version` in provenance. Preserve the archive unchanged;
+these historical measurements are context, not a controlled before/after
+benchmark for a different revision.
+
+After rebuilding the bridge, collect a fresh run in a new results directory
+with identical scenario, timestep and controller settings. Compare provider
+profiles, total sensing/step latency and target outcomes. No live speedup is
+claimed by the offline adapter tests. This phase does not precompute orbit
+samples, change telemetry rates or parallelise COM calls.
+
 ### End-of-run shutdown and errors
 
 The runner stops the bridge immediately after the scheduler exits, **before**

@@ -19,6 +19,119 @@ from stk_bridge.backends.com_backend import ComBackend
 from stk_bridge.exceptions import QueryError
 
 
+def test_instantaneous_query_does_not_read_scenario_stop():
+    backend = ComBackend()
+    class Root:
+        @property
+        def CurrentScenario(self):
+            raise AssertionError('Unexpected scenario COM property access')
+    backend._root = Root()
+    provider = TimeVarProvider()
+    backend._exec_provider(provider, query(stop=None))
+    assert len(provider.calls) == 1
+
+
+def test_fallback_extract_reads_metadata_once_and_returns_fresh_values():
+    backend = ComBackend()
+    backend._capabilities.numpy_bulk_extraction = False
+    class Column:
+        def __init__(self, name, value):
+            self.name, self.value, self.name_reads = name, value, 0
+        @property
+        def ElementName(self):
+            self.name_reads += 1
+            return self.name
+        def GetValues(self):
+            return [self.value]
+    cols = [Column('x', 1.0), Column('y', 2.0)]
+    datasets = SimpleNamespace(Count=2, Item=Mock(side_effect=lambda i: cols[i]))
+    result = SimpleNamespace(DataSets=datasets)
+    first = backend._extract(result, query())
+    assert first.columns == {'x': [1.0], 'y': [2.0]}
+    assert datasets.Item.call_count == 2
+    assert [c.name_reads for c in cols] == [1, 1]
+    cols[0].value = 3.0
+    assert backend._extract(result, query()).columns['x'] == [3.0]
+    assert first.columns['x'] == [1.0]
+
+
+def test_bulk_failure_preserves_fallback_values_and_counts():
+    backend = ComBackend()
+    backend._capabilities.numpy_bulk_extraction = True
+    cols = [SimpleNamespace(ElementName=n, GetValues=lambda v=v: [v])
+            for n, v in [('x', 1.0), ('y', 2.0)]]
+    datasets = SimpleNamespace(Count=2, Item=Mock(side_effect=lambda i: cols[i]),
+                              ToNumpyArray=Mock(side_effect=RuntimeError('unsupported')))
+    data = backend._extract(SimpleNamespace(DataSets=datasets), query())
+    assert data.columns == {'x': [1.0], 'y': [2.0]}
+    assert datasets.Item.call_count == 2
+    assert backend._extraction_counts == {'bulk': 0, 'fallback': 1, 'bulk_failed': 1}
+
+
+def test_bulk_extract_and_periodic_profile(monkeypatch, caplog):
+    import numpy as np
+    backend = ComBackend()
+    backend._capabilities.numpy_bulk_extraction = True
+    cols = [SimpleNamespace(ElementName=n, GetValues=Mock()) for n in ['x', 'y']]
+    datasets = SimpleNamespace(Count=2, Item=Mock(side_effect=lambda i: cols[i]),
+                              ToNumpyArray=lambda: np.array([[1., 2.], [3., 4.]]))
+    data = backend._extract(SimpleNamespace(DataSets=datasets), query())
+    assert data.columns == {'x': [1., 3.], 'y': [2., 4.]}
+    assert not any(c.GetValues.called for c in cols)
+    assert datasets.Item.call_count == 2
+    stages = {key[2]: value for key, value in backend._extraction_timings.items()}
+    assert stages['item'][0] == stages['name'][0] == 2
+    assert stages['bulk_fetch'][0] == stages['python_conversion'][0] == 1
+    assert stages['total'][1] >= sum(v[1] for k, v in stages.items() if k != 'total')
+    with caplog.at_level('INFO'):
+        backend.disconnect()
+    assert 'COM extraction detail:' in caplog.text
+    assert not backend._extraction_timings
+    backend._query_timings_since = 0
+    monkeypatch.setattr('stk_bridge.backends.com_backend.time.perf_counter', lambda: 61.)
+    with caplog.at_level('INFO'):
+        backend._record_query_timing(query(), 'extract', .002)
+    assert 'mean_ms=2.000' in caplog.text
+    assert "'bulk': 1" in caplog.text
+    assert not backend._query_timings
+
+
+def test_extraction_failure_is_profiled_without_hiding_error():
+    backend = ComBackend()
+    with pytest.raises(QueryError):
+        backend._extract(object(), query())
+    stages = {key[2]: value for key, value in backend._extraction_timings.items()}
+    assert stages['datasets'][3] == 1
+    assert stages['total'][3] == 1
+
+
+def test_bulk_names_avoid_items_and_track_reordered_fresh_columns():
+    import numpy as np
+    backend = ComBackend()
+    backend._capabilities.numpy_bulk_extraction = True
+    datasets = SimpleNamespace(ElementNames=['x', 'y'],
+                              Item=Mock(side_effect=AssertionError('Item used')),
+                              ToNumpyArray=Mock(return_value=np.array([[1., 2.]])))
+    result = SimpleNamespace(DataSets=datasets)
+    assert backend._extract(result, query()).columns == {'x': [1.], 'y': [2.]}
+    datasets.ElementNames = ['y', 'x']
+    datasets.ToNumpyArray.return_value = np.array([[4., 3.]])
+    assert backend._extract(result, query()).columns == {'y': [4.], 'x': [3.]}
+    datasets.Item.assert_not_called()
+
+
+def test_bulk_shape_mismatch_uses_actual_column_metadata():
+    import numpy as np
+    backend = ComBackend()
+    backend._capabilities.numpy_bulk_extraction = True
+    cols = [SimpleNamespace(ElementName='x', GetValues=lambda: [7.])]
+    datasets = SimpleNamespace(ElementNames=['x', 'y'], Count=1,
+                              Item=Mock(side_effect=lambda i: cols[i]),
+                              ToNumpyArray=lambda: np.array([[7.]]))
+    assert backend._extract(SimpleNamespace(DataSets=datasets), query()).columns == {'x': [7.]}
+    assert backend._extraction_counts['bulk_failed'] == 1
+
+
 def test_provider_handles_are_reused_but_every_epoch_is_executed():
     backend = ComBackend()
     backend._connected = True
