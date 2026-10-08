@@ -9,11 +9,13 @@ says what to type and what to check after each step, not just what the
 final command is.
 
 **Live validation status:** E6 has been run on Windows with STK and MATLAB;
-see [09_live_runs_and_results.md](09_live_runs_and_results.md). Both E1 runs
-also produced complete result records on 2026-10-08. This does not imply
-warning-free shutdown or clean-commit provenance; see the review notes in
-[section 5A](#5a-e1--two-runs-to-test-attitude-frame-consistency), which also
-contains the complete E1 execution procedure.
+see [09_live_runs_and_results.md](09_live_runs_and_results.md). The E1 and E2
+comparisons also produced complete result records on 2026-10-08. This does
+not imply warning-free shutdown or clean-commit provenance. After the common
+setup in sections 1–3, follow section 4 for a first smoke test, section 5 for
+E6, [section 5A](#5a-e1--two-runs-to-test-attitude-frame-consistency) for E1,
+or [section 5B](#5b-e2--compare-kinematic-and-dynamics-aware-scheduling) for E2.
+The E1/E2 sections include the observed results and their limitations.
 
 ## 1. Before any of this: the base bridge must already work
 
@@ -489,6 +491,227 @@ Share the complete E1 output directory, including configurations, both result
 records, logs and figures, using section 6. Keep the archive outside the
 source files intended for a code/documentation commit.
 
+## 5B. E2 — compare kinematic and dynamics-aware scheduling
+
+E2 asks whether accounting for the time needed to reorient the spacecraft
+improves delivered imaging performance. The current campaign CLI plans two
+lockstep runs, in this order:
+
+| Run | Scheduling decision |
+|---|---|
+| `E2-kinematic-lockstep` | Attempt every target, without rejecting targets for insufficient slew time |
+| `E2-dynamics_aware-lockstep` | Decline a target when the estimated slew time exceeds the available time |
+
+Both runs use the same physical twin, controller, target set and capture
+criteria. Kinematic planning does not make the simulated spacecraft rotate
+instantaneously. Both runs use validated attitude conventions and the strict
+mismatch guard: **do not reuse E1's treatment bridge YAML or MATLAB model**.
+No seed sweep is required for this two-run comparison. Do not assume that
+the dynamics-aware scheduler will win before measuring both results.
+
+### 5B.1 PowerShell — prepare a clean environment and scenario
+
+Use the Visual Studio/ROS-enabled PowerShell from sections 1–2. Stop previous
+bridge, scheduler and Simulink runs. Commit any intended source/documentation
+changes before collecting attributable results, then keep that revision and
+the configuration unchanged across both runs.
+
+```powershell
+cd C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws
+$py = 'C:\Users\Mohammadamin\AppData\Local\Programs\Python\Python310\python.exe'
+& $py -c "import sys, yaml, colcon_core; print(sys.executable)"
+if ($LASTEXITCODE -ne 0) { throw 'Check the ROS Python environment.' }
+
+# Rebuild after source updates, using the established ROS/Visual Studio shell.
+& $py -m colcon build --symlink-install
+if ($LASTEXITCODE -ne 0) { throw 'Workspace build failed.' }
+. .\install\local_setup.ps1
+& $py -c "from stk_msgs.msg import BridgeStatus; print('stk_msgs import OK')"
+if ($LASTEXITCODE -ne 0) { throw 'Load the ROS underlay and workspace overlay.' }
+```
+
+Build and verify the scenario as in section 2. Save/close the previous STK
+scenario before rebuilding; leave the newly verified `ACAV_SSS1` open:
+
+```powershell
+& $py src\acav\scripts\build_acav_scenario.py --backend com
+if ($LASTEXITCODE -ne 0) { throw 'Scenario build failed.' }
+& $py src\acav\scripts\verify_acav_scenario.py --backend com
+if ($LASTEXITCODE -ne 0) { throw 'Scenario verification failed.' }
+```
+
+Do not switch the orbit propagator to RealTime. Between the two E2 runs,
+leave the scenario open and stop the previous Simulink model before starting
+the next one; do not manually modify STK objects or controller settings.
+
+### 5B.2 PowerShell — plan and check the two runs
+
+Keep this PowerShell open so `$py` and `$e2Dir` remain available. Use a fresh
+directory for a new campaign; never overwrite the E1 results.
+
+```powershell
+$e2Dir = Join-Path (Get-Location).Path 'results\E2'
+if (Test-Path -LiteralPath $e2Dir) {
+    throw 'results\E2 already exists. Resume it deliberately or choose a fresh directory.'
+}
+New-Item -ItemType Directory -Path $e2Dir | Out-Null
+ros2 run acav run_acav_campaign plan --experiment E2 --output-dir $e2Dir
+if ($LASTEXITCODE -ne 0) { throw 'E2 plan failed.' }
+
+# E2 must use the normal bridge configuration, not the E1 forced provider.
+& $py -c "import yaml; from pathlib import Path; c=yaml.safe_load(Path('src/acav/config/bridge_params_acav.yaml').read_text(encoding='utf-8-sig')); assert not c.get('sensing', {}).get('force_attitude_provider'), 'Clear the E1 forced provider before E2'; print('Normal attitude provider selection enabled')"
+if ($LASTEXITCODE -ne 0) { throw 'E2 bridge configuration needs review.' }
+```
+
+Confirm the two run IDs listed above. Planning writes `campaign.json` but
+does not run the simulation. The campaign runner creates each run's MATLAB
+configuration immediately before launching that run; do not create empty
+run-config files manually or copy the E1 ablation configuration.
+
+### 5B.3 PowerShell — launch the campaign
+
+```powershell
+ros2 run acav run_acav_campaign run `
+    --experiment E2 --output-dir $e2Dir --stop-on-error -- `
+    $py src\acav\scripts\run_acav_run.py `
+        --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
+        --execution-mode '{execution_mode}' `
+        --output '{output}' --scenario '{scenario}' --backend '{backend}' `
+        --attitude-provider '{attitude_provider}' --run-config '{run_config}' `
+        --gains-json '{gains_json}' --fault-json '{fault_json}' `
+        --bridge-config src\acav\config\bridge_params_acav.yaml
+if ($LASTEXITCODE -ne 0) { throw 'E2 campaign incomplete; inspect the run logs.' }
+```
+
+Keep the placeholder quotes: PowerShell interprets unquoted braces as script
+blocks. The backtick must be the last character on its line. Wait for
+`bridge_connected: com` and the MATLAB handoff prompt. Do not launch a second
+bridge yourself. This command runs the two cases sequentially and still needs
+the manual MATLAB handoff for **each** case.
+
+### 5B.4 MATLAB/Simulink — complete each handoff
+
+For the first run, use the following absolute path. If you selected another
+output directory, use the corresponding path printed by the runner instead.
+
+```matlab
+cd('C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws\src\stk_matlab')
+% Stop any previous simulation before closing its model.
+if bdIsLoaded('acav_twin')
+    close_system('acav_twin', 0);
+end
+clear adcs.simulink_step
+setup_stk_ros
+runConfigPath = 'C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws\results\E2\E2-kinematic-lockstep.runconfig.json';
+assert(isfile(runConfigPath), 'Wait for the runner or correct the run-config path.');
+runConfig = jsondecode(fileread(runConfigPath));
+assert(strcmp(runConfig.experiment, 'E2'), 'Expected an E2 configuration.');
+assert(strcmp(runConfig.attitude_mismatch_policy, 'strict'), 'E2 requires the strict guard.');
+assert(isempty(runConfig.attitude_provider), 'E2 must not force a mismatched provider.');
+build_acav_twin('RunConfigPath', runConfigPath)
+open_system('acav_twin')
+```
+
+Press **Run/Play**, then Enter in PowerShell. Expect `twin_acking: ok`,
+scheduler startup and `target geometry ready; releasing initial lockstep
+barrier` in `scheduler.log`. At completion, stop Simulink when prompted and
+press Enter to let the campaign proceed.
+
+The runner then launches the dynamics-aware case. At its MATLAB handoff,
+repeat the entire MATLAB block above, replacing only the `runConfigPath`
+assignment with:
+
+```matlab
+runConfigPath = 'C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws\results\E2\E2-dynamics_aware-lockstep.runconfig.json';
+```
+
+Rebuild the model for that configuration, press Play, then Enter in PowerShell.
+Neither case should print the E1 guard-ablation warning. Let both runs finish;
+missed captures can be legitimate results, whereas exceptions or a bridge
+failure during execution need diagnosis. If interrupted, reissue 5B.3 after
+stopping old processes: the campaign runner checks completed records and
+resumes. Do not rerun the fresh-directory preparation or use `--no-resume`
+unless you intend a new execution.
+
+If the next run exits before `topic capture started` or bridge startup,
+inspect the PowerShell exception as well as `summary.json`. The preflight
+check rejects publishers left on the status, scenario-time, ack or clock
+topics. Stop and close the previous twin, confirm the previous bridge and
+scheduler have exited, and allow ROS discovery to observe their departure
+before resuming 5B.3. Keep STK open. An empty `steps` list locates the failure
+before startup but does not by itself prove a publisher conflict; retain the
+actual exception. Do not delete the successful first result to restart the
+second run.
+
+### 5B.5 PowerShell — generate and interpret the report
+
+After both result files exist and both scheduler exits have been checked:
+
+```powershell
+New-Item -ItemType Directory -Force -Path (Join-Path $e2Dir 'figures') | Out-Null
+ros2 run acav run_acav_campaign report --experiment E2 --output-dir $e2Dir `
+    --json (Join-Path $e2Dir 'figures\E2-report.json')
+if ($LASTEXITCODE -ne 0) { throw 'E2 report needs review; inspect the messages above.' }
+```
+
+This reads existing results without rerunning STK. Expect two result JSONs,
+two run-config JSONs, two `.logs` directories, `campaign.json`, and:
+
+| Output in `figures/` | Meaning |
+|---|---|
+| `E2-report.json` | Numerical comparison grouped by scheduler |
+| `E2_capture_coverage.png`, `.pdf`, `.svg` | Capture rate and coverage side by side |
+| `E2_outcomes.png`, `.pdf`, `.svg` | Counts of successful, failed and unattempted targets |
+
+Report all three metrics together:
+
+- **Capture rate:** captured / attempted targets.
+- **Coverage rate:** captured / all scenario targets.
+- **Over-promise gap:** (attempted - captured) / attempted targets.
+
+A scheduler that attempts only one easy target can have 100% capture rate
+and poor coverage. Declined targets are `not_attempted`, not failed captures.
+Inspect pointing errors and failure categories to explain the difference;
+also review SAFE and actuator-limiting episodes using section 8's definition.
+`claim_holds: true` only confirms the presence of both scheduler groups;
+it does not establish superiority or statistical significance.
+
+Check matching scenario/code fingerprints, normal attitude-provider selection,
+strict MATLAB policies and real COM provenance. Retain shutdown warnings and
+distinguish them from incomplete runs. One run per policy is a scenario
+comparison, not a statistical estimate across missions. Do not substitute
+an old E1 or E6 record for the new dynamics-aware E2 run.
+
+### 5B.6 Reviewing and sharing the E2 comparison
+
+The 2026-10-08 runs completed with successful scheduler exits and real COM
+provenance. Kinematic attempted seven targets and captured five; dynamics-aware
+attempted five and captured all five. Kinematic's T5 and T7 outcomes were
+`not_settled`; dynamics-aware declined those same targets. Thus capture rate
+increased from 71.4% to 100% and the over-promise gap fell from 28.6% to zero,
+while coverage remained 5/7 (71.4%) for both. This supports fewer unsuccessful
+attempts with unchanged delivered coverage, not a claim of more images.
+
+Both runs recorded three actuator-limiting episodes, no SAFE entry and zero
+dropped attitude samples. The recorded start-to-finish intervals were
+70 minutes 18 seconds and 71 minutes 20 seconds respectively; these exclude
+manual setup and post-run handoff delays. Fewer attempted targets did not
+shorten the simulation window.
+
+Both records carry `7cc9e3974a0590c9f8a3a4a71ca8cf81a2bc91b4+dirty`.
+Preserve that provenance and the one-run-per-policy limitation. In the
+dynamics-aware run, the result was written before a missing angular-rate
+sample at `t=720s` led to a terminal barrier timeout. The result is complete,
+but shutdown is not warning-free; keep the diagnostic with the result rather
+than presenting it as fixed. See section 8 for shutdown and saturation notes.
+
+Archive the complete directory for review, as in section 6 (choose a new
+archive name if it already exists):
+
+```powershell
+Compress-Archive -Path $e2Dir -DestinationPath E2_run.zip
+```
+
 ## 6. Sending results back for analysis
 
 Zip and send the whole experiment output directory, not just its JSON
@@ -503,6 +726,9 @@ For E1, run the report in section 5A.6 first, then use:
 ```powershell
 Compress-Archive -Path results\E1 -DestinationPath E1_run.zip
 ```
+
+For E2, run the report in section 5B.5 and archive `results\E2` as shown in
+section 5B.6. Each bundle should contain only that campaign's outputs.
 
 If that archive already exists, choose a new archive name. Use your actual
 output directory if it differs from these examples.
