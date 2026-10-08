@@ -8,13 +8,12 @@ someone who was not in the room when this pipeline was built, so it
 says what to type and what to check after each step, not just what the
 final command is.
 
-**Nothing in this file has been run against a live STK install.**
-Everything below has been verified against an injected launcher (a
-fake process standing in for the real one) and against the twin's own
-offline reference, never against real STK, real MATLAB, and a real
-Windows ROS 2 install all wired together. Expect the first attempt to
-surface something this runbook gets wrong -- that is exactly what
-section 6 asks you to capture and send back.
+**Live validation status:** E6 has been run on Windows with STK and MATLAB;
+see [09_live_runs_and_results.md](09_live_runs_and_results.md). Both E1 runs
+also produced complete result records on 2026-10-08. This does not imply
+warning-free shutdown or clean-commit provenance; see the review notes in
+[section 5A](#5a-e1--two-runs-to-test-attitude-frame-consistency), which also
+contains the complete E1 execution procedure.
 
 ## 1. Before any of this: the base bridge must already work
 
@@ -208,17 +207,308 @@ record's `provenance.code_version` and the campaign's `campaign.json`.
 from one clean commit. Results already obtained, and what is still to be
 run, are recorded in `09_live_runs_and_results.md`.
 
+## 5A. E1 — two runs to test attitude-frame consistency
+
+E1 compares **two** lockstep runs using the same scenario, controller and
+dynamics-aware scheduler. No `--repeats` or seed sweep is required:
+
+| Run | STK attitude read-back | MATLAB policy |
+|---|---|---|
+| Control | Validated inertial provider | Strict command/read-back mismatch guard |
+| Treatment | `ECF Attitude Quaternions`, intentionally Earth-fixed against inertial commands | Explicit `e1_readback_ablation`; consume measured attitude without the mismatch stop |
+
+The question is whether this deliberately inconsistent interpretation changes
+capture performance. Fewer captures or SAFE in treatment can be a scientific
+outcome; a Python exception, lost connection or failed startup is not that
+outcome. Do not assume the treatment must fail before measuring it.
+
+**Current runner limitation:** `run_acav_run.py --attitude-provider` records
+the provider through the scheduler but does not itself set the bridge's
+`sensing.force_attitude_provider`. Consequently, simply changing E6 to E1 in
+the section 5 command is insufficient. The procedure below supplies a
+separate bridge YAML for each run. It does not edit the shared source YAML.
+Use this procedure until automatic forwarding is implemented and tested.
+
+### 5A.1 PowerShell — prepare the environment and scenario
+
+Use the same Visual Studio/ROS-enabled PowerShell environment that successfully
+ran E6. Stop old bridge, scheduler and Simulink runs first. These examples use
+the deploy machine's Python explicitly to avoid Inkscape's Python on PATH.
+
+```powershell
+cd C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws
+$py = 'C:\Users\Mohammadamin\AppData\Local\Programs\Python\Python310\python.exe'
+& $py -c "import sys, yaml, colcon_core; print(sys.executable)"
+
+# After source updates, rebuild using the established ROS/Visual Studio shell:
+& $py -m colcon build --symlink-install
+if ($LASTEXITCODE -ne 0) { throw 'Workspace build failed.' }
+. .\install\local_setup.ps1
+```
+
+Follow sections 1–2 for the ROS underlay and STK prerequisites. If generating
+a fresh scenario, save/close the previous scenario in STK first, then run:
+
+```powershell
+& $py src\acav\scripts\build_acav_scenario.py --backend com
+if ($LASTEXITCODE -ne 0) { throw 'Scenario build failed.' }
+& $py src\acav\scripts\verify_acav_scenario.py --backend com
+if ($LASTEXITCODE -ne 0) { throw 'Scenario verification failed.' }
+```
+
+Leave the verified `ACAV_SSS1` scenario open. Do not switch its orbit
+propagator to RealTime. Use a clean committed checkout for attributable
+results and keep the same code/configuration for both runs.
+
+### 5A.2 PowerShell — generate the plan and per-run configurations
+
+Use a new output directory. These preparation commands refuse to overwrite
+an existing campaign; to repeat the experiment choose another directory.
+They generate files only and do not launch STK or the control loop.
+Run the sections in order in the same PowerShell. The `$py` variable is a
+session variable, not a permanent environment setting; define it again if
+you open a new terminal. An undefined `$py` makes `& $py` fail before Python
+starts, and `$LASTEXITCODE` can still contain an earlier command's exit code.
+
+```powershell
+$py = 'C:\Users\Mohammadamin\AppData\Local\Programs\Python\Python310\python.exe'
+if (-not (Test-Path -LiteralPath $py -PathType Leaf)) {
+    throw 'Set $py to the ROS-compatible Python executable before continuing.'
+}
+$e1Dir = Join-Path (Get-Location).Path 'results\E1'
+if (Test-Path -LiteralPath $e1Dir) {
+    throw 'results\E1 already exists. Choose a fresh output directory.'
+}
+New-Item -ItemType Directory -Path $e1Dir | Out-Null
+ros2 run acav run_acav_campaign plan --experiment E1 --output-dir $e1Dir
+if ($LASTEXITCODE -ne 0) { throw 'E1 plan failed.' }
+
+@'
+import copy
+import json
+import sys
+from pathlib import Path
+import yaml
+
+ws = Path.cwd()
+sys.path.insert(0, str(ws / 'src' / 'acav'))
+sys.path.insert(0, str(ws / 'src' / 'stk_bridge'))
+from acav.campaign import build_e1_convention
+from acav.campaign_runner import write_run_config
+
+out = Path(sys.argv[1])
+config_dir = out / 'bridge_configs'
+config_dir.mkdir(exist_ok=True)
+base = yaml.safe_load((ws / 'src/acav/config/bridge_params_acav.yaml').read_text(encoding='utf-8'))
+campaign = build_e1_convention()
+manifest = json.loads((out / 'campaign.json').read_text(encoding='utf-8'))
+assert [r['run_id'] for r in manifest['runs']] == [r.run_id for r in campaign.runs], 'Installed plan and source disagree; rebuild first.'
+for run in campaign.runs:
+    cfg = copy.deepcopy(base)
+    cfg.setdefault('sensing', {})['force_attitude_provider'] = run.attitude_provider
+    path = config_dir / (run.run_id + '.yaml')
+    path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding='utf-8')
+    runconfig = write_run_config(run, str(out / run.output_name))
+    print(run.run_id)
+    print('  bridge:', path)
+    print('  MATLAB RunConfigPath:', runconfig)
+'@ | & $py - $e1Dir
+if ($LASTEXITCODE -ne 0) { throw 'E1 configuration generation failed.' }
+$runs = (Get-Content (Join-Path $e1Dir 'campaign.json') -Raw | ConvertFrom-Json).runs
+```
+
+The control YAML explicitly clears the forced provider. The treatment YAML
+sets it to `ECF Attitude Quaternions`; its MATLAB run configuration also
+contains the E1-only ablation policy. JSON is written as UTF-8 without BOM.
+
+### 5A.3 PowerShell — launch the control run
+
+Keep this PowerShell open; it retains `$py`, `$e1Dir` and `$runs`. Define the
+following helper once. Run it for index 0 first; do not launch both together.
+
+```powershell
+function Start-E1Run([ValidateRange(0, 1)][int]$Index) {
+    $run = $runs[$Index]
+    $output = Join-Path $e1Dir ($run.run_id + '.json')
+    if (Test-Path -LiteralPath $output) { throw 'Result already exists; do not overwrite it.' }
+    $runConfig = Join-Path $e1Dir ($run.run_id + '.runconfig.json')
+    $bridgeConfig = Join-Path $e1Dir ('bridge_configs\' + $run.run_id + '.yaml')
+    Write-Host "Run: $($run.run_id)"
+    Write-Host "MATLAB RunConfigPath: $runConfig"
+    $runArgs = @(
+        'src\acav\scripts\run_acav_run.py',
+        '--run-id', $run.run_id, '--experiment', 'E1',
+        '--scheduler', 'dynamics_aware', '--execution-mode', 'lockstep',
+        '--backend', 'com', '--output', $output,
+        '--run-config', $runConfig, '--bridge-config', $bridgeConfig
+    )
+    if ($run.attitude_provider) {
+        $runArgs += @('--attitude-provider', $run.attitude_provider)
+    }
+    & $py @runArgs
+    if ($LASTEXITCODE -ne 0) { throw 'E1 run failed. Inspect its logs before continuing.' }
+}
+Start-E1Run 0
+```
+
+Wait for `bridge_connected: com` and the prompt asking you to start the twin.
+Do not launch another bridge manually.
+
+### 5A.4 MATLAB/Simulink — build and run the current twin
+
+In MATLAB, stop the previous simulation first. Close the old generated model
+without saving transient changes, then use the absolute run-config path that
+PowerShell printed for **this** run:
+
+```matlab
+cd('C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws\src\stk_matlab')
+if bdIsLoaded('acav_twin')
+    close_system('acav_twin', 0);
+end
+clear adcs.simulink_step
+setup_stk_ros
+runConfigPath = 'PASTE THE ABSOLUTE RunConfigPath PRINTED BY POWERSHELL HERE';
+assert(isfile(runConfigPath), 'Wrong run configuration path.');
+build_acav_twin('RunConfigPath', runConfigPath)
+open_system('acav_twin')
+```
+
+Press **Run/Play** in Simulink, then press Enter in the waiting PowerShell.
+Expect `twin_acking: ok`, followed by scheduler startup and geometry preparation.
+The control should not print the E1 ablation warning. Leave both running until
+the scheduler finishes. At the final prompt, stop Simulink and then press
+Enter. Keep STK and its scenario open for the next run.
+
+### 5A.5 PowerShell and MATLAB — run the treatment
+
+After the control finishes successfully:
+
+```powershell
+Start-E1Run 1
+```
+
+Repeat **all of 5A.4**, using the new path printed for the treatment. Do not
+reuse the control's generated model or run configuration. MATLAB should warn
+that E1's mismatch guard is disabled and measured attitude drives feedback.
+This warning is expected only for treatment.
+
+Before investing in the full run, check its `bridge.log` for the forced
+provider selection. In another PowerShell, from the workspace:
+
+```powershell
+# Replace results\E1 if you selected a different directory.
+Select-String -Path 'results\E1\E1-dynamics_aware-lockstep-readbackEcfAttitudeQuaternions.logs\bridge.log' `
+    -Pattern 'ATTITUDE READ-BACK PROVIDER FORCED'
+```
+
+The treatment must actually select `ECF Attitude Quaternions` for sensing.
+The startup validation may also mention that provider while testing multiple
+pairings; that alone is not proof of the treatment being applied. Inspect the
+explicit forced-provider message. If it is missing, stop and investigate.
+SAFE or missed captures may be outcomes; transport failures or an unexpected
+MATLAB exception require diagnosis, not classification as a valid treatment.
+
+### 5A.6 PowerShell — report and inspect the outputs
+
+After both runs have produced their result files:
+
+```powershell
+New-Item -ItemType Directory -Force -Path (Join-Path $e1Dir 'figures') | Out-Null
+ros2 run acav run_acav_campaign report --experiment E1 --output-dir $e1Dir `
+    --json (Join-Path $e1Dir 'figures\E1-report.json')
+if ($LASTEXITCODE -ne 0) { throw 'E1 report needs review; inspect the messages above.' }
+```
+
+The summary JSON is deliberately inside `figures`, away from the top-level
+per-run JSON records. Expect:
+
+| Artifact under the E1 output directory | Meaning |
+|---|---|
+| `campaign.json` | Two planned run identities and code version |
+| `<run_id>.runconfig.json` | MATLAB configuration for that run |
+| `bridge_configs/<run_id>.yaml` | Actual bridge settings, including the treatment provider |
+| `<run_id>.json` | Capture outcomes, pointing errors, actuator metrics and provenance |
+| `<run_id>.logs/` | Bridge/scheduler/runner logs, summary and captured topics |
+| `figures/E1-report.json` | Machine-readable comparison |
+| `figures/E1.png`, `.pdf`, `.svg` | Control versus treatment capture-rate figure |
+
+Reporting reads existing results; it does not rerun the simulation. The three
+image files are three formats of one chart, not three different analyses.
+Use PNG for a quick review and PDF/SVG for vector artwork in the paper.
+
+`capture_rate` is captures divided by attempted targets; `coverage_rate` is
+captures divided by all scenario targets. For example, five captures from
+five attempts in a seven-target scenario means 100% capture rate and 71.4%
+coverage. A target marked `not_attempted` is not a failed capture attempt.
+`claim_holds: true` for E1 means both comparison arms are present; it does
+not establish statistical significance or prove degradation by itself.
+
+Check `backend_type=com`, `execution_mode=lockstep`, both scheduler exits,
+the recorded code/scenario fingerprints, and the actual provider evidence.
+Compare target outcomes, pointing errors, SAFE and actuator metrics, not only
+the IMAGE label. Capture here means satisfying the simulated imaging criteria;
+it does not generate a camera photograph of the terrain.
+
+Keep the complete E1 directory for analysis. Do not rewrite the outcomes to
+fit the hypothesis. An unchanged capture rate is a result to investigate.
+The known terminal `t=720s` missing-rate/barrier issue must be distinguished
+from a failure during the experiment and retained in the logs. Once reviewed,
+record the measured findings and limitations in file 09; do not mark E1 as
+completed merely because the plan or figure command succeeded.
+
+### 5A.7 Reviewing and sharing the E1 comparison
+
+The 2026-10-08 pair provides a concrete check of the procedure: the control
+captured 5/5 attempted targets and treatment captured 0/5, with one run per
+arm. Both scheduler exits were successful. These observations are specific
+to this scenario and are not a multi-run statistical estimate.
+
+Those records carry `188ab523301d2068ec16a557a25fdfcb7794be10+dirty`; the
+report therefore has `code_versions.attributable: false`, even though neither
+record is listed as unreportable. The working-tree review found a tracked
+runbook edit. Preserve the recorded provenance: committing the documentation
+later does not retroactively make these runs clean-commit measurements.
+Retain the terminal missing-rate diagnostic at `t=720s` and distinguish it
+from errors before result completion using the scheduler and bridge logs.
+
+Before using the generated chart as final paper artwork, review its wording:
+
+- State that the treatment deliberately disables the convention-mismatch
+  guard. It does not show a silent failure of the protected nominal system.
+- Prefer a descriptive title such as "Effect of reference-frame mismatch on
+  capture success"; the current "raises nothing" title needs that caveat.
+- Describe a change from 100% to 0% as a drop of 100 percentage points.
+- The current renderer draws a small visible floor for a zero-height bar;
+  the true treatment value is zero. Use a zero marker or explain the floor
+  before publication.
+- Include one run per arm and the attempted-target denominator in the
+  caption. Identify the treatment provider as `ECF Attitude Quaternions`.
+
+These are presentation review items, not changes to the measured results.
+Share the complete E1 output directory, including configurations, both result
+records, logs and figures, using section 6. Keep the archive outside the
+source files intended for a code/documentation commit.
+
 ## 6. Sending results back for analysis
 
-Zip and send the whole `results\E6\` directory, not just the JSON
-records -- the logs are the point for this first round:
+Zip and send the whole experiment output directory, not just its JSON
+records. For E6:
 
 ```powershell
 Compress-Archive -Path results\E6 -DestinationPath E6_run.zip
 ```
 
+For E1, run the report in section 5A.6 first, then use:
+
+```powershell
+Compress-Archive -Path results\E1 -DestinationPath E1_run.zip
+```
+
+If that archive already exists, choose a new archive name. Use your actual
+output directory if it differs from these examples.
+
 That includes: the `*.json` records, the `*.runconfig.json` files,
-every run's `*.logs\` directory, `campaign.json`, and, if you also ran
+every run's `*.logs\` directory, `campaign.json`, E1's `bridge_configs\`, and, if you also ran
 `run_acav_campaign report` (see below), the JSON report and
 `figures\*.{pdf,svg,png}`.
 
@@ -230,7 +520,7 @@ campaign:
 ros2 run acav run_acav_campaign report --experiment E6 --output-dir results\E6 --repeats 5
 ```
 
-If this prints `"unreportable": N` greater than zero, check those
+If the `unreportable` list is nonempty, check those
 specific runs' `run.log` for the COM-fell-back-to-mock warning from
 step 4 before sending -- it is the single most likely reason a run
 would not count.
