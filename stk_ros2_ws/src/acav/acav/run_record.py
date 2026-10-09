@@ -103,6 +103,13 @@ class Provenance:
     #: older record has exactly one correct reading -- the validated
     #: pairing -- so nothing can be misinterpreted.
     attitude_provider: str = ""
+    #: The read-back provider the bridge reported using
+    #: (BridgeStatus.attitude_provider), forced or validated; empty when
+    #: no status carried one -- every record written before it was
+    #: observed. ``attitude_provider`` above is derived from the same
+    #: observation when there is one. No RECORD_VERSION bump: absence
+    #: reads as "not observed" and changes nothing else in the record.
+    attitude_readback_provider: str = ""
     #: The code that produced the run (see acav.code_version): a git
     #: commit, ``<commit>+dirty``, or ``unknown (...)``. Empty in records
     #: written before it was recorded -- added without a RECORD_VERSION
@@ -123,6 +130,7 @@ class Provenance:
             "gains": dict(self.gains),
             "fault": self.fault,
             "attitude_provider": self.attitude_provider,
+            "attitude_readback_provider": self.attitude_readback_provider,
             "code_version": self.code_version,
             "started_utc": self.started_utc,
             "finished_utc": self.finished_utc,
@@ -140,6 +148,8 @@ class Provenance:
                    for k, v in (raw.get("gains") or {}).items()},
             fault=raw.get("fault"),
             attitude_provider=str(raw.get("attitude_provider", "") or ""),
+            attitude_readback_provider=str(
+                raw.get("attitude_readback_provider", "") or ""),
             code_version=str(raw.get("code_version", "") or ""),
             started_utc=str(raw.get("started_utc", "")),
             finished_utc=str(raw.get("finished_utc", "")),

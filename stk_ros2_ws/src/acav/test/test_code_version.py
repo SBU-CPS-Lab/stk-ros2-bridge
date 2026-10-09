@@ -140,6 +140,7 @@ class TestSchedulerProvenance:
             gains_json="{}", fault_json="null", attitude_provider="")
         node._backend_type, node._stk_version = "com", "12.6.0"
         node._execution_mode, node._started_utc = "lockstep", ""
+        node._readback_provider, node._readback_forced = "", None
         node._write_output(RunResult(run_id="r", scheduler="dynamics_aware"))
         return read_record(out).provenance
 

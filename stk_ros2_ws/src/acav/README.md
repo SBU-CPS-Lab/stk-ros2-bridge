@@ -27,8 +27,9 @@ behind each one.
 | C5 | The experiment harness: provenance, seeded faults, run matrices, the campaign CLI | `run_record.py`, `fault_injection.py`, `campaign.py`, `campaign_runner.py`, `campaign_cli.py` |
 | C6 | Analysis and figures from a campaign directory | `report_figures.py`, `report_style.py`, wired into `campaign_cli.py`'s `report` verb |
 
-All six are implemented and offline-tested (660 tests, this package
-alone). **Experiment E6 has been run live**; E1–E5 have not. Every live
+All six are implemented and offline-tested (672 tests, this package
+alone). **E6 has been run live, and E1 and E2 once each** (from modified
+checkouts, so to be re-run before citing); E3–E5 have not. Every live
 run and its result is recorded in
 [`../../docs/09_live_runs_and_results.md`](../../docs/09_live_runs_and_results.md);
 how to run a campaign is in

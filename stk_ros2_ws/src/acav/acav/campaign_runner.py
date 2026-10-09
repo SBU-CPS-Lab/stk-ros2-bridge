@@ -275,6 +275,12 @@ def check_record(run: RunSpec, record: RunRecord) -> List[str]:
         problems.append(
             f"attitude_provider {provenance.attitude_provider!r}, expected "
             f"{run.attitude_provider!r}")
+    if run.experiment == "E1" and not provenance.attitude_readback_provider:
+        # E1's comparison is meaningless unless the bridge said which
+        # provider it read through; a requested one proves nothing.
+        problems.append(
+            "attitude read-back provider not observed from the bridge "
+            "(BridgeStatus.attitude_provider); cannot confirm which arm ran")
 
     expected_fault = None if run.fault is None else run.fault.to_dict()
     if provenance.fault != expected_fault:

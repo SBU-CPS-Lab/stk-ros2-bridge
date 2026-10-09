@@ -61,6 +61,16 @@ class TestForcedAttitudeProvider:
             report)
         assert pipeline._attitude_spec.provider_name == "Attitude Quaternions"
         assert pipeline._attitude_spec.provider_name != report.attitude_provider
+        # What BridgeStatus reports, and the scheduler records.
+        assert pipeline.attitude_provider == "Attitude Quaternions"
+        assert pipeline.attitude_provider_forced
+
+    def test_the_validated_provider_is_reported_as_not_forced(self, backend,
+                                                              report):
+        pipeline = SensingPipeline(backend, FrameRegistry(),
+                                   SensingConfig(satellites=[SAT]), report)
+        assert pipeline.attitude_provider == report.attitude_provider
+        assert not pipeline.attitude_provider_forced
 
     def test_an_unknown_provider_name_raises(self, backend, report):
         """Rather than falling back to the validated one. A typo that

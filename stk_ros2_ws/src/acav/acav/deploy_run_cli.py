@@ -154,11 +154,49 @@ def _check_graph_idle(prefix: str) -> None:
         rclpy.shutdown()
 
 
-def bridge_launch_argv(config: RunConfig) -> List[str]:
+def bridge_launch_argv(config: RunConfig,
+                       config_file: Optional[str] = None) -> List[str]:
     # Own the actual node process, not a ros2 launcher whose children survive
     # terminate() on Windows. Keep the same interpreter and ROS environment.
+    config_file = config_file or config.bridge_config
     return [sys.executable, "-m", "stk_bridge.nodes.bridge_node", "--ros-args",
-            "-p", f"config_file:={json.dumps(config.bridge_config)}"]
+            "-p", f"config_file:={json.dumps(config_file)}"]
+
+
+#: The per-run bridge configuration, written beside the run's logs.
+RUN_BRIDGE_CONFIG = "bridge_params.yaml"
+
+
+def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
+    """Copy ``--bridge-config`` with this run's attitude provider applied.
+
+    ``sensing.force_attitude_provider`` is set from the run, always: to
+    the forced provider for E1's treatment and to empty for every other
+    run. Before this, ``--attitude-provider`` reached only the scheduler
+    -- it labelled the record without changing what the bridge read
+    through, so a treatment needed a hand-made YAML and a value left in
+    a shared YAML would have silently turned a nominal run into one. The
+    base file is not edited; the copy stays with the logs as the record
+    of what the bridge was given.
+    """
+    import yaml
+
+    with open(config.bridge_config, encoding="utf-8-sig") as handle:
+        settings = yaml.safe_load(handle) or {}
+    if not isinstance(settings, dict):
+        raise ValueError(f"{config.bridge_config} is not a YAML mapping")
+    sensing = settings.get("sensing") or {}
+    previous = str(sensing.get("force_attitude_provider") or "")
+    if previous != config.attitude_provider:
+        logger.warning(
+            "%s sets sensing.force_attitude_provider=%r; this run uses %r",
+            config.bridge_config, previous, config.attitude_provider)
+    sensing["force_attitude_provider"] = config.attitude_provider
+    settings["sensing"] = sensing
+    path = os.path.join(log_dir, RUN_BRIDGE_CONFIG)
+    with open(path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(settings, handle, sort_keys=False)
+    return os.path.abspath(path)
 
 
 def scheduler_argv(config: RunConfig) -> List[str]:
@@ -342,15 +380,22 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
     scheduler_proc = None
     scheduler_returncode = EXIT_STEP_FAILED
     try:
+        try:
+            bridge_config = write_bridge_config(config, log_dir, run_log)
+        except Exception as error:      # noqa: BLE001 - OSError, YAMLError, a non-mapping file
+            record("bridge_config", False,
+                   f"could not prepare {config.bridge_config}: {error}")
+            return EXIT_STEP_FAILED
+        run_log.info("bridge config: %s (force_attitude_provider=%r)",
+                     bridge_config, config.attitude_provider)
         deps.check_idle(config.prefix)
         recorder = deps.start_recorder(config, log_dir)
         run_log.info("topic capture started: %s", log_dir)
         with _open_log(log_dir, "bridge.log") as bridge_log:
-            run_log.info("launching bridge: %s",
-                         " ".join(bridge_launch_argv(config)))
+            argv = bridge_launch_argv(config, bridge_config)
+            run_log.info("launching bridge: %s", " ".join(argv))
             bridge_proc = deps.popen(
-                bridge_launch_argv(config),
-                stdout=bridge_log, stderr=subprocess.STDOUT)
+                argv, stdout=bridge_log, stderr=subprocess.STDOUT)
 
             connect_result = deps.wait_for_bridge_connected(
                 config.prefix, config.bridge_connect_timeout_s,

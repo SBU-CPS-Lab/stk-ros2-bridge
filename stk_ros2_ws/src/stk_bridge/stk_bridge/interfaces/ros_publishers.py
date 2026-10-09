@@ -332,7 +332,9 @@ class BridgePublishers:
                        queue_depth: int, queue_capacity: int,
                        latency_ms: float, last_error: str,
                        timings: Optional[Dict[str, float]] = None,
-                       when: Optional[StkTime] = None) -> None:
+                       when: Optional[StkTime] = None,
+                       attitude_provider: str = "",
+                       attitude_provider_forced: bool = False) -> None:
         from std_msgs.msg import Header
         from stk_msgs.msg import BridgeStatus
 
@@ -358,6 +360,8 @@ class BridgePublishers:
         message.mean_barrier_wait_ms = float(
             timings.get("mean_barrier_wait_ms", 0.0))
         message.step_samples = int(timings.get("step_samples", 0))
+        message.attitude_provider = attitude_provider
+        message.attitude_provider_forced = bool(attitude_provider_forced)
         self._pub_status.publish(message)
 
     def publish_diagnostics(self, backend, report, worker,

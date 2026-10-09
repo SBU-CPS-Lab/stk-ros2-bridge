@@ -396,6 +396,23 @@ class TestRecordValidation:
         assert any("attitude_provider" in m
                    for m in check_record(run, record))
 
+    def test_an_e1_record_whose_read_back_was_not_observed_is_caught(self):
+        """The record's provider used to be the scheduler's launch
+        parameter. E1 needs the bridge's own report of what it read."""
+        run = RunSpec(experiment="E1",
+                      attitude_provider="ECF Attitude Quaternions")
+        unobserved = RunRecord(
+            result=_result(run.run_id),
+            provenance=Provenance(backend_type="com",
+                                  attitude_provider=run.attitude_provider))
+        assert any("not observed" in m for m in check_record(run, unobserved))
+        observed = RunRecord(
+            result=_result(run.run_id),
+            provenance=Provenance(
+                backend_type="com", attitude_provider=run.attitude_provider,
+                attitude_readback_provider=run.attitude_provider))
+        assert check_record(run, observed) == []
+
     def test_wrong_gains_are_caught(self):
         run = RunSpec(experiment="E4", gains={"profile_authority": 0.8})
         record = _record(run.run_id, gains={"profile_authority": 0.6})

@@ -10,12 +10,11 @@ final command is.
 
 **Live validation status:** E6 has been run on Windows with STK and MATLAB;
 see [09_live_runs_and_results.md](09_live_runs_and_results.md). The E1 and E2
-comparisons also produced complete result records on 2026-10-08. This does
-not imply warning-free shutdown or clean-commit provenance. After the common
+comparisons have each been run once (2026-10-08), from modified checkouts;
+their results are recorded there too. After the common
 setup in sections 1–3, follow section 4 for a first smoke test, section 5 for
 E6, [section 5A](#5a-e1--two-runs-to-test-attitude-frame-consistency) for E1,
 or [section 5B](#5b-e2--compare-kinematic-and-dynamics-aware-scheduling) for E2.
-The E1/E2 sections include the observed results and their limitations.
 
 ## 1. Before any of this: the base bridge must already work
 
@@ -224,29 +223,38 @@ capture performance. Fewer captures or SAFE in treatment can be a scientific
 outcome; a Python exception, lost connection or failed startup is not that
 outcome. Do not assume the treatment must fail before measuring it.
 
-**Current runner limitation:** `run_acav_run.py --attitude-provider` records
-the provider through the scheduler but does not itself set the bridge's
-`sensing.force_attitude_provider`. Consequently, simply changing E6 to E1 in
-the section 5 command is insufficient. The procedure below supplies a
-separate bridge YAML for each run. It does not edit the shared source YAML.
-Use this procedure until automatic forwarding is implemented and tested.
+`run_acav_run.py` applies each run's provider to the bridge itself: it
+copies `--bridge-config` to `<run_id>.logs\bridge_params.yaml` with
+`sensing.force_attitude_provider` set from the run (the forced provider for
+the treatment, empty for the control) and launches the bridge with that
+copy. The shared YAML is not edited, and no hand-made bridge files are
+needed. The bridge reports the provider it actually used on its status
+topic; the scheduler records it in `provenance.attitude_readback_provider`,
+and the campaign runner rejects an E1 record without it.
 
 ### 5A.1 PowerShell — prepare the environment and scenario
 
 Use the same Visual Studio/ROS-enabled PowerShell environment that successfully
-ran E6. Stop old bridge, scheduler and Simulink runs first. These examples use
-the deploy machine's Python explicitly to avoid Inkscape's Python on PATH.
+ran E6. Stop old bridge, scheduler and Simulink runs first. Set `$py` to the
+ROS-compatible Python explicitly (on the deploy machine a different Python,
+Inkscape's, comes first on `PATH`). The paths below are examples; use your
+own checkout and interpreter.
 
 ```powershell
-cd C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws
-$py = 'C:\Users\Mohammadamin\AppData\Local\Programs\Python\Python310\python.exe'
+cd <checkout>\stk_ros2_ws
+$py = '<path to the ROS-compatible python.exe>'
 & $py -c "import sys, yaml, colcon_core; print(sys.executable)"
+if ($LASTEXITCODE -ne 0) { throw 'Check the ROS Python environment.' }
 
 # After source updates, rebuild using the established ROS/Visual Studio shell:
 & $py -m colcon build --symlink-install
 if ($LASTEXITCODE -ne 0) { throw 'Workspace build failed.' }
 . .\install\local_setup.ps1
 ```
+
+`$py` is a session variable; define it again in a new terminal. An
+undefined `$py` makes `& $py` fail before Python starts, while
+`$LASTEXITCODE` can still hold an earlier command's exit code.
 
 Follow sections 1–2 for the ROS underlay and STK prerequisites. If generating
 a fresh scenario, save/close the previous scenario in STK first, then run:
@@ -262,155 +270,84 @@ Leave the verified `ACAV_SSS1` scenario open. Do not switch its orbit
 propagator to RealTime. Use a clean committed checkout for attributable
 results and keep the same code/configuration for both runs.
 
-### 5A.2 PowerShell — generate the plan and per-run configurations
+### 5A.2 PowerShell — plan and launch the two runs
 
-Use a new output directory. These preparation commands refuse to overwrite
-an existing campaign; to repeat the experiment choose another directory.
-They generate files only and do not launch STK or the control loop.
-Run the sections in order in the same PowerShell. The `$py` variable is a
-session variable, not a permanent environment setting; define it again if
-you open a new terminal. An undefined `$py` makes `& $py` fail before Python
-starts, and `$LASTEXITCODE` can still contain an earlier command's exit code.
+Use a new output directory; never overwrite an earlier campaign.
 
 ```powershell
-$py = 'C:\Users\Mohammadamin\AppData\Local\Programs\Python\Python310\python.exe'
-if (-not (Test-Path -LiteralPath $py -PathType Leaf)) {
-    throw 'Set $py to the ROS-compatible Python executable before continuing.'
-}
 $e1Dir = Join-Path (Get-Location).Path 'results\E1'
 if (Test-Path -LiteralPath $e1Dir) {
-    throw 'results\E1 already exists. Choose a fresh output directory.'
+    throw 'results\E1 already exists. Resume it deliberately or choose a fresh directory.'
 }
 New-Item -ItemType Directory -Path $e1Dir | Out-Null
 ros2 run acav run_acav_campaign plan --experiment E1 --output-dir $e1Dir
 if ($LASTEXITCODE -ne 0) { throw 'E1 plan failed.' }
 
-@'
-import copy
-import json
-import sys
-from pathlib import Path
-import yaml
-
-ws = Path.cwd()
-sys.path.insert(0, str(ws / 'src' / 'acav'))
-sys.path.insert(0, str(ws / 'src' / 'stk_bridge'))
-from acav.campaign import build_e1_convention
-from acav.campaign_runner import write_run_config
-
-out = Path(sys.argv[1])
-config_dir = out / 'bridge_configs'
-config_dir.mkdir(exist_ok=True)
-base = yaml.safe_load((ws / 'src/acav/config/bridge_params_acav.yaml').read_text(encoding='utf-8'))
-campaign = build_e1_convention()
-manifest = json.loads((out / 'campaign.json').read_text(encoding='utf-8'))
-assert [r['run_id'] for r in manifest['runs']] == [r.run_id for r in campaign.runs], 'Installed plan and source disagree; rebuild first.'
-for run in campaign.runs:
-    cfg = copy.deepcopy(base)
-    cfg.setdefault('sensing', {})['force_attitude_provider'] = run.attitude_provider
-    path = config_dir / (run.run_id + '.yaml')
-    path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding='utf-8')
-    runconfig = write_run_config(run, str(out / run.output_name))
-    print(run.run_id)
-    print('  bridge:', path)
-    print('  MATLAB RunConfigPath:', runconfig)
-'@ | & $py - $e1Dir
-if ($LASTEXITCODE -ne 0) { throw 'E1 configuration generation failed.' }
-$runs = (Get-Content (Join-Path $e1Dir 'campaign.json') -Raw | ConvertFrom-Json).runs
+ros2 run acav run_acav_campaign run `
+    --experiment E1 --output-dir $e1Dir --stop-on-error -- `
+    $py src\acav\scripts\run_acav_run.py `
+        --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
+        --execution-mode '{execution_mode}' `
+        --output '{output}' --scenario '{scenario}' --backend '{backend}' `
+        --attitude-provider '{attitude_provider}' --run-config '{run_config}' `
+        --gains-json '{gains_json}' --fault-json '{fault_json}' `
+        --bridge-config src\acav\config\bridge_params_acav.yaml
+if ($LASTEXITCODE -ne 0) { throw 'E1 campaign incomplete; inspect the run logs.' }
 ```
 
-The control YAML explicitly clears the forced provider. The treatment YAML
-sets it to `ECF Attitude Quaternions`; its MATLAB run configuration also
-contains the E1-only ablation policy. JSON is written as UTF-8 without BOM.
+The control runs first, then the treatment. Each needs the MATLAB handoff in
+5A.3. Wait for `bridge_connected: com` and the prompt to start the twin; do
+not launch another bridge manually. If interrupted, stop the old processes
+and reissue the `run` command: completed runs are kept and skipped.
 
-### 5A.3 PowerShell — launch the control run
-
-Keep this PowerShell open; it retains `$py`, `$e1Dir` and `$runs`. Define the
-following helper once. Run it for index 0 first; do not launch both together.
-
-```powershell
-function Start-E1Run([ValidateRange(0, 1)][int]$Index) {
-    $run = $runs[$Index]
-    $output = Join-Path $e1Dir ($run.run_id + '.json')
-    if (Test-Path -LiteralPath $output) { throw 'Result already exists; do not overwrite it.' }
-    $runConfig = Join-Path $e1Dir ($run.run_id + '.runconfig.json')
-    $bridgeConfig = Join-Path $e1Dir ('bridge_configs\' + $run.run_id + '.yaml')
-    Write-Host "Run: $($run.run_id)"
-    Write-Host "MATLAB RunConfigPath: $runConfig"
-    $runArgs = @(
-        'src\acav\scripts\run_acav_run.py',
-        '--run-id', $run.run_id, '--experiment', 'E1',
-        '--scheduler', 'dynamics_aware', '--execution-mode', 'lockstep',
-        '--backend', 'com', '--output', $output,
-        '--run-config', $runConfig, '--bridge-config', $bridgeConfig
-    )
-    if ($run.attitude_provider) {
-        $runArgs += @('--attitude-provider', $run.attitude_provider)
-    }
-    & $py @runArgs
-    if ($LASTEXITCODE -ne 0) { throw 'E1 run failed. Inspect its logs before continuing.' }
-}
-Start-E1Run 0
-```
-
-Wait for `bridge_connected: com` and the prompt asking you to start the twin.
-Do not launch another bridge manually.
-
-### 5A.4 MATLAB/Simulink — build and run the current twin
+### 5A.3 MATLAB/Simulink — build and run the twin for each run
 
 In MATLAB, stop the previous simulation first. Close the old generated model
-without saving transient changes, then use the absolute run-config path that
-PowerShell printed for **this** run:
+without saving transient changes, then use the absolute run-config path the
+runner printed for **this** run (`<output dir>\<run_id>.runconfig.json`):
 
 ```matlab
-cd('C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws\src\stk_matlab')
+cd(fullfile('<checkout>', 'stk_ros2_ws', 'src', 'stk_matlab'))
 if bdIsLoaded('acav_twin')
     close_system('acav_twin', 0);
 end
 clear adcs.simulink_step
 setup_stk_ros
-runConfigPath = 'PASTE THE ABSOLUTE RunConfigPath PRINTED BY POWERSHELL HERE';
+runConfigPath = '<absolute path of this run''s .runconfig.json>';
 assert(isfile(runConfigPath), 'Wrong run configuration path.');
 build_acav_twin('RunConfigPath', runConfigPath)
 open_system('acav_twin')
 ```
 
 Press **Run/Play** in Simulink, then press Enter in the waiting PowerShell.
-Expect `twin_acking: ok`, followed by scheduler startup and geometry preparation.
-The control should not print the E1 ablation warning. Leave both running until
-the scheduler finishes. At the final prompt, stop Simulink and then press
-Enter. Keep STK and its scenario open for the next run.
+Expect `twin_acking: ok`, followed by scheduler startup and geometry
+preparation. At the final prompt, stop Simulink and then press Enter. Keep
+STK and its scenario open for the next run.
 
-### 5A.5 PowerShell and MATLAB — run the treatment
+For the treatment, repeat the whole block with the treatment's run-config
+path; do not reuse the control's model. MATLAB should warn that E1's
+mismatch guard is disabled and measured attitude drives feedback. The control
+must not print that warning.
 
-After the control finishes successfully:
-
-```powershell
-Start-E1Run 1
-```
-
-Repeat **all of 5A.4**, using the new path printed for the treatment. Do not
-reuse the control's generated model or run configuration. MATLAB should warn
-that E1's mismatch guard is disabled and measured attitude drives feedback.
-This warning is expected only for treatment.
-
-Before investing in the full run, check its `bridge.log` for the forced
-provider selection. In another PowerShell, from the workspace:
+Before investing in the full treatment run, confirm the bridge really reads
+through the forced provider. In another PowerShell, from the workspace:
 
 ```powershell
 # Replace results\E1 if you selected a different directory.
-Select-String -Path 'results\E1\E1-dynamics_aware-lockstep-readbackEcfAttitudeQuaternions.logs\bridge.log' `
-    -Pattern 'ATTITUDE READ-BACK PROVIDER FORCED'
+$logs = 'results\E1\E1-dynamics_aware-lockstep-readbackEcfAttitudeQuaternions.logs'
+Select-String -Path "$logs\bridge.log" -Pattern 'ATTITUDE READ-BACK PROVIDER FORCED'
+Select-String -Path "$logs\scheduler.log" -Pattern 'bridge attitude read-back'
 ```
 
-The treatment must actually select `ECF Attitude Quaternions` for sensing.
-The startup validation may also mention that provider while testing multiple
-pairings; that alone is not proof of the treatment being applied. Inspect the
-explicit forced-provider message. If it is missing, stop and investigate.
-SAFE or missed captures may be outcomes; transport failures or an unexpected
-MATLAB exception require diagnosis, not classification as a valid treatment.
+The first line must name `ECF Attitude Quaternions`; the second must say
+`FORCED`. Startup validation may also mention that provider while testing
+pairings, which alone proves nothing. If either line is missing, or the
+scheduler logs an error that the read-back differs from the run's provider,
+stop and investigate. SAFE or missed captures may be outcomes; transport
+failures or an unexpected MATLAB exception need diagnosis, not
+classification as a valid treatment.
 
-### 5A.6 PowerShell — report and inspect the outputs
+### 5A.4 PowerShell — report and inspect the outputs
 
 After both runs have produced their result files:
 
@@ -428,15 +365,14 @@ per-run JSON records. Expect:
 |---|---|
 | `campaign.json` | Two planned run identities and code version |
 | `<run_id>.runconfig.json` | MATLAB configuration for that run |
-| `bridge_configs/<run_id>.yaml` | Actual bridge settings, including the treatment provider |
 | `<run_id>.json` | Capture outcomes, pointing errors, actuator metrics and provenance |
-| `<run_id>.logs/` | Bridge/scheduler/runner logs, summary and captured topics |
+| `<run_id>.logs/` | Bridge/scheduler/runner logs, `bridge_params.yaml` (the bridge settings actually used), summary and captured topics |
 | `figures/E1-report.json` | Machine-readable comparison |
 | `figures/E1.png`, `.pdf`, `.svg` | Control versus treatment capture-rate figure |
 
 Reporting reads existing results; it does not rerun the simulation. The three
-image files are three formats of one chart, not three different analyses.
-Use PNG for a quick review and PDF/SVG for vector artwork in the paper.
+image files are three formats of one chart. Use PNG for a quick review and
+PDF/SVG for vector artwork in the paper.
 
 `capture_rate` is captures divided by attempted targets; `coverage_rate` is
 captures divided by all scenario targets. For example, five captures from
@@ -446,50 +382,24 @@ coverage. A target marked `not_attempted` is not a failed capture attempt.
 not establish statistical significance or prove degradation by itself.
 
 Check `backend_type=com`, `execution_mode=lockstep`, both scheduler exits,
-the recorded code/scenario fingerprints, and the actual provider evidence.
-Compare target outcomes, pointing errors, SAFE and actuator metrics, not only
-the IMAGE label. Capture here means satisfying the simulated imaging criteria;
-it does not generate a camera photograph of the terrain.
+the recorded code/scenario fingerprints, and `attitude_readback_provider`
+in both records (the validated provider for the control, `ECF Attitude
+Quaternions` for the treatment). Compare target outcomes, pointing errors,
+SAFE and actuator metrics, not only the capture label. Capture here means
+satisfying the simulated imaging criteria; it does not generate a camera
+image.
 
-Keep the complete E1 directory for analysis. Do not rewrite the outcomes to
-fit the hypothesis. An unchanged capture rate is a result to investigate.
-The known terminal `t=720s` missing-rate/barrier issue must be distinguished
-from a failure during the experiment and retained in the logs. Once reviewed,
-record the measured findings and limitations in file 09; do not mark E1 as
-completed merely because the plan or figure command succeeded.
+Keep the complete E1 directory for analysis. Do not rewrite outcomes to fit
+the hypothesis. The known end-of-window missing body-rate sample at
+`t=720s` must be distinguished from a failure during the experiment.
 
-### 5A.7 Reviewing and sharing the E1 comparison
+### 5A.5 Results so far, and sharing
 
-The 2026-10-08 pair provides a concrete check of the procedure: the control
-captured 5/5 attempted targets and treatment captured 0/5, with one run per
-arm. Both scheduler exits were successful. These observations are specific
-to this scenario and are not a multi-run statistical estimate.
-
-Those records carry `188ab523301d2068ec16a557a25fdfcb7794be10+dirty`; the
-report therefore has `code_versions.attributable: false`, even though neither
-record is listed as unreportable. The working-tree review found a tracked
-runbook edit. Preserve the recorded provenance: committing the documentation
-later does not retroactively make these runs clean-commit measurements.
-Retain the terminal missing-rate diagnostic at `t=720s` and distinguish it
-from errors before result completion using the scheduler and bridge logs.
-
-Before using the generated chart as final paper artwork, review its wording:
-
-- State that the treatment deliberately disables the convention-mismatch
-  guard. It does not show a silent failure of the protected nominal system.
-- Prefer a descriptive title such as "Effect of reference-frame mismatch on
-  capture success"; the current "raises nothing" title needs that caveat.
-- Describe a change from 100% to 0% as a drop of 100 percentage points.
-- The current renderer draws a small visible floor for a zero-height bar;
-  the true treatment value is zero. Use a zero marker or explain the floor
-  before publication.
-- Include one run per arm and the attempted-target denominator in the
-  caption. Identify the treatment provider as `ECF Attitude Quaternions`.
-
-These are presentation review items, not changes to the measured results.
-Share the complete E1 output directory, including configurations, both result
-records, logs and figures, using section 6. Keep the archive outside the
-source files intended for a code/documentation commit.
+The 2026-10-08 pair and its reading are recorded in
+`09_live_runs_and_results.md` section 6. When describing E1, state that the
+treatment deliberately disables the convention-mismatch guard: it does not
+show a silent failure of the protected nominal system. Share the complete
+output directory using section 6.
 
 ## 5B. E2 — compare kinematic and dynamics-aware scheduling
 
@@ -517,8 +427,8 @@ changes before collecting attributable results, then keep that revision and
 the configuration unchanged across both runs.
 
 ```powershell
-cd C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws
-$py = 'C:\Users\Mohammadamin\AppData\Local\Programs\Python\Python310\python.exe'
+cd <checkout>\stk_ros2_ws
+$py = '<path to the ROS-compatible python.exe>'
 & $py -c "import sys, yaml, colcon_core; print(sys.executable)"
 if ($LASTEXITCODE -ne 0) { throw 'Check the ROS Python environment.' }
 
@@ -595,14 +505,14 @@ For the first run, use the following absolute path. If you selected another
 output directory, use the corresponding path printed by the runner instead.
 
 ```matlab
-cd('C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws\src\stk_matlab')
+cd(fullfile('<checkout>', 'stk_ros2_ws', 'src', 'stk_matlab'))
 % Stop any previous simulation before closing its model.
 if bdIsLoaded('acav_twin')
     close_system('acav_twin', 0);
 end
 clear adcs.simulink_step
 setup_stk_ros
-runConfigPath = 'C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws\results\E2\E2-kinematic-lockstep.runconfig.json';
+runConfigPath = fullfile('<checkout>', 'stk_ros2_ws', 'results', 'E2', 'E2-kinematic-lockstep.runconfig.json');
 assert(isfile(runConfigPath), 'Wait for the runner or correct the run-config path.');
 runConfig = jsondecode(fileread(runConfigPath));
 assert(strcmp(runConfig.experiment, 'E2'), 'Expected an E2 configuration.');
@@ -622,7 +532,7 @@ repeat the entire MATLAB block above, replacing only the `runConfigPath`
 assignment with:
 
 ```matlab
-runConfigPath = 'C:\Users\Mohammadamin\Desktop\DT-ADCS\stk_ros2_ws\results\E2\E2-dynamics_aware-lockstep.runconfig.json';
+runConfigPath = fullfile('<checkout>', 'stk_ros2_ws', 'results', 'E2', 'E2-dynamics_aware-lockstep.runconfig.json');
 ```
 
 Rebuild the model for that configuration, press Play, then Enter in PowerShell.
@@ -682,31 +592,11 @@ distinguish them from incomplete runs. One run per policy is a scenario
 comparison, not a statistical estimate across missions. Do not substitute
 an old E1 or E6 record for the new dynamics-aware E2 run.
 
-### 5B.6 Reviewing and sharing the E2 comparison
+### 5B.6 Results so far, and sharing
 
-The 2026-10-08 runs completed with successful scheduler exits and real COM
-provenance. Kinematic attempted seven targets and captured five; dynamics-aware
-attempted five and captured all five. Kinematic's T5 and T7 outcomes were
-`not_settled`; dynamics-aware declined those same targets. Thus capture rate
-increased from 71.4% to 100% and the over-promise gap fell from 28.6% to zero,
-while coverage remained 5/7 (71.4%) for both. This supports fewer unsuccessful
-attempts with unchanged delivered coverage, not a claim of more images.
-
-Both runs recorded three actuator-limiting episodes, no SAFE entry and zero
-dropped attitude samples. The recorded start-to-finish intervals were
-70 minutes 18 seconds and 71 minutes 20 seconds respectively; these exclude
-manual setup and post-run handoff delays. Fewer attempted targets did not
-shorten the simulation window.
-
-Both records carry `7cc9e3974a0590c9f8a3a4a71ca8cf81a2bc91b4+dirty`.
-Preserve that provenance and the one-run-per-policy limitation. In the
-dynamics-aware run, the result was written before a missing angular-rate
-sample at `t=720s` led to a terminal barrier timeout. The result is complete,
-but shutdown is not warning-free; keep the diagnostic with the result rather
-than presenting it as fixed. See section 8 for shutdown and saturation notes.
-
-Archive the complete directory for review, as in section 6 (choose a new
-archive name if it already exists):
+The 2026-10-08 pair and its reading are recorded in
+`09_live_runs_and_results.md` section 7. Archive the complete directory for
+review, as in section 6 (choose a new archive name if it already exists):
 
 ```powershell
 Compress-Archive -Path $e2Dir -DestinationPath E2_run.zip
@@ -721,7 +611,7 @@ records. For E6:
 Compress-Archive -Path results\E6 -DestinationPath E6_run.zip
 ```
 
-For E1, run the report in section 5A.6 first, then use:
+For E1, run the report in section 5A.4 first, then use:
 
 ```powershell
 Compress-Archive -Path results\E1 -DestinationPath E1_run.zip
@@ -734,7 +624,8 @@ If that archive already exists, choose a new archive name. Use your actual
 output directory if it differs from these examples.
 
 That includes: the `*.json` records, the `*.runconfig.json` files,
-every run's `*.logs\` directory, `campaign.json`, E1's `bridge_configs\`, and, if you also ran
+every run's `*.logs\` directory (including the `bridge_params.yaml` the
+run's bridge was given), `campaign.json`, and, if you also ran
 `run_acav_campaign report` (see below), the JSON report and
 `figures\*.{pdf,svg,png}`.
 

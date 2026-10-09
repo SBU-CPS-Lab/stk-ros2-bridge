@@ -170,8 +170,19 @@ class SensingPipeline:
         #: channel -> (total ms, reads), for the bridge's timing log.
         self.channel_timings: Dict[str, Tuple[float, int]] = {}
 
+        self._attitude_forced = False
         self._attitude_spec = self._select_attitude_spec()
         self._rate_spec = self._select_rate_spec()
+
+    @property
+    def attitude_provider(self) -> str:
+        """The attitude read-back provider in use (BridgeStatus reports it)."""
+        return self._attitude_spec.provider_name
+
+    @property
+    def attitude_provider_forced(self) -> bool:
+        """True when ``force_attitude_provider`` overrode validation."""
+        return self._attitude_forced
 
     # -- provider selection ------------------------------------------------
 
@@ -208,6 +219,7 @@ class SensingPipeline:
                 "if you did not set it deliberately, clear "
                 "sensing.force_attitude_provider.",
                 spec.provider_name)
+            self._attitude_forced = True
             return spec
 
         name = (self._report.attitude_provider or "").strip().lower()

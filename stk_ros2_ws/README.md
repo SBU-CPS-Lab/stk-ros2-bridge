@@ -40,7 +40,7 @@ and `stk_bridge` (Python, MATLAB, ROS interfaces, YAML, docs):
 
 **The ACAV case study (C1-C6), built on top of the bridge, is also
 implemented and offline-tested, and runs closed-loop against live STK.**
-Experiment E6 has been run live; E1-E5 have not. See
+E6 has been run live, and E1 and E2 once each; E3-E5 have not. See
 [`docs/09_live_runs_and_results.md`](docs/09_live_runs_and_results.md)
 for every live run and result so far,
 [`src/acav/README.md`](src/acav/README.md) for phase-by-phase status, and
@@ -54,7 +54,7 @@ cd stk_ros2_ws
 python -m pytest src/acav/test src/stk_bridge/test -q
 ```
 
-870 passed, 4 skipped as of 2026-10-06 (three skips are
+890 passed, 4 skipped as of 2026-10-09 (three skips are
 `builtin_interfaces` import guards for running outside a sourced ROS 2
 workspace -- see `src/stk_bridge/test/test_conversions.py`; the fourth,
 `test_qos_lockstep.py`, needs `rclpy`). The MATLAB twin cross-check,

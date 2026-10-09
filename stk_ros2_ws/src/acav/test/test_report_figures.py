@@ -91,18 +91,34 @@ class TestEveryFigureRendersOnEmptyInput:
 
 
 class TestE1Convention:
-    def test_both_bars_are_present_even_at_zero_percent(self):
-        """A 0%-height bar rendered as literally nothing once -- the
-        finding disappeared instead of showing as the finding."""
+    def _figure(self):
         records = [
             _record("control", outcomes=["captured"] * 6 + ["not_settled"]),
             _record("treat", outcomes=["no_access"] * 7,
-                   attitude_provider="Attitude Quaternions"),
+                   attitude_provider="ECF Attitude Quaternions"),
         ]
-        fig = e1_convention_figure(convention_comparison(records, 7))
-        bars = [p for ax in fig.axes for p in ax.patches]
-        assert len(bars) == 2
-        assert all(bar.get_height() > 0 for bar in bars)
+        return e1_convention_figure(convention_comparison(records, 7))
+
+    def test_a_zero_result_is_drawn_at_its_true_height_with_a_marker(self):
+        """A 0%-height bar once rendered as literally nothing, so the
+        finding vanished; the fix then floored it at 1.2%, which
+        misstated it. True heights, and a visible marker at zero."""
+        fig = self._figure()
+        ax = fig.axes[0]
+        heights = [bar.get_height() for bar in ax.patches]
+        assert heights == pytest.approx([6 / 7, 0.0])
+        assert ax.collections, "no zero marker drawn for the 0% bar"
+
+    def test_labels_name_the_forced_provider_and_the_guard_ablation(self):
+        ax = self._figure().axes[0]
+        ticks = [t.get_text() for t in ax.get_xticklabels()]
+        assert "ECF Attitude Quaternions" in ticks[1]
+        assert "CBFQuat" not in " ".join(ticks)
+        assert "raises nothing" not in ax.get_title()
+        assert "guard disabled" in ax.get_title()
+        texts = " ".join(t.get_text() for t in ax.texts)
+        assert "(6/7)" in texts and "(0/7)" in texts
+        assert "pp" in texts
 
 
 class TestE6Latency:

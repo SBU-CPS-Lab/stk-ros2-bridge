@@ -34,3 +34,12 @@ float64 mean_sense_ms
 float64 mean_actuate_ms
 float64 mean_barrier_wait_ms
 uint32 step_samples
+
+# The attitude read-back provider sensing actually uses, and whether it
+# was forced by sensing.force_attitude_provider (E1's treatment) rather
+# than chosen by startup validation. Empty until sensing is configured.
+# A consumer recording provenance must take these from here, not from
+# its own launch parameters: a forced provider left in a bridge YAML
+# would otherwise turn a nominal run into an E1 treatment unrecorded.
+string attitude_provider
+bool attitude_provider_forced

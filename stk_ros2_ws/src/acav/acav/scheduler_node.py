@@ -259,6 +259,11 @@ class SchedulerNode:
         self._backend_type = "unknown"
         self._stk_version = ""
         self._execution_mode = "unknown"
+        # The same for E1's knob: which read-back provider the bridge
+        # actually used, and whether it was forced. None until a status
+        # carries one (an older bridge never does).
+        self._readback_provider = ""
+        self._readback_forced: Optional[bool] = None
         self._started_utc = _utc_now()
 
         self._aggregate = RunAggregate(
@@ -324,6 +329,37 @@ class SchedulerNode:
 
     # -- lockstep step ------------------------------------------------------
 
+    def _observe_attitude_provider(self, message) -> None:
+        provider = (getattr(message, "attitude_provider", "") or "").strip()
+        if not provider:
+            return              # sensing not configured yet, or an old bridge
+        forced = bool(getattr(message, "attitude_provider_forced", False))
+        if (provider, forced) != (self._readback_provider,
+                                  self._readback_forced):
+            LOGGER.info("bridge attitude read-back: %s (%s)", provider,
+                        "FORCED" if forced else "validated")
+            self._readback_provider, self._readback_forced = provider, forced
+            observed = provider if forced else ""
+            if observed != self._options.attitude_provider:
+                LOGGER.error(
+                    "the bridge's attitude read-back is %r (%s), but this "
+                    "run was launched for forced provider %r. The record "
+                    "will carry what the bridge did, and the campaign "
+                    "runner will reject it.", provider,
+                    "forced" if forced else "validated",
+                    self._options.attitude_provider)
+
+    def _recorded_attitude_provider(self) -> str:
+        """Provenance's forced provider: observed when the bridge says."""
+        if self._readback_forced is None:
+            if self._options.attitude_provider:
+                LOGGER.warning(
+                    "no bridge status reported an attitude read-back "
+                    "provider; recording the requested %r unobserved",
+                    self._options.attitude_provider)
+            return self._options.attitude_provider
+        return self._readback_provider if self._readback_forced else ""
+
     def _on_bridge_status(self, message) -> None:
         """Record which backend is actually running, not which was asked for."""
         backend = (message.backend_type or "").strip().lower()
@@ -337,6 +373,7 @@ class SchedulerNode:
                         message.stk_version_string or "unknown")
         self._backend_type = backend or "unknown"
         self._stk_version = message.stk_version_string or ""
+        self._observe_attitude_provider(message)
 
         # E6's breakdown. Observed unconditionally, on every status
         # message, not just during a designated "E6 run" -- it costs
@@ -754,7 +791,8 @@ class SchedulerNode:
                 execution_mode=self._execution_mode,
                 scenario_sha256=digest,
                 gains=_parse_json_object(self._options.gains_json, "gains"),
-                attitude_provider=self._options.attitude_provider,
+                attitude_provider=self._recorded_attitude_provider(),
+                attitude_readback_provider=self._readback_provider,
                 code_version=_code_version(),
                 fault=_parse_json_value(self._options.fault_json, "fault"),
                 started_utc=self._started_utc,

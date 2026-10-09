@@ -104,33 +104,50 @@ def e1_convention_figure(comparison: Dict[str, Any]):
     fig, ax = _figure(width=4.8, height=4.2)
     values = [schedulers[k]["capture_rate"] for k in keys]
     colors = [CATEGORICAL[0], CATEGORICAL[7]]
-    # A floor height so a 0% (or near-zero) result still draws as a
-    # visible sliver -- a bar chart with an invisible bar reads as a
-    # missing data point, not as "this is exactly the finding".
-    floor = 0.012
-    heights = [max(v, floor) for v in values]
-    bars = ax.bar(["Validated\npairing", "Mis-paired\n(inertial vs CBFQuat)"],
-                  heights, color=colors, width=0.55)
+    forced = comparison.get("forced_provider") or []
+    treatment = (forced[0] if len(forced) == 1 else "forced provider")
+    labels = []
+    for key, name in zip(keys, ("Validated pairing", treatment)):
+        runs = int(schedulers[key].get("runs", 0))
+        labels.append(f"{name}\n({runs} run{'s' if runs != 1 else ''})")
+    # True heights. A 0% bar is drawn as a zero marker on the baseline
+    # rather than as a bar with a fake minimum height: an invisible bar
+    # reads as a missing data point, but a floored one misstates the
+    # value, and this chart's whole content is that value.
+    bars = ax.bar(labels, values, color=colors, width=0.55)
+    for bar, value, color in zip(bars, values, colors):
+        if value <= 0.0:
+            ax.hlines(0.0, bar.get_x(), bar.get_x() + bar.get_width(),
+                      colors=color, linewidth=3, zorder=3)
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("Capture rate")
-    ax.set_title("E1 -- A convention error that raises nothing")
-    for bar, value in zip(bars, values):
-        ax.annotate(f"{value:.0%}", (bar.get_x() + bar.get_width() / 2,
-                                     bar.get_height()),
+    # Not "raises nothing": E1's treatment disables the mismatch guard
+    # on purpose (attitude_mismatch_policy=e1_readback_ablation). With
+    # the guard on, this mis-pairing stops the run instead.
+    ax.set_title("E1 -- Reference-frame mismatch vs capture\n"
+                 "(treatment: mismatch guard disabled)", fontsize=11)
+    for key, bar, value in zip(keys, bars, values):
+        outcomes = schedulers[key].get("outcomes") or {}
+        captured = int(outcomes.get("captured", 0))
+        attempted = sum(int(n) for o, n in outcomes.items()
+                        if o != "not_attempted")
+        ax.annotate(f"{value:.0%}  ({captured}/{attempted})",
+                    (bar.get_x() + bar.get_width() / 2, bar.get_height()),
                     xytext=(0, 4), textcoords="offset points",
                     ha="center", color=INK_PRIMARY, fontsize=10,
                     fontweight="bold")
     # The drop, drawn between the two bars' TOPS rather than floated
     # off to one side, so it reads as connecting the two data points
     # rather than as an unrelated callout. The delta label sits near
-    # the HIGH end of the connector, well clear of the "0%" value label
-    # anchored at the low bar's own top.
+    # the HIGH end of the connector, well clear of the low bar's own
+    # value label. Percentage POINTS: 100% -> 0% is not a "-100%" ratio.
     drop = values[0] - values[1]
-    ax.annotate("", xy=(1, heights[1]), xytext=(0, heights[0]),
+    # Stop short of the low bar's value label instead of crossing it.
+    ax.annotate("", xy=(1, values[1] + 0.07), xytext=(0, values[0]),
                arrowprops=dict(arrowstyle="-", color=INK_MUTED, lw=0.8,
                               linestyle=(0, (3, 2))))
-    label_x, label_y = 0.28, heights[0] - drop * 0.28
-    ax.annotate(f"−{drop:.0%}", xy=(label_x, label_y),
+    label_x, label_y = 0.28, values[0] - drop * 0.28
+    ax.annotate(f"−{100 * drop:.0f} pp", xy=(label_x, label_y),
                xytext=(10, 0), textcoords="offset points",
                ha="left", va="center", color=INK_SECONDARY, fontsize=9)
     fig.tight_layout()
@@ -169,7 +186,9 @@ def e2_capture_vs_coverage_figure(schedulers: Dict[str, Any]):
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("Rate")
     ax.set_title("E2 -- Capacity claimed vs capacity delivered")
-    ax.legend(loc="upper right", ncols=1)
+    # Below the axes: inside, it sat on top of a 100% bar.
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncols=2,
+             frameon=False)
 
     for i, (c, v) in enumerate(zip(capture, coverage)):
         ax.annotate(f"{c:.0%}", (i - width / 2, c), xytext=(0, 4),

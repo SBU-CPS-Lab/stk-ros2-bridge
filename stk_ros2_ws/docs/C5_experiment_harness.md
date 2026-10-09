@@ -172,14 +172,28 @@ inflating a determinism claim it does not support.
 E1's treatment sets `sensing.force_attitude_provider` on the bridge,
 pairing the Earth-fixed read-back provider (`ECF Attitude Quaternions`)
 against the inertial command form ACAV uses (`AddAttitude Quat`, see
-`config/bridge_params_acav.yaml`). The result is wrong by the
-Earth-rotation angle and **nothing raises** — which is the finding, and
-also why the knob fails loudly on an unrecognised provider name rather
-than falling back to the validated one: a typo that silently produced
-the nominal pairing would yield a "treatment" that behaves like the
-control and reports that mis-pairing costs nothing. The forced provider
-is recorded in the run's provenance, so a mis-paired run is identifiable
-from the results rather than only from the launch command's history.
+`config/bridge_params_acav.yaml`). The read-back is wrong by the
+Earth-rotation angle. The twin's own mismatch guard would stop such a run,
+so the treatment also disables it (`attitude_mismatch_policy:
+e1_readback_ablation` in the run configuration): E1 measures what the
+guard prevents, not a silent failure of the guarded system. The knob fails
+loudly on an unrecognised provider name rather than falling back to the
+validated one: a typo that silently produced the nominal pairing would
+yield a "treatment" that behaves like the control and reports that
+mis-pairing costs nothing.
+
+`run_acav_run.py` delivers the provider: it writes a per-run copy of the
+bridge YAML with `sensing.force_attitude_provider` set from the run (empty
+for every non-treatment run, so a value left in a shared file cannot turn
+a nominal run into a treatment). The provider is then **observed, like the
+backend**: the bridge reports the provider it reads through and whether it
+was forced on `BridgeStatus`, the scheduler records it as
+`provenance.attitude_readback_provider` and derives
+`provenance.attitude_provider` (the forced provider, empty for the
+validated pairing) from it, and the runner rejects an E1 record whose
+read-back provider was never observed. Until 2026-10 the recorded
+provider was the scheduler's launch parameter, which labelled the record
+without proving what the bridge did.
 
 E4 does not sweep damping: C3 fixed ζ = 0.707, and a third axis would
 take the campaign from an overnight run to a weekend one for a parameter

@@ -8,9 +8,9 @@ measured. Written for whoever writes the paper: every number here comes
 from a run record, a log, or a test output, and each section says which.
 
 Run data is not in the repository (`results/` is ignored). The two E6
-campaigns are kept as the bundles `E6_run/` and `E6_run2/` (records, run
-configurations, per-run logs and topic captures, `campaign.json`, and the
-report figures).
+campaigns are kept as the bundles `E6_run/` and `E6_run2/`, E1 as
+`E1_run/` and E2 as `E2_run/` (records, run configurations, per-run logs
+and topic captures, `campaign.json`, and the report figures).
 
 ## 1. Bridge against live STK
 
@@ -117,23 +117,112 @@ Reading the two campaigns:
   code version (B corresponds to `b8edbae`, A to the branch at
   `c80b394`, both inferred from dates, not recorded), and
   `scenario_sha256` is empty because no scenario path was passed. Both
-  are recorded from now on (section 7).
+  are recorded from now on (section 9).
 
-## 6. Experiments not yet run live
+## 6. E1 — attitude read-back mismatch (2026-10-08)
+
+One lockstep run per arm, dynamics-aware scheduler, real COM backend.
+The treatment reads attitude back through `ECF Attitude Quaternions`
+while the twin commands inertial quaternions, with the twin's mismatch
+guard disabled (`attitude_mismatch_policy: e1_readback_ablation`); with
+the guard on, the same mis-pairing stops the run instead. Both records
+carry `188ab52…+dirty`.
+
+| | Control (validated pairing) | Treatment (forced ECF read-back) |
+|---|---|---|
+| Captured / attempted | **5 / 5** | **0 / 5** |
+| Outcomes | all `captured` (T5, T7 declined) | all `no_access_and_not_settled` |
+| Pointing error at image | T1 0.0019°, T2 0.0017°, T3 0.107°, T4 0.0016°, T6 0.0016° | 143.4°, 147.0°, 98.6°, 51.2°, 126.1° |
+| Actuator-limiting episodes | 3 | 61 |
+| Peak wheel momentum (fraction) | 0.52, 0.50, 0.08 | 0.31, 0.46, 0.10 |
+| SAFE entered | no | no |
+| Step / sense (ms) | 557.4 / 528.1 | 583.0 / 552.5 |
+
+- **The treatment was applied.** The bridge log shows
+  `ATTITUDE READ-BACK PROVIDER FORCED to 'ECF Attitude Quaternions'`.
+  Independently, the topic captures show STK's read-back differing from
+  the command written for the same time by 48.2° (median; 47.6–48.8° over
+  the first 300 s). That is the Earth rotation angle at the scenario
+  epoch (47.6°), growing at the Earth's rotation rate.
+- **Mechanism.** Each step the twin integrates from the attitude it is
+  given. Fed the Earth-fixed read-back as if it were inertial, its next
+  command is rotated by that angle again, so the commanded attitude
+  jumps ~48° every 0.1 s step. The treatment is therefore a runaway, not
+  a small bias, and the paper should describe it that way.
+- **The control reproduces E6.** Its determinism signature is identical
+  to all five E6 campaign-B runs and to E2's dynamics-aware run.
+- **Loop health.** Both runs: 0 commands late, rejected or missing. The
+  bridge's "attitude not as written" count is 0 in both, but it is not
+  evidence for the treatment: that check skips read-backs in a different
+  frame from the command, which is every treatment read.
+- **Provenance.** The `+dirty` flag counts tracked files only; the change
+  was the runbook being edited (committed as `7cc9e39` after the runs).
+  The identical signature supports that no code changed, but the records
+  are not attributable to a commit. The recorded provider came from the
+  scheduler's launch parameter, not from the bridge; it is now observed
+  (section 9).
+- At t = 720 s both runs log the end-of-window missing body-rate sample
+  (section 5); both records were written before it.
+
+## 7. E2 — kinematic vs. dynamics-aware scheduling (2026-10-08)
+
+One lockstep run per scheduler, validated pairing, strict guard, real
+COM backend. Both records carry `7cc9e39…+dirty` (the E2 runbook edit,
+committed as `363e207` after the runs).
+
+| | Kinematic | Dynamics-aware |
+|---|---|---|
+| Attempted | 7 | 5 (T5, T7 declined) |
+| Captured | 5 | 5 |
+| Capture rate | 71.4% | **100%** |
+| Coverage (captured / 7) | 71.4% | 71.4% |
+| Over-promise gap ((attempted − captured) / attempted) | 28.6% | 0% |
+| Failed attempts | T5 `not_settled` (0.29° at image, 0.75° worst in the 2 s hold), T7 `not_settled` (1.03°, 1.07°) | — |
+| Actuator-limiting episodes / SAFE | 3 / no | 3 / no |
+| Step / sense (ms) | 583.8 / 551.9 | 592.6 / 561.4 |
+| Wall time (scheduler) | 70 min 18 s | 71 min 20 s |
+
+- **What it shows.** The kinematic plan promised seven images and the
+  closed loop delivered five; the two it lost are exactly the two the
+  dynamics-aware plan declined. Capture threshold is 0.5° held for 2 s:
+  T5 was inside it at the image epoch but not for the whole hold, i.e.
+  still settling. Coverage is unchanged, so the result is fewer failed
+  attempts, not more images.
+- T1–T4 are bit-identical between the two runs (the schedules agree up
+  to T5), and the dynamics-aware run's signature is identical to E1's
+  control and to E6 campaign B.
+- Loop health: 0 commands late, rejected or missing; no attitude
+  mismatches. End-of-window body-rate sample missing at t = 720 s, as in
+  section 5.
+
+**Status of E1 and E2.** Both are complete as one run per arm and their
+outcomes are consistent with every other run of the same configuration.
+Before citing them, re-run both from a clean commit: that makes them
+attributable, records the observed read-back provider, and checks the
+COM extraction change of `120c0bf` (below) against these signatures.
+
+**Sensing speed-up, not yet verified here.** `120c0bf` reads all column
+names of a data-provider result in one COM call instead of two per
+column. Its commit message reports a live run going from 70 min 16 s to
+24 min 42 s and sense from 553.5 to 171.4 ms with the determinism
+signature preserved; that run's bundle has not been reviewed. E1 and E2
+ran before the change.
+
+## 8. Experiments not yet run live
 
 | Experiment | Question | Live status |
 |---|---|---|
-| E1 | Does convention validation matter? (explicit mismatch-guard ablation) | not run |
-| E2 | Kinematic vs. dynamics-aware scheduling: capture vs. promised coverage | **not run** — the paper's main claim |
+| E1 | Does convention validation matter? (explicit mismatch-guard ablation) | **run** (section 6); re-run from a clean commit before citing |
+| E2 | Kinematic vs. dynamics-aware scheduling: capture vs. promised coverage | **run** (section 7); re-run from a clean commit before citing |
 | E3 | Lockstep vs. free-run determinism | lockstep half shown by E6 (section 5); free-run half not run |
 | E4 | Gain sweep (49 runs) | not run |
 | E5 | Wheel-saturation fault injection and exact replay | not run |
 | E6 | Loop cost | **done** (campaign B) |
 
-At ~1.3 h per run, the full E4 and E5 matrices are days of machine time;
-their size should be decided before they start.
+At ~1.2 h per run before `120c0bf`, the full E4 and E5 matrices are days
+of machine time; their size should be decided before they start.
 
-## 7. Recorded from now on
+## 9. Recorded from now on
 
 - **Code version** (`acav/code_version.py`): the git commit, `+dirty` if
   tracked files were modified, or `unknown (...)`. Written into every run
@@ -143,6 +232,15 @@ their size should be decided before they start.
   its records come from one clean commit.
 - **Scenario fingerprint**: `scenario_sha256` is now the hash of the file
   the scheduler actually loaded, default path included.
+- **Attitude read-back provider, observed.** The bridge reports the
+  provider it reads through, and whether it was forced, on
+  `BridgeStatus`; the scheduler records it
+  (`provenance.attitude_readback_provider`) and derives
+  `provenance.attitude_provider` from it rather than from its own launch
+  parameter. The campaign runner rejects an E1 record without it.
+  `run_acav_run.py` now writes the run's provider into a per-run copy of
+  the bridge configuration (`<run>.logs/bridge_params.yaml`), so E1 no
+  longer needs hand-made bridge files.
 
 Campaigns that will be cited should therefore be run from a clean
 checkout of one commit on `main`.

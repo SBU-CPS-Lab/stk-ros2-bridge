@@ -65,6 +65,10 @@ def test_twin_wait_defaults_to_one_minute_and_allows_override():
 
 
 def _config(tmp_path, **overrides):
+    base = tmp_path / "bridge.yaml"
+    if not base.exists():
+        base.write_text("sensing:\n  satellites: ['*/Satellite/SSS-1']\n",
+                        encoding="utf-8")
     defaults = dict(
         run_id="E6-seed1", experiment="E6", scheduler="dynamics_aware",
         execution_mode="lockstep", seed="1",
@@ -113,6 +117,61 @@ class TestArgvBuilding:
         config = _config(tmp_path, seed="")
         argv = scheduler_argv(config)
         assert "seed:=" not in " ".join(argv)
+
+
+class TestPerRunBridgeConfig:
+    """``--attitude-provider`` must reach the bridge, not only the record.
+
+    Until 2026-10 it reached only the scheduler: the record said
+    "treatment" whatever the bridge read through, and E1's treatment ran
+    only because a hand-made YAML was passed alongside it.
+    """
+
+    def _launched_config(self, tmp_path, **overrides):
+        import yaml
+        config = _config(tmp_path, **overrides)
+        launched = []
+        def popen(argv, **kwargs):
+            launched.append(argv)
+            return FakeProcess()
+        deps = Deps(popen=popen,
+                    wait_for_bridge_connected=lambda *a: ConnectResult(True, "com"),
+                    wait_for_twin_ack=lambda *a: True, prompt=lambda m: None)
+        assert execute_run(config, deps) == 0
+        params = dict(item.split(":=", 1) for item in launched[0] if ":=" in item)
+        path = json.loads(params["config_file"])
+        assert path != config.bridge_config
+        with open(path, encoding="utf-8") as handle:
+            return yaml.safe_load(handle)
+
+    def test_the_treatment_provider_is_forced_on_the_bridge(self, tmp_path):
+        settings = self._launched_config(
+            tmp_path, attitude_provider="ECF Attitude Quaternions")
+        assert settings["sensing"]["force_attitude_provider"] == \
+            "ECF Attitude Quaternions"
+        assert settings["sensing"]["satellites"] == ["*/Satellite/SSS-1"]
+
+    def test_a_provider_left_in_the_base_file_is_cleared(self, tmp_path):
+        (tmp_path / "bridge.yaml").write_text(
+            "sensing:\n  force_attitude_provider: ECF Attitude Quaternions\n",
+            encoding="utf-8")
+        settings = self._launched_config(tmp_path, attitude_provider="")
+        assert settings["sensing"]["force_attitude_provider"] == ""
+        # The base file itself is not edited.
+        assert "ECF" in (tmp_path / "bridge.yaml").read_text(encoding="utf-8")
+
+    def test_an_unreadable_base_config_fails_before_any_launch(self, tmp_path):
+        config = _config(tmp_path, bridge_config=str(tmp_path / "missing.yaml"))
+        launched = []
+        deps = Deps(popen=lambda *a, **k: launched.append(a),
+                    wait_for_bridge_connected=lambda *a: ConnectResult(True, "com"),
+                    wait_for_twin_ack=lambda *a: True, prompt=lambda m: None)
+        assert execute_run(config, deps) == deploy_run_cli.EXIT_STEP_FAILED
+        assert launched == []
+        summary = json.loads(
+            (tmp_path / "run.logs" / "summary.json").read_text(encoding="utf-8"))
+        assert summary["steps"][0]["step"] == "bridge_config"
+        assert not summary["steps"][0]["ok"]
 
 
 class TestExecuteRunHappyPath:

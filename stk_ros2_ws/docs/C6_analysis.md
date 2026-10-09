@@ -84,7 +84,15 @@ E1's comparison is **not** grouped by scheduler the way E2's is:
 read-back provider was forced (`Provenance.attitude_provider`), because
 E1 holds the scheduler fixed and varies the provider instead — grouping
 by scheduler the way `compare_schedulers` does would collapse E1's two
-runs into one group and hide the entire comparison.
+runs into one group and hide the entire comparison. That field is
+derived from what the bridge reported (`BridgeStatus.attitude_provider`),
+not from the launch command.
+
+The E1 figure draws a 0% arm at its true height with a marker on the
+baseline (an earlier version floored it at 1.2% so it stayed visible,
+which misstated it), labels each bar with captured/attempted and the run
+count, gives the drop in percentage points, and names the treatment as a
+guard ablation in the title.
 
 ## 5. What E6 actually measures
 

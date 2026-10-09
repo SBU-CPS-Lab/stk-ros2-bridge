@@ -791,6 +791,10 @@ class StkBridgeNode:
             last_error=self.health.last_error,
             timings=timings,
             when=now,
+            attitude_provider=(self.sensing.attitude_provider
+                               if self.sensing is not None else ""),
+            attitude_provider_forced=(self.sensing is not None
+                                      and self.sensing.attitude_provider_forced),
         )
         self.bridge_publishers.publish_diagnostics(
             backend, self.scenario.validation_report, self.worker, now)
