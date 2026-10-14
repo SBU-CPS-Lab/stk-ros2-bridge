@@ -101,10 +101,15 @@ python src\acav\scripts\run_acav_run.py `
     --bridge-config src\acav\config\bridge_params_acav.yaml
 ```
 
-(`--run-config` does not need to exist yet if you are not overriding
-gains -- see `campaign_runner.write_run_config`; for a hand-run smoke
-test create an empty one first: `'{"run_id":"E6-smoke-1","gains":{},
-"fault":null}' | Out-File -Encoding utf8 results\E6_smoke\E6-smoke-1.runconfig.json`.)
+Do not create the `--run-config` file by hand. If it does not exist,
+`run_acav_run.py` writes it before starting the bridge, from this run's
+`--run-id`, `--experiment`, `--gains-json`, `--fault-json` and
+`--attitude-provider` (the same fields a campaign writes), as UTF-8
+without a byte-order mark. Without `--run-config` it goes beside the
+output as `<output>.runconfig.json`. The absolute path is written to
+`run.log` and `summary.json` and printed at the MATLAB handoff. An
+existing file is left unchanged, but the run stops before startup if it
+is not a JSON object, has a byte-order mark, or names a different run id.
 
 What should happen, in order:
 

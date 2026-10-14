@@ -199,6 +199,96 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
     return os.path.abspath(path)
 
 
+class RunConfigError(ValueError):
+    """The run's MATLAB run configuration cannot be used or created."""
+
+
+def _json_argument(text: str, flag: str):
+    """A ``--gains-json``/``--fault-json`` value, or None when empty."""
+    if not (text or "").strip():
+        return None
+    try:
+        return json.loads(text)
+    except ValueError as error:
+        raise RunConfigError(f"{flag} is not valid JSON: {error}") from error
+
+
+def standalone_run_config(config: RunConfig, version: str) -> dict:
+    """The run configuration a campaign would have written for this run.
+
+    Same fields as ``campaign_runner.write_run_config``, from this run's
+    own arguments: a standalone run has no ``RunSpec``, and its run id is
+    the operator's, not one derived from the configuration.
+    """
+    gains = _json_argument(config.gains_json, "--gains-json")
+    if gains is None:
+        gains = {}
+    if not isinstance(gains, dict):
+        raise RunConfigError("--gains-json must be a JSON object")
+    fault = _json_argument(config.fault_json, "--fault-json")
+    if fault is not None and not isinstance(fault, dict):
+        raise RunConfigError("--fault-json must be a JSON object or null")
+    return {
+        "run_id": config.run_id,
+        "gains": gains,
+        "fault": fault,
+        "experiment": config.experiment,
+        "attitude_provider": config.attitude_provider,
+        "code_version": version,
+        # The campaign writer's rule, which +adcs/config.m enforces:
+        # the ablation only for an E1 run with a forced provider.
+        "attitude_mismatch_policy": (
+            "e1_readback_ablation" if config.experiment == "E1" and
+            config.attitude_provider else "strict"),
+    }
+
+
+def prepare_run_config(config: RunConfig, version: str):
+    """Make sure the twin's run configuration exists; return its path.
+
+    Returns ``(absolute path, created)``. A missing file is written from
+    this run's arguments, as UTF-8 without a byte-order mark. An existing
+    one -- a campaign run's, or an operator's override -- is left
+    byte-for-byte unchanged, but must be a JSON object for this run: a
+    file the twin cannot read, or one written for another run, is
+    rejected here rather than discovered after the bridge has started.
+    """
+    from acav.campaign_runner import run_config_path
+
+    path = os.path.abspath(config.run_config or run_config_path(config.output))
+    if os.path.exists(path):
+        try:
+            with open(path, "rb") as handle:
+                raw = handle.read()
+        except OSError as error:
+            raise RunConfigError(f"cannot read {path}: {error}") from error
+        if raw.startswith(b"\xef\xbb\xbf"):
+            raise RunConfigError(
+                f"{path} starts with a UTF-8 byte-order mark; rewrite it as "
+                f"UTF-8 without one (Windows PowerShell Out-File adds it)")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except ValueError as error:
+            raise RunConfigError(
+                f"{path} is not valid UTF-8 JSON: {error}") from error
+        if not isinstance(payload, dict):
+            raise RunConfigError(
+                f"{path} must contain a JSON object, not "
+                f"{type(payload).__name__}")
+        if "run_id" in payload and payload["run_id"] != config.run_id:
+            raise RunConfigError(
+                f"{path} is for run {payload['run_id']!r}, not "
+                f"{config.run_id!r}")
+        return path, False
+
+    payload = standalone_run_config(config, version)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.write("\n")
+    return path, True
+
+
 def scheduler_argv(config: RunConfig) -> List[str]:
     # ROS parses parameter values as YAML. Quote strings explicitly so an
     # empty value, JSON payload, numeric-looking ID or Windows path retains
@@ -380,6 +470,16 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
     scheduler_proc = None
     scheduler_returncode = EXIT_STEP_FAILED
     try:
+        # Before anything is launched: the twin cannot start without it.
+        try:
+            run_config, created = prepare_run_config(config, version)
+        except RunConfigError as error:
+            record("run_config", False, str(error))
+            return EXIT_STEP_FAILED
+        summary["run_config"] = run_config
+        run_log.info("run config (%s): %s",
+                     "created" if created else "existing, unchanged",
+                     run_config)
         try:
             bridge_config = write_bridge_config(config, log_dir, run_log)
         except Exception as error:      # noqa: BLE001 - OSError, YAMLError, a non-mapping file
@@ -420,7 +520,7 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 "=== Start the MATLAB/Simulink twin now ===\n"
                 f"  matlab -batch \"cd('src/stk_matlab'); "
                 f"setup_stk_ros; "
-                f"build_acav_twin('RunConfigPath', '{config.run_config}')\"\n"
+                f"build_acav_twin('RunConfigPath', '{run_config}')\"\n"
                 "then open the generated acav_twin.slx and press Play.\n"
                 "Press Enter here once it is running "
                 "(this script will then WAIT for its barrier ack, not "

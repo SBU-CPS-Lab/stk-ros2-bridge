@@ -393,6 +393,158 @@ def test_interrupt_stops_scheduler_and_bridge(tmp_path):
     assert bridge.terminated and scheduler.terminated
 
 
+class TestStandaloneRunConfig:
+    """A standalone run must have its MATLAB run configuration on disk
+    before any bridge starts. Campaign runs already wrote one
+    (campaign_runner.write_run_config); a hand-launched smoke run printed
+    a RunConfigPath that did not exist, so build_acav_twin could not
+    start after a clean setup.
+    """
+
+    def _run(self, tmp_path, **overrides):
+        config = _config(tmp_path, **overrides)
+        events = {"launched": [], "prompts": [], "existed_at_launch": []}
+
+        def popen(argv, **kwargs):
+            events["launched"].append(argv)
+            events["existed_at_launch"].append(
+                os.path.isfile(self._expected_path(config)))
+            return FakeProcess()
+
+        deps = Deps(popen=popen,
+                    wait_for_bridge_connected=lambda *a: ConnectResult(True, "com"),
+                    wait_for_twin_ack=lambda *a: True,
+                    prompt=events["prompts"].append)
+        code = execute_run(config, deps)
+        summary = json.loads(open(os.path.join(
+            config.resolved_log_dir(), "summary.json"), encoding="utf-8").read())
+        return code, events, summary, config
+
+    @staticmethod
+    def _expected_path(config):
+        if config.run_config:
+            return os.path.abspath(config.run_config)
+        return os.path.abspath(
+            os.path.splitext(config.output)[0] + ".runconfig.json")
+
+    def test_a_missing_config_is_created_before_the_bridge_launches(self, tmp_path):
+        code, events, summary, config = self._run(
+            tmp_path, gains_json='{"natural_frequency_rad_s": 1.2}',
+            fault_json='{"axis": 1, "at_s": 12.5, "kind": "saturation"}')
+        assert code == 0
+        assert events["existed_at_launch"] == [True, True]
+        payload = json.loads(open(self._expected_path(config),
+                                  encoding="utf-8").read())
+        assert payload["run_id"] == "E6-seed1"
+        assert payload["experiment"] == "E6"
+        assert payload["gains"] == {"natural_frequency_rad_s": 1.2}
+        assert payload["fault"] == {"axis": 1, "at_s": 12.5, "kind": "saturation"}
+        assert payload["attitude_provider"] == ""
+        assert payload["attitude_mismatch_policy"] == "strict"
+        assert payload["code_version"] == summary["code_version"]
+
+    def test_default_path_is_beside_the_output_and_printed_absolute(self, tmp_path):
+        code, events, summary, config = self._run(tmp_path, run_config="")
+        expected = str(tmp_path / "run.runconfig.json")
+        assert os.path.isfile(expected)
+        assert summary["run_config"] == expected
+        assert expected in events["prompts"][0]
+
+    def test_a_relative_path_is_resolved_and_printed_absolute(
+            self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        code, events, summary, config = self._run(
+            tmp_path, run_config=os.path.join("cfg", "smoke.runconfig.json"))
+        expected = str(tmp_path / "cfg" / "smoke.runconfig.json")
+        assert code == 0 and os.path.isfile(expected)
+        assert summary["run_config"] == expected
+        assert expected in events["prompts"][0]
+
+    def test_the_created_file_has_no_byte_order_mark(self, tmp_path):
+        self._run(tmp_path)
+        raw = (tmp_path / "run.runconfig.json").read_bytes()
+        assert raw[:3] != b"\xef\xbb\xbf"
+        json.loads(raw.decode("utf-8"))      # strict UTF-8, no BOM
+
+    @pytest.mark.parametrize("experiment, provider, policy", [
+        ("E1", "ECF Attitude Quaternions", "e1_readback_ablation"),
+        ("E1", "", "strict"),
+        ("E2", "ECF Attitude Quaternions", "strict"),
+        ("E6", "", "strict"),
+    ])
+    def test_the_mismatch_policy_follows_the_campaign_rule(
+            self, tmp_path, experiment, provider, policy):
+        from acav.campaign import RunSpec
+        from acav.campaign_runner import write_run_config
+        self._run(tmp_path, experiment=experiment, attitude_provider=provider)
+        standalone = json.loads((tmp_path / "run.runconfig.json")
+                                .read_text(encoding="utf-8"))
+        assert standalone["attitude_mismatch_policy"] == policy
+        # Same rule and same fields as the campaign writer.
+        (tmp_path / "campaign").mkdir()
+        written = write_run_config(
+            RunSpec(experiment=experiment, attitude_provider=provider),
+            str(tmp_path / "campaign" / "c.json"))
+        campaign = json.loads(open(written, encoding="utf-8").read())
+        assert campaign["attitude_mismatch_policy"] == policy
+        assert set(standalone) == set(campaign)
+
+    def test_an_existing_config_is_preserved_byte_for_byte(self, tmp_path):
+        path = tmp_path / "run.runconfig.json"
+        original = (b'{"run_id": "E6-seed1", "gains": '
+                    b'{"profile_authority": 0.6}, "fault": null}\n')
+        path.write_bytes(original)
+        code, events, summary, config = self._run(
+            tmp_path, gains_json='{"profile_authority": 0.9}')
+        assert code == 0
+        assert path.read_bytes() == original
+
+    def test_a_campaign_written_config_is_used_unchanged(self, tmp_path):
+        from acav.campaign import RunSpec
+        from acav.campaign_runner import write_run_config
+        run = RunSpec(experiment="E1",
+                      attitude_provider="ECF Attitude Quaternions")
+        output = str(tmp_path / f"{run.run_id}.json")
+        path = write_run_config(run, output)
+        before = open(path, "rb").read()
+        code, events, summary, config = self._run(
+            tmp_path, run_id=run.run_id, experiment="E1",
+            attitude_provider="ECF Attitude Quaternions",
+            output=output, run_config=path)
+        assert code == 0
+        assert open(path, "rb").read() == before
+
+    @pytest.mark.parametrize("content, reason", [
+        (b"{not json", "not valid"),
+        (b"[1, 2, 3]", "JSON object"),
+        (b'"text"', "JSON object"),
+        (b'{"run_id": "someone-else"}', "someone-else"),
+        (b'\xef\xbb\xbf{"run_id": "E6-seed1"}', "byte-order mark"),
+    ])
+    def test_a_bad_existing_config_fails_before_any_launch(
+            self, tmp_path, content, reason):
+        path = tmp_path / "run.runconfig.json"
+        path.write_bytes(content)
+        code, events, summary, config = self._run(tmp_path)
+        assert code == deploy_run_cli.EXIT_STEP_FAILED
+        assert events["launched"] == []
+        assert summary["steps"][0]["step"] == "run_config"
+        assert not summary["steps"][0]["ok"]
+        assert reason in summary["steps"][0]["detail"]
+        assert path.read_bytes() == content
+
+    @pytest.mark.parametrize("field, value", [
+        ("gains_json", "{oops"), ("gains_json", "[1]"),
+        ("fault_json", "{oops"), ("fault_json", "3"),
+    ])
+    def test_unusable_requested_overrides_fail_before_any_launch(
+            self, tmp_path, field, value):
+        code, events, summary, config = self._run(tmp_path, **{field: value})
+        assert code == deploy_run_cli.EXIT_STEP_FAILED
+        assert events["launched"] == []
+        assert not (tmp_path / "run.runconfig.json").exists()
+
+
 def test_topic_recorder_starts_before_bridge_and_closes_on_connection_failure(tmp_path):
     from types import SimpleNamespace
     events = []
