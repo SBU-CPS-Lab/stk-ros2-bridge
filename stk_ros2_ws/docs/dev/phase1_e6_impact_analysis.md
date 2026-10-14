@@ -258,13 +258,60 @@ so service queries are unaffected.
   angle ≤ 1e-12 rad at every lockstep epoch (bit-identical preferred;
   report exact maxima and exact-zero counts). (C)'s runtime audit defaults
   to the same values (configurable); not loosened without approval.
+* **Verdicts after the live results** (user): (B) GO, with the §11
+  conditions. (C) GO, on condition that the runs after (C) reproduce the
+  reference determinism signature exactly; if a signature changes, stop
+  and analyse rather than accept it.
 
-## Live checks pending
+## Live checks
 
-1. **HPOP force model** of `*/Satellite/SSS-1`: drag/SRP use, model types,
-   Cd/Cr, area/mass, plug-ins, third bodies, mass (read-only inspection script).
-2. **Provider equivalence**: segment quaternion versus Attitude Quaternions,
-   and interval versus instantaneous orbit rows, at every lockstep epoch
-   (equivalence diagnostic run).
+1. **HPOP force model** of `*/Satellite/SSS-1` — **DONE** (see Live results).
+2. **Provider equivalence** (segment quaternion vs Attitude Quaternions;
+   interval vs instantaneous orbit rows) — **DONE** (see Live results).
 3. **First-query penalty** (§5): execute means of the first live query
-   before and after (C).
+   before and after (C) — pending.
+
+## Live results — measured by the user, E6-diag-1 on 83c4c77
+
+Files: `results/E6_diag_83c4c77/` (not in the repository). Re-read from
+the files during review: `SSS-1_hpop_force_model.txt`,
+`E6-diag-1.logs/equivalence_diagnostic_summary.json`,
+`E6-diag-1.logs/equivalence_diagnostic.jsonl`, `E6-diag-1.json`.
+
+* **Determinism.** The E6-diag-1 determinism signature is character for
+  character identical to E6-smoke-1 (c291dfa); both records carry
+  scenario_sha256 `c8825803…ba9`, backend com, lockstep, 5/5 captured,
+  no SAFE, 0 dropped samples. The diagnostic did not perturb the loop,
+  and E6 repeated exactly on this machine.
+* **Force model.** HPOP; EGM2008 21×21; drag on, Spherical, Jacchia-Roberts,
+  Cd 2.2, area/mass 0.02; SRP on, Spherical, Cr 1.0, area/mass 0.02,
+  dual-cone shadow; third bodies Moon and Sun. Assessment: NO
+  attitude-dependent force. Satellite mass in STK is 1000 kg — STK's
+  default, confirming that `mass_kg: 8.0` is never applied (§10); the
+  area/mass ratio 0.02 is likewise not set by the repository.
+* **(B) attitude**: sign-aligned angle 0.0 at all 7199 compared epochs
+  (exact_zero 7199/7199), including t = 0.1 s (basic attitude) and the
+  first 20 raw dumps — bit-identical.
+* **(C) orbit**: |Δr| max 2.59e-8 m, mean 1.34e-8 m; |Δv| max 2.92e-11 m/s,
+  mean 1.48e-11 m/s; exact_zero 1385/7199 for both; time_mismatch_ms 0 at
+  every epoch. All far below the Q6 bar (1e-6 m, 1e-9 m/s), but not
+  bit-identical.
+* **Terminal epoch** t = 720 s: `no_segment_result` (segment NO DATA, as on
+  main) and `terminal_epoch`; Attitude Quaternions was available there.
+
+**Hypothesis (not fact) for the orbit differences.** The non-zero
+differences look like a sample-time offset of about 1e-12 s, not an orbit
+difference. Over the 5814 non-zero epochs the median |Δv|/|Δr| is
+1.108e-3 s⁻¹, matching a/v = 1.107e-3 s⁻¹ for a circular orbit at
+6878.137 km — the ratio a pure time shift produces — and |Δr|/v implies
+|Δt| ≈ 1.7e-12 s (median), 3.4e-12 s (max). The exact zeros fall at the
+first epoch of each block and at epochs on whole 0.5 s multiples
+(block offsets 0, 4, 9, …, 94, 99), and become rarer later in a block
+(e.g. offset 89: 47/72). This is consistent with STK forming interval
+sample times arithmetically from the block start (start + i·0.1 s, or
+accumulated, in double precision), whereas an instantaneous query
+evaluates the exact millisecond parsed from its UTCG text: offsets that
+are exact binary fractions (0.5 s multiples) agree exactly, others differ
+in the last bits of the time. Both paths report the same millisecond
+(time_mismatch_ms 0), so the offset is below the text resolution. Not
+verified against STK internals.
