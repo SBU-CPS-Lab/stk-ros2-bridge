@@ -432,6 +432,19 @@ class StkBackend(abc.ABC):
     @abc.abstractmethod
     def get_scenario_epoch(self) -> StkTime: ...
 
+    @property
+    def revision(self) -> Optional[int]:
+        """A counter that changes on every structural STK change.
+
+        Scenario and object lifecycle, propagator changes, real-time
+        attitude enable/ClearData and arbitrary Connect commands change
+        it; attitude sample writes do not. Anything a caller proved or
+        cached about the scenario is valid only while it is unchanged.
+        None means this backend does not track it, and callers must not
+        rely on anything they proved earlier.
+        """
+        return None
+
     def get_scenario_stop_time(self) -> Optional[StkTime]:
         """The open scenario's analysis stop time, or None if unknown.
 

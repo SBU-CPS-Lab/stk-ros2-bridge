@@ -196,6 +196,20 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
     if (sensing.get("equivalence_diagnostic")
             and not sensing.get("equivalence_diagnostic_dir")):
         sensing["equivalence_diagnostic_dir"] = os.path.abspath(log_dir)
+    # Sensing optimisations (decisions Q2/Q3): E1 compares attitude
+    # read-back conventions, so both arms keep the original sensing path,
+    # and a forced provider is never combined. The effective values are
+    # written explicitly, with the mode label, so the copy beside the logs
+    # says which path this run used.
+    combine = bool(sensing.get("combine_attitude_rate", False))
+    batch = int(sensing.get("orbit_batch_samples", 1) or 1)
+    if config.experiment == "E1" or config.attitude_provider:
+        combine = False
+    if config.experiment == "E1":
+        batch = 1
+    sensing["combine_attitude_rate"] = combine
+    sensing["orbit_batch_samples"] = batch
+    sensing["sensing_mode"] = sensing_mode_label(combine)
     settings["sensing"] = sensing
     path = os.path.join(log_dir, RUN_BRIDGE_CONFIG)
     with open(path, "w", encoding="utf-8") as handle:
@@ -203,13 +217,27 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
     return os.path.abspath(path)
 
 
-def _diagnostic_enabled(bridge_config: str) -> bool:
-    """Whether the per-run bridge config turns the diagnostic on."""
+def sensing_mode_label(combine_attitude_rate: bool) -> str:
+    """The configured sensing mode, as recorded with every run."""
+    return "combined_attitude_rate" if combine_attitude_rate else "separate"
+
+
+def _sensing_labels(bridge_config: str) -> dict:
+    """What the per-run bridge config enables, for summary.json.
+
+    ``sensing_mode`` is the configured mode; whether (B) actually
+    activated is in bridge.log and in the provider BridgeStatus reports.
+    """
     import yaml
 
     with open(bridge_config, encoding="utf-8") as handle:
-        settings = yaml.safe_load(handle) or {}
-    return bool((settings.get("sensing") or {}).get("equivalence_diagnostic"))
+        sensing = (yaml.safe_load(handle) or {}).get("sensing") or {}
+    return {
+        "equivalence_diagnostic": bool(sensing.get("equivalence_diagnostic")),
+        "sensing_mode": sensing_mode_label(
+            bool(sensing.get("combine_attitude_rate", False))),
+        "orbit_batch_samples": int(sensing.get("orbit_batch_samples", 1) or 1),
+    }
 
 
 class RunConfigError(ValueError):
@@ -510,7 +538,9 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             return EXIT_STEP_FAILED
         run_log.info("bridge config: %s (force_attitude_provider=%r)",
                      bridge_config, config.attitude_provider)
-        summary["equivalence_diagnostic"] = _diagnostic_enabled(bridge_config)
+        summary.update(_sensing_labels(bridge_config))
+        run_log.info("sensing mode: %s, orbit_batch_samples=%d",
+                     summary["sensing_mode"], summary["orbit_batch_samples"])
         if summary["equivalence_diagnostic"]:
             run_log.warning("sensing equivalence diagnostic ON: this run's "
                             "timings are inflated and it is not an E6 "

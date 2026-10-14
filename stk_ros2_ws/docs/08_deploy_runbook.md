@@ -388,8 +388,14 @@ not establish statistical significance or prove degradation by itself.
 
 Check `backend_type=com`, `execution_mode=lockstep`, both scheduler exits,
 the recorded code/scenario fingerprints, and `attitude_readback_provider`
-in both records (the validated provider for the control, `ECF Attitude
-Quaternions` for the treatment). Compare target outcomes, pointing errors,
+in both records: `Attitude Quaternions` (the validated provider) for the
+control and `ECF Attitude Quaternions` for the treatment. E1 always runs
+the original sensing path: `run_acav_run.py` turns off the combined
+attitude/rate read and orbit batching for both arms, so both
+`<run_id>.logs\summary.json` files must show `"sensing_mode": "separate"`
+and `"orbit_batch_samples": 1`. A control record naming `Attitude Segment
+Quaternions` means the combined read was active, and the pair is not a
+valid E1 comparison. Compare target outcomes, pointing errors,
 SAFE and actuator metrics, not only the capture label. Capture here means
 satisfying the simulated imaging criteria; it does not generate a camera
 image.
@@ -923,6 +929,48 @@ result; an `IMAGE` label alone is not evidence of successful capture.
 
 Send the log bundle either way -- a run that failed cleanly with a
 clear log is exactly as useful here as one that succeeded.
+
+### Combined attitude and angular-rate read
+
+`sensing.combine_attitude_rate` (true in `bridge_params_acav.yaml`, false in
+the generic bridge) lets one `Attitude Segment Quaternions` query per step
+serve both the attitude and the angular-rate topics, instead of a separate
+`Attitude Quaternions` query. Each run starts with the original separate
+reads. At the first epoch where the bridge wrote an inertial attitude
+sample, it compares the two quaternions; it switches to the single query
+only if they agree within 1e-12 rad (sign-aligned, q and -q equal).
+Otherwise it keeps the separate reads. Any structural change (ClearData,
+`SetAttitude Standard`, object or scenario lifecycle, a propagator change
+or a raw Connect command) returns it to the separate reads until it is
+verified again. If the segment provider returns no data at an epoch (it
+does at the 720 s terminal epoch), that step's attitude comes from
+`Attitude Quaternions` and no rate is published, as before.
+
+It stays off, whatever the YAML says, for E1 (both arms) and for any run
+with a forced attitude provider: `run_acav_run.py` writes
+`combine_attitude_rate: false` into the run's `bridge_params.yaml`.
+Multi-satellite configurations and validation results other than
+`Attitude Quaternions` / `Attitude Segment Quaternions` also keep it off.
+
+To check a run:
+
+```powershell
+Select-String -Path "$logs\bridge.log" -Pattern 'combined attitude/rate'
+(Get-Content "$logs\summary.json" -Raw | ConvertFrom-Json).sensing_mode
+```
+
+The first line should say `combined attitude/rate enabled at ...`, with a
+sign-aligned angle of at most 1e-12 rad. The run record then names
+`Attitude Segment Quaternions` as `attitude_readback_provider`, because
+that is the provider queried for the published attitude. `sensing_mode`
+in `summary.json` and in the run's `bridge_params.yaml` is the configured
+mode, `combined_attitude_rate` or `separate`.
+
+To compare against the original path, run the same E6 configuration
+from a clean commit with the run's bridge configuration copy set to
+`combine_attitude_rate: false`. Never pool timings from the two modes:
+group them by `sensing_mode`. Before relying on the combined read, its
+determinism signature must equal the separate-read reference exactly.
 
 ### COM sensing optimisation and comparison
 

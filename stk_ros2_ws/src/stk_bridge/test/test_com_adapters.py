@@ -453,3 +453,20 @@ def test_scenario_stop_time_without_a_scenario_raises():
     backend._root = SimpleNamespace(CurrentScenario=None)
     with pytest.raises(QueryError):
         backend.get_scenario_stop_time()
+
+
+def test_revision_changes_on_structural_events_not_on_samples():
+    """(B) re-verifies, and (C) drops cached orbit rows, when the revision
+    changes; an ordinary attitude sample must not change it."""
+    backend = ComBackend()
+    backend._execute = Mock()
+    start = backend.revision
+    backend.add_attitude_quaternion("*/Satellite/S", StkTime(0.0),
+                                    (0.0, 0.0, 0.0, 1.0), inertial=True)
+    assert backend.revision == start
+    backend.enable_realtime_attitude("*/Satellite/S")
+    assert backend.revision == start + 1
+    backend.clear_attitude_data("*/Satellite/S")
+    assert backend.revision == start + 2
+    backend.execute_connect("Unload / *")
+    assert backend.revision == start + 3

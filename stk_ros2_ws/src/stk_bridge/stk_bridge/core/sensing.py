@@ -48,6 +48,10 @@ from stk_bridge.backends.base import (
 )
 from stk_bridge.core import conversions as conv
 from stk_bridge.core import data_providers as dp
+from stk_bridge.core.attitude_equivalence import (
+    COMBINE_TOLERANCE_RAD,
+    sign_aligned_angle,
+)
 from stk_bridge.core.frames import FrameRegistry
 from stk_bridge.core.validation import ValidationReport
 from stk_bridge.exceptions import ConventionValidationError, QueryError
@@ -104,6 +108,11 @@ class SensingConfig:
     equivalence_diagnostic: bool = False
     #: Where it writes; run_acav_run.py sets the run's log directory.
     equivalence_diagnostic_dir: str = ""
+    #: (B): read 'Attitude Segment Quaternions' once per step for both
+    #: attitude and rate, after proving at a written sample that its
+    #: quaternion equals the validated 'Attitude Quaternions'. Off by
+    #: default; on for ACAV. See SensingPipeline._update_combine_state.
+    combine_attitude_rate: bool = False
 
     @classmethod
     def from_config(cls, config: Optional[Dict] = None) -> "SensingConfig":
@@ -130,6 +139,8 @@ class SensingConfig:
                 section.get("equivalence_diagnostic", False)),
             equivalence_diagnostic_dir=str(
                 section.get("equivalence_diagnostic_dir", "") or ""),
+            combine_attitude_rate=bool(
+                section.get("combine_attitude_rate", False)),
         )
 
 
@@ -156,6 +167,18 @@ def _match_attitude_spec(name: str):
         if wanted in candidates:
             return spec
     return None
+
+
+def _raw_quaternion(raw) -> Optional[Tuple[float, float, float, float]]:
+    """(x, y, z, w) as STK returned it, from a stored (spec, data, mapping)."""
+    if raw is None:
+        return None
+    spec, data, mapping = raw
+    if data is None or data.row_count == 0:
+        return None
+    return conv.quaternion_from_stk_elements(
+        *(dp.first_value(data, spec, mapping, name)
+          for name in ("q1", "q2", "q3", "q4")))
 
 
 class SensingPipeline:
@@ -186,15 +209,45 @@ class SensingPipeline:
         #: Equivalence diagnostic, when attached: observes only.
         self._diagnostic = None
         self._last_raw: Dict[str, tuple] = {}
+        #: (B) state: "off" (not configured or unsupported), "pending"
+        #: (separate reads; verify at the next written sample), "active"
+        #: (one segment query for both channels) or "rejected" (the
+        #: segment quaternion disagreed; separate reads until the backend
+        #: revision changes).
+        self._combine_state = self._initial_combine_state()
+        self._combine_revision = None
+        self._attitude_write_probe = None
+        #: The segment result shared within one read_all call.
+        self._combined: Dict[str, object] = {}
+        self._combined_fallbacks = 0
 
     def attach_diagnostic(self, diagnostic) -> None:
         """Attach a core.equivalence_diagnostic.EquivalenceDiagnostic."""
         self._diagnostic = diagnostic
 
+    def set_attitude_write_probe(self, probe) -> None:
+        """``probe(object_path, when) -> bool``: did the bridge write an
+        inertial attitude sample for exactly this epoch? (B) verifies
+        only at such epochs; without a probe it never activates."""
+        self._attitude_write_probe = probe
+
     @property
     def attitude_provider(self) -> str:
-        """The attitude read-back provider in use (BridgeStatus reports it)."""
+        """The provider queried for the published attitude.
+
+        BridgeStatus reports it. In combined mode that is the segment
+        provider (decision Q2); its terminal-epoch NO DATA fallback to
+        'Attitude Quaternions' is per step and logged, not reported here.
+        """
+        if self._combine_state == "active":
+            return dp.ATTITUDE_SEGMENT.provider_name
         return self._attitude_spec.provider_name
+
+    @property
+    def sensing_mode(self) -> str:
+        """"combined_attitude_rate" while (B) is active, else "separate"."""
+        return ("combined_attitude_rate" if self._combine_state == "active"
+                else "separate")
 
     @property
     def attitude_provider_forced(self) -> bool:
@@ -263,6 +316,125 @@ class SensingPipeline:
         # STK 12.6 has no "Body Axes Angular Velocity"; the segment
         # provider carries rates alongside the quaternion.
         return dp.ATTITUDE_SEGMENT
+
+    # -- (B) combined attitude/rate ----------------------------------------
+
+    def _initial_combine_state(self) -> str:
+        """Whether (B) may activate at all in this session."""
+        if not self._config.combine_attitude_rate:
+            return "off"
+        reasons = []
+        if self._attitude_forced:
+            reasons.append("the attitude read-back provider is forced")
+        elif self._attitude_spec is not dp.ATTITUDE_QUATERNION:
+            reasons.append(f"the validated attitude provider is "
+                           f"{self._attitude_spec.provider_name!r}, not "
+                           f"'Attitude Quaternions'")
+        if self._rate_spec is not dp.ATTITUDE_SEGMENT:
+            reasons.append(f"the rate provider is "
+                           f"{self._rate_spec.provider_name!r}")
+        if len(self._config.satellites) != 1:
+            reasons.append("more than one satellite is sensed")
+        if getattr(self._backend, "revision", None) is None:
+            reasons.append("the backend does not track a structural revision")
+        if reasons:
+            LOGGER.warning("sensing.combine_attitude_rate is set but stays "
+                           "off: %s", "; ".join(reasons))
+            return "off"
+        return "pending"
+
+    def _check_combine_revision(self) -> None:
+        """A structural change voids an earlier verification or rejection."""
+        if self._combine_state not in ("active", "rejected"):
+            return
+        revision = self._backend.revision
+        if revision != self._combine_revision:
+            LOGGER.info("backend revision changed (%s -> %s): combined "
+                        "attitude/rate was %s; reading separately until it "
+                        "is verified again", self._combine_revision,
+                        revision, self._combine_state)
+            self._combine_state = "pending"
+
+    def _verify_combined(self, object_path: str, when: StkTime) -> None:
+        """Compare the step's two quaternions at a written sample."""
+        probe = self._attitude_write_probe
+        if probe is None or not probe(object_path, when):
+            return
+        q_att = _raw_quaternion(self._last_raw.get("attitude"))
+        q_seg = _raw_quaternion(self._last_raw.get("angular_rate"))
+        if q_att is None or q_seg is None:
+            return                      # no data this step; try the next
+        angle = sign_aligned_angle(q_att, q_seg)
+        self._combine_revision = self._backend.revision
+        if angle <= COMBINE_TOLERANCE_RAD:
+            self._combine_state = "active"
+            LOGGER.info(
+                "combined attitude/rate enabled at %s on %s: 'Attitude "
+                "Segment Quaternions' matches 'Attitude Quaternions' at a "
+                "written sample (sign-aligned angle %.3e rad <= %.0e); one "
+                "segment query now serves attitude and rate",
+                when, object_path, angle, COMBINE_TOLERANCE_RAD)
+        else:
+            self._combine_state = "rejected"
+            LOGGER.warning(
+                "combined attitude/rate NOT enabled at %s on %s: the "
+                "segment quaternion differs from 'Attitude Quaternions' by "
+                "%.3e rad (> %.0e); keeping separate reads until the "
+                "backend revision changes", when, object_path, angle,
+                COMBINE_TOLERANCE_RAD)
+
+    def _segment(self, object_path: str, when: StkTime) -> Dict[str, object]:
+        """This step's single segment query, shared by both channels."""
+        if "result" in self._combined:
+            return self._combined
+        try:
+            data, mapping = dp.execute(
+                self._backend, dp.ATTITUDE_SEGMENT, object_path,
+                start=when, stop=when,
+                allow_empty=self._is_realtime(object_path))
+            self._combined["result"] = (data, mapping)
+            if self._diagnostic is not None:
+                raw = (dp.ATTITUDE_SEGMENT, data, mapping)
+                self._last_raw["attitude"] = raw
+                self._last_raw["angular_rate"] = raw
+        except QueryError as exc:
+            self._combined["result"] = None
+            self._combined["error"] = exc
+        return self._combined
+
+    def _read_combined_attitude(self, object_path: str, when: StkTime
+                                ) -> Optional[AttitudeSample]:
+        shared = self._segment(object_path, when)
+        result = shared["result"]
+        if result is None or result[0].row_count == 0:
+            # Segment NO DATA (e.g. the terminal epoch): attitude for this
+            # step comes from 'Attitude Quaternions', as without (B).
+            self._combined_fallbacks += 1
+            if str(self._combined_fallbacks).rstrip("0") == "1":
+                LOGGER.warning(
+                    "combined attitude/rate: no segment data for %s at %s; "
+                    "attitude read from 'Attitude Quaternions' for this step "
+                    "[occurrence %d]", object_path, when,
+                    self._combined_fallbacks)
+            return self.read_attitude(object_path, when)
+        data, mapping = result
+        return self._attitude_sample(dp.ATTITUDE_SEGMENT, data, mapping,
+                                     object_path, when)
+
+    def _read_combined_rate(self, object_path: str, when: StkTime
+                            ) -> Optional[AngularRateSample]:
+        shared = self._segment(object_path, when)
+        health = self._channel("angular_rate")
+        if shared["result"] is None:
+            error = shared["error"]
+            health.errors += 1
+            health.last_error = str(error)
+            raise error
+        data, mapping = shared["result"]
+        if data.row_count == 0:
+            health.stale_reads += 1
+            return None
+        return self._rate_sample(dp.ATTITUDE_SEGMENT, data, mapping, when)
 
     @property
     def angle_rate_scale(self) -> conv.AngleRateScale:
@@ -348,7 +520,7 @@ class SensingPipeline:
             health.last_error = str(exc)
             raise
 
-        if self._diagnostic is not None:
+        if self._diagnostic is not None or self._combine_state == "pending":
             self._last_raw[channel] = (spec, data, mapping)
         if data.row_count == 0:
             health.stale_reads += 1
@@ -416,7 +588,10 @@ class SensingPipeline:
         data, mapping = self._read("attitude", spec, object_path, when)
         if data is None:
             return None
+        return self._attitude_sample(spec, data, mapping, object_path, when)
 
+    def _attitude_sample(self, spec: dp.ProviderSpec, data, mapping,
+                         object_path: str, when: StkTime) -> AttitudeSample:
         quaternion = conv.quaternion_from_stk_elements(
             dp.first_value(data, spec, mapping, "q1"),
             dp.first_value(data, spec, mapping, "q2"),
@@ -445,7 +620,10 @@ class SensingPipeline:
         data, mapping = self._read("angular_rate", spec, object_path, when)
         if data is None:
             return None
+        return self._rate_sample(spec, data, mapping, when)
 
+    def _rate_sample(self, spec: dp.ProviderSpec, data, mapping,
+                     when: StkTime) -> Optional[AngularRateSample]:
         scale = self.angle_rate_scale
         try:
             rate = (
@@ -541,11 +719,18 @@ class SensingPipeline:
         just the ones that failed. Wall time per channel is accumulated
         in ``channel_timings`` (reset by the caller that reports it).
         """
+        self._check_combine_revision()
+        combined = self._combine_state == "active"
+        if combined:
+            self._combined = {}
         readers = {"orbit": self.read_orbit,
-                   "attitude": self.read_attitude,
-                   "angular_rate": self.read_angular_rate}
+                   "attitude": (self._read_combined_attitude if combined
+                                else self.read_attitude),
+                   "angular_rate": (self._read_combined_rate if combined
+                                    else self.read_angular_rate)}
         observe = self._diagnostic is not None and channels is None
-        if observe:
+        verify = self._combine_state == "pending" and channels is None
+        if observe or verify:
             self._last_raw = {}
         result: Dict[str, object] = {}
         for key in self.FAST_CHANNELS:
@@ -571,6 +756,8 @@ class SensingPipeline:
                     count + 1)
             if sample is not None:
                 result[key] = sample
+        if verify:
+            self._verify_combined(object_path, when)
         if observe:
             try:
                 self._diagnostic.observe(

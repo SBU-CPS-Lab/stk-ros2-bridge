@@ -69,6 +69,9 @@ def _attitude(seconds):
 class FakeBackend:
     """COM-shaped data providers, with knobs for the failure cases."""
 
+    #: Structural revision, as ComBackend.revision; tests bump it.
+    revision = 0
+
     def __init__(self, segment_sign=1.0, segment_empty_at=(),
                  interval_dx_m=0.0, interval_time_shift_ms=0,
                  interval_fails=False):

@@ -78,6 +78,8 @@ class ComBackend(StkBackend):
         self._info = BackendInfo(backend_type=BackendType.COM)
         # COM handles only, never telemetry values. Owned by the COM worker.
         self._provider_cache = {}
+        # Structural revision; see StkBackend.revision.
+        self._revision = 0
         self._query_timings = {}
         self._query_timings_since = time.perf_counter()
         self._extraction_counts = {"bulk": 0, "fallback": 0, "bulk_failed": 0}
@@ -143,6 +145,7 @@ class ComBackend(StkBackend):
     def disconnect(self) -> None:
         self._flush_extraction_profile()
         self._provider_cache.clear()
+        self._revision += 1
         self._connected = False
         self._root = None
         if self._stk is not None:
@@ -376,6 +379,7 @@ class ComBackend(StkBackend):
 
     def new_scenario(self, name: str) -> None:
         self._provider_cache.clear()
+        self._revision += 1
         self.require_connected()
         try:
             self._root.NewScenario(name)
@@ -384,6 +388,7 @@ class ComBackend(StkBackend):
 
     def load_scenario(self, path: str) -> None:
         self._provider_cache.clear()
+        self._revision += 1
         self.require_connected()
         try:
             self._root.LoadScenario(path)
@@ -403,6 +408,7 @@ class ComBackend(StkBackend):
 
     def close_scenario(self) -> None:
         self._provider_cache.clear()
+        self._revision += 1
         self.require_connected()
         try:
             self._root.CloseScenario()
@@ -419,6 +425,10 @@ class ComBackend(StkBackend):
             return proto.parse_utcg(str(scenario.StartTime))
         except Exception as exc:
             raise QueryError("ScenarioEpoch", "/", str(exc)) from exc
+
+    @property
+    def revision(self) -> int:
+        return self._revision
 
     def get_scenario_stop_time(self) -> StkTime:
         self.require_connected()
@@ -459,6 +469,7 @@ class ComBackend(StkBackend):
     def create_object(self, object_type: str, name: str,
                       parent_path: str = "") -> str:
         self._provider_cache.clear()
+        self._revision += 1
         self.require_connected()
         parent = (self._get_object(parent_path) if parent_path
                   else self._root.CurrentScenario)
@@ -484,6 +495,7 @@ class ComBackend(StkBackend):
 
     def delete_object(self, object_path: str) -> None:
         self._provider_cache.clear()
+        self._revision += 1
         obj = self._get_object(object_path)
         try:
             obj.Unload()
@@ -899,6 +911,7 @@ class ComBackend(StkBackend):
         reason -- see the note on :meth:`set_position`.
         """
         self._provider_cache.clear()
+        self._revision += 1
         if propagator is PropagatorType.REALTIME:
             self._capabilities.require("realtime_propagator")
             # Confirmed against STK 12.6: the `SetPropagator ... RealTime`
@@ -1230,9 +1243,11 @@ class ComBackend(StkBackend):
 
     def enable_realtime_attitude(self, object_path: str) -> None:
         self._provider_cache.clear()
+        self._revision += 1
         self._execute(f"SetAttitude {object_path} Standard")
 
     def clear_attitude_data(self, object_path: str) -> None:
+        self._revision += 1
         try:
             self._execute(f"SetAttitude {object_path} ClearData")
         except CommandError:
@@ -1272,6 +1287,7 @@ class ComBackend(StkBackend):
     def execute_connect(self, command: str,
                         timeout_s: Optional[float] = None) -> ConnectResponse:
         self._provider_cache.clear()  # arbitrary commands may replace objects
+        self._revision += 1
         # timeout_s is accepted for interface symmetry but has no meaning
         # in-process: ExecuteCommand is a blocking COM call with no
         # client-side timeout available.

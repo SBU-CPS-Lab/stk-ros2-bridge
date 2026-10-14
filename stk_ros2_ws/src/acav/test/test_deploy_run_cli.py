@@ -638,3 +638,66 @@ class TestEquivalenceDiagnosticFlag:
                       "  equivalence_diagnostic_dir: C:/elsewhere\n")
         assert settings["sensing"]["equivalence_diagnostic_dir"] == \
             "C:/elsewhere"
+
+
+class TestSensingModeLabelsAndE1Exclusion:
+    """Decisions Q2/Q3: the per-run bridge config and summary.json carry
+    the sensing mode, and E1 (both arms) and any forced provider stay on
+    the original path whatever the base configuration says."""
+
+    ACAV_LIKE = ("sensing:\n  combine_attitude_rate: true\n"
+                 "  orbit_batch_samples: 100\n")
+
+    def _run(self, tmp_path, base_yaml, **overrides):
+        import yaml
+        (tmp_path / "bridge.yaml").write_text(base_yaml, encoding="utf-8")
+        config = _config(tmp_path, **overrides)
+        launched = []
+        deps = Deps(popen=lambda argv, **k: launched.append(argv)
+                    or FakeProcess(),
+                    wait_for_bridge_connected=lambda *a: ConnectResult(
+                        True, "com"),
+                    wait_for_twin_ack=lambda *a: True, prompt=lambda m: None)
+        assert execute_run(config, deps) == 0
+        params = dict(item.split(":=", 1) for item in launched[0]
+                      if ":=" in item)
+        with open(json.loads(params["config_file"]),
+                  encoding="utf-8") as handle:
+            sensing = yaml.safe_load(handle)["sensing"]
+        summary = json.loads((tmp_path / "run.logs" / "summary.json")
+                             .read_text(encoding="utf-8"))
+        return sensing, summary
+
+    def test_an_ordinary_run_keeps_the_base_settings_and_labels_them(
+            self, tmp_path):
+        sensing, summary = self._run(tmp_path, self.ACAV_LIKE)
+        assert sensing["combine_attitude_rate"] is True
+        assert sensing["orbit_batch_samples"] == 100
+        assert sensing["sensing_mode"] == "combined_attitude_rate"
+        assert summary["sensing_mode"] == "combined_attitude_rate"
+        assert summary["orbit_batch_samples"] == 100
+
+    def test_defaults_are_separate_and_one_sample(self, tmp_path):
+        sensing, summary = self._run(tmp_path, "sensing: {}\n")
+        assert sensing["combine_attitude_rate"] is False
+        assert sensing["orbit_batch_samples"] == 1
+        assert summary["sensing_mode"] == "separate"
+        assert summary["orbit_batch_samples"] == 1
+
+    @pytest.mark.parametrize("provider", ["", "ECF Attitude Quaternions"])
+    def test_e1_both_arms_stay_on_the_original_path(self, tmp_path,
+                                                    provider):
+        sensing, summary = self._run(tmp_path, self.ACAV_LIKE,
+                                     experiment="E1",
+                                     attitude_provider=provider)
+        assert sensing["combine_attitude_rate"] is False
+        assert sensing["orbit_batch_samples"] == 1
+        assert summary["sensing_mode"] == "separate"
+        assert summary["orbit_batch_samples"] == 1
+
+    def test_a_forced_provider_outside_e1_is_not_combined(self, tmp_path):
+        sensing, summary = self._run(
+            tmp_path, self.ACAV_LIKE, experiment="E6",
+            attitude_provider="ECF Attitude Quaternions")
+        assert sensing["combine_attitude_rate"] is False
+        assert summary["sensing_mode"] == "separate"

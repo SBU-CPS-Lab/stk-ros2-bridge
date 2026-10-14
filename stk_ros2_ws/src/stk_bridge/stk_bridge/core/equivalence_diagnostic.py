@@ -32,6 +32,7 @@ from stk_bridge.backends import connect_protocol as proto
 from stk_bridge.backends.base import StkTime
 from stk_bridge.core import conversions as conv
 from stk_bridge.core import data_providers as dp
+from stk_bridge.core.attitude_equivalence import sign_aligned_angle
 from stk_bridge.core.orbit_block import (
     OrbitBlock,
     block_epochs,
@@ -50,22 +51,6 @@ SUMMARY_NAME = "equivalence_diagnostic_summary.json"
 
 def _norm(a, b) -> float:
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
-
-
-def sign_aligned_angle(a, b) -> float:
-    """Rotation angle between two orientations, radians, resolvable to 1e-12.
-
-    ``4*atan2(|a - s*b|, |a + s*b|)`` with ``s = sign(a.b)``, so q and -q
-    compare as identical. Algebraically the same angle as
-    ``conversions.quaternion_angle_between`` (``2*acos(|a.b|)``), but
-    that form cannot resolve below about 3e-8 rad in double precision
-    (acos is flat at 1), four orders of magnitude above the 1e-12 rad
-    tolerance this diagnostic must test.
-    """
-    s = 1.0 if sum(x * y for x, y in zip(a, b)) >= 0.0 else -1.0
-    difference = math.sqrt(sum((x - s * y) ** 2 for x, y in zip(a, b)))
-    total = math.sqrt(sum((x + s * y) ** 2 for x, y in zip(a, b)))
-    return 4.0 * math.atan2(difference, total)
 
 
 def _quaternion(raw) -> Optional[tuple]:

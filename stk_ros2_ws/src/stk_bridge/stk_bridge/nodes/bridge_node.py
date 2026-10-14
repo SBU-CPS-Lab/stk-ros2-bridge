@@ -209,6 +209,7 @@ class StkBridgeNode:
 
         self.sensing = SensingPipeline(
             self.worker.backend, self.frames, self.sensing_config, report)
+        self.sensing.set_attitude_write_probe(self._inertial_sample_written)
         if self.sensing_config.equivalence_diagnostic:
             self._attach_equivalence_diagnostic()
         self.inbox = CommandInbox(coalesce=bool(
@@ -225,6 +226,17 @@ class StkBridgeNode:
             target=self._loop, name="stk-bridge-loop", daemon=True)
         self._loop_thread.start()
         LOGGER.info("bridge running in %s mode", self.time_sync.mode.name)
+
+    def _inertial_sample_written(self, path, when) -> bool:
+        """Did this bridge write an inertial attitude sample for ``when``?
+
+        (B) verifies the segment provider only at such an epoch; same
+        1e-6 s match as _check_attitude_landed.
+        """
+        written = self.actuation.last_attitude(path)
+        return (written is not None
+                and abs(written[0] - when.epoch_seconds) <= 1e-6
+                and bool(written[2]))
 
     def _attach_equivalence_diagnostic(self) -> None:
         """Opt-in, observe-only; see core/equivalence_diagnostic.py."""

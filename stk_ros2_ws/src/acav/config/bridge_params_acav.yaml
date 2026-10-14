@@ -103,6 +103,11 @@ sensing:
   # proposed optimisations (core/equivalence_diagnostic.py). It
   # inflates every timing; enable it only in a per-run copy.
   equivalence_diagnostic: false
+  # (B) One 'Attitude Segment Quaternions' query serves attitude
+  # and rate, only after the bridge proves at a written sample that
+  # its quaternion equals 'Attitude Quaternions' (core/sensing.py).
+  # run_acav_run.py turns it off for E1 and forced providers.
+  combine_attitude_rate: true
   rate_groups:
     fast:   { rate_hz: 10.0 }
     medium: { rate_hz: 1.0 }
