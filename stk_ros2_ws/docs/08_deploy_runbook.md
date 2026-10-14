@@ -1062,6 +1062,22 @@ reference exactly. If it changes, stop and analyse; don't accept it.
 and `orbit_batch_samples: 1` in their bridge configuration copy. Otherwise
 the diagnostic compares the new paths with themselves.
 
+### Clock advance timing
+
+The bridge submits the STK clock advance (`Animate * SetValues ...
+Reset`) to the COM worker without waiting, so the step's first sensing
+query waits behind it and E6's "sense" includes its cost. The 60 s
+timing line reports both `clock advance submit` (the submit only) and
+`clock advance execute ... (inside sense)`, the command's own execution
+time on the worker. The run total appears with the sensing summaries:
+
+    clock advance summary: executed 7200, mean <x> ms, max <y> ms (on the COM worker, inside E6's sense phase)
+
+Measurement only: the STK commands and their order are unchanged, so
+determinism signatures are not affected. "Sense minus clock execute" is
+the sensing cost without the clock; do not compare it with sense figures
+from runs that predate this line.
+
 ### COM sensing optimisation and comparison
 
 The COM backend reuses resolved Data Provider handles for the same object,

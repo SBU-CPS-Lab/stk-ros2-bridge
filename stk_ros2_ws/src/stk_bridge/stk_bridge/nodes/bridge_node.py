@@ -50,6 +50,7 @@ from typing import Dict, List, Optional, Set
 import yaml
 
 from stk_bridge.core import conversions as conv
+from stk_bridge.core.clock_timing import ClockAdvanceTiming
 from stk_bridge.exceptions import (
     ConventionValidationError,
     LockstepBarrierTimeoutError,
@@ -186,6 +187,7 @@ class StkBridgeNode:
         self._commands_rejected = 0
         self._last_startup_log = 0.0
         self._advance_ms = (0.0, 0)
+        self._clock_timing = ClockAdvanceTiming()
         self._commanded_paths: Set[str] = set()
         self._commands_missing = 0
         self._attitude_mismatches = 0
@@ -264,6 +266,9 @@ class StkBridgeNode:
         prefix = "" if final else "running "
         LOGGER.info("%s%s", prefix, self.sensing.combine_summary_line())
         LOGGER.info("%s%s", prefix, self.sensing.orbit_batch_summary_line())
+        timing = getattr(self, "_clock_timing", None)
+        if timing is not None:
+            LOGGER.info("%s%s", prefix, timing.summary_line())
         if final:
             self._final_summary_logged = True
 
@@ -414,9 +419,19 @@ class StkBridgeNode:
         next step's time subsumes it -- animation time is absolute, not
         incremental, so a dropped update is self-correcting.
         """
-        self.worker.submit(
-            lambda backend: backend.set_current_time(when),
-            "set_current_time")
+        timing = getattr(self, "_clock_timing", None)
+
+        def advance(backend):
+            # Timed where it executes: on the worker, ahead of this step's
+            # sensing queries -- so inside E6's sense phase. Reporting only.
+            started = time.perf_counter()
+            try:
+                backend.set_current_time(when)
+            finally:
+                if timing is not None:
+                    timing.record((time.perf_counter() - started) * 1000.0)
+
+        self.worker.submit(advance, "set_current_time")
 
     def on_scenario_changed(self, epoch) -> None:
         self.time_sync.start(epoch)
@@ -815,15 +830,21 @@ class StkBridgeNode:
             f"{name} {total / max(count, 1):.0f}"
             for name, (total, count) in sorted(channels.items()))
         advance_total, advance_count = self._advance_ms
+        execute_total, execute_count = (
+            self._clock_timing.take_window()
+            if getattr(self, "_clock_timing", None) is not None
+            else (0.0, 0))
         LOGGER.info(
             "step %d: %.2f steps/s over the last %.0f s; per step: sense "
             "%.1f ms (per read, ms: %s), actuate %.1f ms, barrier wait "
-            "%.1f ms, clock advance %.1f ms; commands late %d, rejected %d, "
+            "%.1f ms, clock advance submit %.1f ms, clock advance execute "
+            "%.1f ms (inside sense); commands late %d, rejected %d, "
             "missing %d; attitude not as written %d (run totals)",
             step, (step - acc["step"]) / elapsed, elapsed,
             acc["sense"] / n, per_channel or "n/a", acc["actuate"] / n,
             acc["barrier_wait"] / n,
             advance_total / max(advance_count, 1),
+            execute_total / max(execute_count, 1),
             self._commands_late, self._commands_rejected,
             self._commands_missing, self._attitude_mismatches)
         if channels:
