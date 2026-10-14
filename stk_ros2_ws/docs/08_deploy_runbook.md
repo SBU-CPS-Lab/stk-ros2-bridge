@@ -213,6 +213,20 @@ record's `provenance.code_version` and the campaign's `campaign.json`.
 from one clean commit. Results already obtained, and what is still to be
 run, are recorded in `09_live_runs_and_results.md`.
 
+### Running validation sessions safely
+
+A session that compares commits switches branches between runs. On
+2026-10-14 a switch ran right after a failed run and stopped partway,
+leaving the tree half on one commit and half on the other (recorded in
+`dev/phase1_e6_impact_analysis.md`, "Phase 1 final results").
+
+- Have STK open before running the session plan's Section 0 (setup).
+- Run each `git switch` line on its own, never pasted together with run
+  commands, and only when no run, bridge or MATLAB process is still
+  alive.
+- After every switch, run `git status --porcelain`. It must print
+  nothing. If it prints anything, stop and do not start a run.
+
 ## 5A. E1 — two runs to test attitude-frame consistency
 
 E1 compares **two** lockstep runs using the same scenario, controller and
