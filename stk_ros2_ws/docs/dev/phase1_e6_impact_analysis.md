@@ -274,6 +274,76 @@ so service queries are unaffected.
 3. **First-query penalty** (§5): execute means of the first live query
    before and after (C) — pending.
 
+## Phase 1 final results — measured by the user, recomputed from the run files
+
+**PROVISIONAL.** These timing numbers come from 3 + 3 runs that were not
+interleaved (old path at 12:04, 20:25 and 20:58; new path at 17:10, 18:14
+and 21:34, 2026-10-14). They show the direction and rough size of the
+change; they are not the paper's numbers. The paper's E6 figure will be
+regenerated from 5 clean runs on the final commit of this branch.
+
+**Determinism.** All nine records below have the same determinism
+signature (recomputed from each record with `read_record`), the same
+scenario_sha256 `c8825803…`, 5/5 captured, no SAFE and 0 dropped samples:
+
+| Run | Code | Sensing path | Read-back provider |
+|---|---|---|---|
+| E6-smoke-1 | c291dfa | old | Attitude Quaternions |
+| E6-diag-1 | 83c4c77 | old + diagnostic | Attitude Quaternions |
+| E6-ref-2, E6-ref-3 | 80ee188 | old | Attitude Quaternions |
+| E6-BC-1 | 6238e1f | (B)+(C) | Attitude Segment Quaternions |
+| E6-BC-2, E6-BC-3 | 5723028 | (B)+(C) | Attitude Segment Quaternions |
+| E2-dynamics_aware-lockstep | 5723028 | (B)+(C) | Attitude Segment Quaternions |
+| E1-dynamics_aware-lockstep (control) | 5723028 | old (E1 exclusion) | Attitude Quaternions |
+
+In the four runs on 5723028 the final summary lines match the design:
+E6-BC-2/3 and E2 report 7198 combined and 2 separate steps, one passed
+verification, one segment NO-DATA fallback, 73 blocks loaded and audited,
+one invalidation, 7199 cached epochs and one terminal epoch; E1 reports
+"configured False" and "orbit batch summary: disabled". Each run has 7
+running summary pairs.
+
+**3 vs 3** (old: E6-smoke-1, E6-ref-2, E6-ref-3; new: E6-BC-1, E6-BC-2,
+E6-BC-3), mean ± sample standard deviation:
+
+| Quantity | Old | New | Change |
+|---|---|---|---|
+| Step (scheduler tick-to-tick), ms | 220.6 ± 33.9 | 138.6 ± 5.9 | −37.2% |
+| Sense, ms | 178.9 ± 25.5 | 95.7 ± 8.2 | −46.5% |
+| Actuate, ms | 21.0 ± 4.8 | 20.4 ± 4.9 | −2.8% |
+| Barrier wait, ms | 15.3 ± 2.8 | 14.6 ± 0.2 | −4.1% |
+| Loop (twin_acking → scheduler_exit, last attempt), min | 26.6 ± 4.1 | 16.8 ± 0.7 | |
+
+The old-path runs vary much more (step 182.6, 231.3, 247.8 ms) than the
+new-path runs (132.0, 143.2, 140.7 ms). Without interleaving, machine or
+STK state that changed during the day cannot be separated from the code
+change. The actuate and barrier-wait increases seen in E6-BC-1 alone do
+not persist over three runs.
+
+**Segment-query cost is time-varying, not tied to simulation time.** The
+per-interval execute mean of 'Attitude Segment Quaternions' steps between
+about 20–30 ms and 45–57 ms at different points in each run: around step
+4420 in E6-BC-1, around step 3339 in E6-BC-2, and in E6-BC-3 it starts near
+45 ms and falls after step ~5150. The step does not recur at the same
+simulation time, so the simulation state is not the cause; the cause is
+unknown.
+
+**Incident at 19:41 (Session 2).** The first attempt of E6-ref-2 launched
+its bridge at 19:41:41.519 and stopped at 19:41:42.172 (`run.log`; the
+user reports STK had closed). At 19:41:42.901–.911 four files were
+rewritten and one was deleted, leaving the tree at 80ee188 dirty. The
+files affected are exactly the first six paths, in sorted order, of the 25
+that differ between 80ee188 and 5723028: paths 1–4 were written in full
+with the branch-tip content, path 5 (`acav/acav/hpop_inspection.py`) was
+created empty, path 6 (`acav/config/bridge_params_acav.yaml`) was deleted,
+and paths 7–25 were not touched. HEAD stayed at 80ee188 and the reflog
+has no entry for it. This is the pattern of a `git switch` to the branch
+that stopped partway; git updates HEAD and the reflog only at the end.
+**Hypothesis, not proven:** the Session 2 block was pasted at once, so
+after the failed run the `git switch perf/e6-throughput` line ran while a
+process still held a file, and the switch failed partway. The tree was
+restored and backed up under `results/dirty_tree_20261014_1941/`.
+
 ## Live results E6-BC-1 — measured by the user, single run (code 6238e1f)
 
 Files: `results/E6_BC_1/` (not in the repository); items re-read from the
