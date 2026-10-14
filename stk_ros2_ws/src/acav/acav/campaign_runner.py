@@ -133,6 +133,8 @@ class RunnerOptions:
     code_version: Optional[str] = None
     #: Resume over records from other code anyway (logged per run).
     allow_code_version_mismatch: bool = False
+    #: Run even though code_version is not a clean commit (logged).
+    allow_dirty: bool = False
     #: Resolves a commit to its git tree; see code_version.same_code.
     tree_of: Optional[Callable[[str], Optional[str]]] = None
 
@@ -143,6 +145,8 @@ def run_campaign(campaign: Campaign, launcher: Launcher,
     os.makedirs(options.output_dir, exist_ok=True)
     write_manifest(campaign, options.output_dir)
 
+    if not options.dry_run:
+        _refuse_unclean_code(options)
     if not options.dry_run and options.resume:
         _refuse_resume_across_code(campaign, options)
 
@@ -171,6 +175,27 @@ def run_campaign(campaign: Campaign, launcher: Launcher,
             break
 
     return outcome
+
+
+def _refuse_unclean_code(options: RunnerOptions) -> None:
+    """Refuse to start from modified or unidentifiable code.
+
+    Every record of such a campaign would carry that version, and a
+    campaign that cannot be attributed to one commit cannot be cited.
+    """
+    from acav.code_version import is_clean
+
+    current = options.code_version
+    if current is None or is_clean(current):
+        return
+    if options.allow_dirty:
+        LOGGER.warning("running from code that is not a clean commit: %s",
+                       current)
+        return
+    raise CampaignRefused(
+        f"the code running this campaign is not a clean commit "
+        f"({current}), so no record it produces could be cited. Commit or "
+        f"stash the changes, or pass --allow-dirty to run anyway.")
 
 
 def _refuse_resume_across_code(campaign: Campaign,

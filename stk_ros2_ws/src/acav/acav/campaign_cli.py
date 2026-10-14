@@ -234,6 +234,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume-across-code-versions", action="store_true",
                         help="resume over completed runs that other code "
                              "made (refused by default)")
+    parser.add_argument("--allow-dirty", action="store_true",
+                        help="run from code that is not a clean commit "
+                             "(refused by default)")
     parser.add_argument("--stop-on-error", action="store_true")
     parser.add_argument("--json", default="", metavar="PATH",
                         help="write the report as JSON as well as printing it")
@@ -308,7 +311,8 @@ def _run(campaign: Campaign, args) -> int:
         resume=not args.no_resume,
         stop_on_error=args.stop_on_error,
         code_version=code_version.describe(prefer_env=False),
-        allow_code_version_mismatch=args.resume_across_code_versions)
+        allow_code_version_mismatch=args.resume_across_code_versions,
+        allow_dirty=args.allow_dirty)
     try:
         outcome = run_campaign(campaign, CommandLauncher(launch), options)
     except CampaignRefused as refused:

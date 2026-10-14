@@ -213,6 +213,10 @@ record's `provenance.code_version` and the campaign's `campaign.json`.
 from one clean commit. Results already obtained, and what is still to be
 run, are recorded in `09_live_runs_and_results.md`.
 
+`run_acav_campaign run` refuses to start from code that is not a clean
+commit (`+dirty` or unknown); `--allow-dirty` runs anyway, for trials
+whose records will not be cited.
+
 `run_acav_campaign run` resumes by skipping runs whose record is already
 in the output directory. It refuses to start, before launching anything,
 if any record it would skip was made by other code: a different tree, a
