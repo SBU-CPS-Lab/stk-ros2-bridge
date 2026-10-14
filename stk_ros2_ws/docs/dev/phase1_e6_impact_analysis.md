@@ -274,6 +274,50 @@ so service queries are unaffected.
 3. **First-query penalty** (§5): execute means of the first live query
    before and after (C) — pending.
 
+## Live results E6-BC-1 — measured by the user, single run (code 6238e1f)
+
+Files: `results/E6_BC_1/` (not in the repository); items re-read from the
+files during review. One run: nothing here is yet a timing claim.
+
+1. **Determinism.** The signature is identical to E6-smoke-1 (c291dfa) and
+   E6-diag-1 (83c4c77); same scenario_sha256 `c8825803…`. Record:
+   `sensing_mode` combined_attitude_rate, `orbit_batch_samples` 100,
+   `attitude_readback_provider` 'Attitude Segment Quaternions'; 5/5
+   captured, no SAFE, 0 dropped samples.
+2. **Streams** (user's comparison with E6-smoke-1): not bit-identical, but
+   equal to machine precision — `cmd.txt` quaternions max |Δ| 3.7e-15,
+   `twin_status` boresight_error_rad max |Δ| 4.8e-14 rad, peak momentum
+   fraction ~1e-14 — consistent with the ~26 nm orbit-row differences of
+   E6-diag-1, and below the signature's 9-decimal rounding.
+3. **(B) and (C) live.** (B) enabled at t = 0.2 s with sign-aligned angle
+   0.000e+00 (`bridge.log:141`); terminal-epoch fallback to Attitude
+   Quaternions at t = 720 s (`bridge.log:429`). (C) on (`bridge.log:57`),
+   exactly one invalidation, revision 11 → 13 at the first command
+   (`bridge.log:115`); no "orbit batch fallback" line. Over the run the COM
+   profile counts 213 Cartesian Position and 210 Velocity executes, about
+   three of each per 100 steps (one interval query plus two audit reads),
+   as designed.
+4. **Timing** (single runs): step 182.6 → 132.0 ms; sense 151.4 → 88.0 ms;
+   actuation 15.5 → 20.1 ms and barrier wait 12.1 → 14.5 ms went up
+   (record fields, E6-smoke-1 → E6-BC-1). Loop (twin_acking →
+   scheduler_exit) 22m01s → 16m04s; whole run 26m47s → 18m57s (user).
+5. **First-query penalty moved to 'Attitude Segment Quaternions'**, the first
+   live query after the clock advance (§5 prediction). Its execute time is
+   not constant: run-weighted mean 34.9 ms (6853 executes); per 60 s
+   profile interval 17.8–31.0 ms up to step ~4050, then 48.0–56.7 ms from
+   step ~4420 to the end (t ≈ 405–442 s onward). Per-read attitude in the
+   timing lines: 38–65 ms before, 67–79 ms after. In E6-smoke-1 the first
+   query (Cartesian Position) stays at ~25–33 ms per interval, mean
+   27.9 ms, with no such step. Cause unknown (see hypotheses in the review
+   of step 6b); the twin is in IMAGE throughout 270–720 s, and the last
+   target (T6) is imaged at 400 s.
+6. **Summary lines missing.** Neither "combined attitude/rate summary" nor
+   "orbit batch summary" is in `bridge.log`: it ends at 17:26:24.909 (the
+   terminal-epoch warning); `run.log` shows scheduler_exit 17:26:25.458 and
+   "stopping bridge" 17:26:32.927, so the bridge was terminated before
+   stop() ran. Fixed in 2849710 (lines at the terminal epoch and every
+   1000 steps).
+
 ## Live results — measured by the user, E6-diag-1 on 83c4c77
 
 Files: `results/E6_diag_83c4c77/` (not in the repository). Re-read from
