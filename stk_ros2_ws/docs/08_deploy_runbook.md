@@ -972,7 +972,11 @@ from a clean commit with the run's bridge configuration copy set to
 group them by `sensing_mode`. Before relying on the combined read, its
 determinism signature must equal the separate-read reference exactly.
 
-At bridge stop, `bridge.log` has one `combined attitude/rate summary` line:
+At the terminal epoch (720 s), `bridge.log` has one final `combined
+attitude/rate summary` line. It is logged before that step's barrier wait,
+because `run_acav_run.py` may stop the bridge before its own shutdown
+runs; `stop()` logs it only if the terminal epoch did not. There is also a
+`running combined attitude/rate summary` line every 1000 steps. The line has:
 steps in combined and separate mode, verifications (passed, mismatches),
 re-verifications after revision resets, and segment NO-DATA fallbacks. In a
 normal ACAV run expect one verification, which passes; two separate steps
@@ -1013,7 +1017,8 @@ bridge runs, and for any attitude-dependent force model (for example
 N-plate drag or SRP, or a plug-in). Neither can notify the cache. E1 never
 batches: `run_acav_run.py` writes `orbit_batch_samples: 1` for both arms.
 
-At bridge stop, `bridge.log` has one `orbit batch summary` line: blocks
+At the terminal epoch, `bridge.log` has one final `orbit batch summary`
+line (and `running orbit batch summary` every 1000 steps, as above): blocks
 loaded, audits passed and failed, validation and query failures, fallback
 blocks, invalidations, and epochs served from the cache versus read
 instantaneously (plus terminal and unsupported). In a normal ACAV run

@@ -63,6 +63,10 @@ LOGGER = logging.getLogger(__name__)
 STARTUP_REPUBLISH_S = 2.0
 #: How often the step rate and E6's phase breakdown are logged.
 TIMING_LOG_PERIOD_S = 60.0
+#: Lockstep steps between "running" sensing summary lines. The final
+#: lines are logged at the terminal epoch: run_acav_run.py may stop the
+#: bridge before stop() runs (E6-BC-1), so stop() alone is not enough.
+SUMMARY_EVERY_STEPS = 1000
 
 
 class BridgeContext:
@@ -148,6 +152,11 @@ class StkBridgeNode:
         )
 
         self.sensing = None          # built after validation
+        #: The scenario's stop time, read once at startup (None if not
+        #: available). Orbit batching, the equivalence diagnostic and the
+        #: terminal sensing summary use it.
+        self._scenario_stop = None
+        self._final_summary_logged = False
         self.inbox = None
         self.publishers: Dict[str, object] = {}
         self.bridge_publishers = None
@@ -210,6 +219,7 @@ class StkBridgeNode:
         self.sensing = SensingPipeline(
             self.worker.backend, self.frames, self.sensing_config, report)
         self.sensing.set_attitude_write_probe(self._inertial_sample_written)
+        self._scenario_stop = self._read_scenario_stop()
         if self.sensing_config.orbit_batch_samples > 1:
             self._attach_orbit_batch()
         if self.sensing_config.equivalence_diagnostic:
@@ -240,6 +250,38 @@ class StkBridgeNode:
                 and abs(written[0] - when.epoch_seconds) <= 1e-6
                 and bool(written[2]))
 
+    def _read_scenario_stop(self):
+        """The scenario stop time from STK, or None (logged)."""
+        try:
+            return self.worker.call(
+                lambda backend: backend.get_scenario_stop_time(),
+                "scenario stop time")
+        except Exception as exc:            # noqa: BLE001 - optional
+            LOGGER.warning("could not read the scenario stop time: %s", exc)
+            return None
+
+    def _log_sensing_summaries(self, final: bool) -> None:
+        prefix = "" if final else "running "
+        LOGGER.info("%s%s", prefix, self.sensing.combine_summary_line())
+        LOGGER.info("%s%s", prefix, self.sensing.orbit_batch_summary_line())
+        if final:
+            self._final_summary_logged = True
+
+    def _sensing_summary_checkpoint(self, now) -> None:
+        """Lockstep: final summaries at the terminal epoch, running ones
+        every SUMMARY_EVERY_STEPS steps. Called after sensing and before
+        the barrier wait, which the terminal step never gets past."""
+        from stk_bridge.core.orbit_block import epoch_ms
+
+        if (getattr(self, "sensing", None) is None
+                or getattr(self, "_final_summary_logged", False)):
+            return
+        stop = getattr(self, "_scenario_stop", None)
+        if stop is not None and epoch_ms(now) >= epoch_ms(stop):
+            self._log_sensing_summaries(final=True)
+        elif self.time_sync.step_index % SUMMARY_EVERY_STEPS == 0:
+            self._log_sensing_summaries(final=False)
+
     def _attach_orbit_batch(self) -> None:
         """(C): lockstep only, and only with a stop time STK confirms."""
         from stk_bridge.core.orbit_batch import OrbitBatch, stop_time_problem
@@ -252,13 +294,7 @@ class StkBridgeNode:
                            "and stays off", config.orbit_batch_samples,
                            self.time_sync.mode.name)
             return
-        try:
-            stop = self.worker.call(
-                lambda backend: backend.get_scenario_stop_time(),
-                "scenario stop time")
-        except Exception as exc:            # noqa: BLE001 - stays off
-            stop = None
-            LOGGER.warning("could not read the scenario stop time: %s", exc)
+        stop = self._scenario_stop
         problem = stop_time_problem(self.scenario.epoch, stop,
                                     config.orbit_batch_expected_window_s)
         if problem:
@@ -294,9 +330,7 @@ class StkBridgeNode:
                            "lockstep epochs only and stays off",
                            self.time_sync.mode.name)
             return
-        stop = self.worker.call(
-            lambda backend: backend.get_scenario_stop_time(),
-            "scenario stop time")
+        stop = self._scenario_stop
         self._diagnostic = EquivalenceDiagnostic(
             self.sensing_config.equivalence_diagnostic_dir,
             epoch=self.scenario.epoch, stop_time=stop,
@@ -362,11 +396,10 @@ class StkBridgeNode:
             self._loop_thread.join(timeout=5.0)
             self._loop_thread = None
         self.worker.stop(timeout_s=10.0)
-        if self.sensing is not None:
-            # Once per run; the loop and worker have stopped, so the
-            # counters are final.
-            LOGGER.info("%s", self.sensing.combine_summary_line())
-            LOGGER.info("%s", self.sensing.orbit_batch_summary_line())
+        if (self.sensing is not None
+                and not getattr(self, "_final_summary_logged", False)):
+            # Only if the terminal epoch did not already log them.
+            self._log_sensing_summaries(final=True)
         if getattr(self, "_diagnostic", None) is not None:
             self._diagnostic.close()
 
@@ -492,6 +525,7 @@ class StkBridgeNode:
             self._sense_and_publish(now)
         self._run_rate_groups()
         self._publish_status(now)
+        self._sensing_summary_checkpoint(now)
         # 4. Wait for acknowledgement. Timed for E6, though this
         #    iteration's wait lands in the NEXT status publish's window
         #    -- see core/step_timing.py's module docstring for why that
