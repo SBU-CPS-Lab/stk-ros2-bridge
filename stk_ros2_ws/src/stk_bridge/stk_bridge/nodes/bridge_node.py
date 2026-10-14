@@ -319,6 +319,10 @@ class StkBridgeNode:
             self._loop_thread.join(timeout=5.0)
             self._loop_thread = None
         self.worker.stop(timeout_s=10.0)
+        if self.sensing is not None:
+            # Once per run; the loop and worker have stopped, so the
+            # counters are final.
+            LOGGER.info("%s", self.sensing.combine_summary_line())
         if getattr(self, "_diagnostic", None) is not None:
             self._diagnostic.close()
 

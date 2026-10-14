@@ -227,3 +227,28 @@ def test_the_combined_spec_is_the_rate_spec():
     """The shared result is the one the rate read already used."""
     pipeline = _pipeline(FakeBackend())
     assert pipeline._rate_spec is dp.ATTITUDE_SEGMENT
+
+
+def test_statistics_count_a_revision_reset_and_its_re_verification():
+    backend = FakeBackend()
+    pipeline = _pipeline(backend)
+    epochs = _epochs(6)
+    for when in epochs[:3]:
+        pipeline.read_all(SAT, when)
+    backend.revision += 1
+    for when in epochs[3:]:
+        pipeline.read_all(SAT, when)
+    stats = pipeline.combine_statistics()
+    assert stats["verifications"] == 2
+    assert stats["re_verifications"] == 1
+    assert stats["revision_resets"] == 1
+    assert stats["steps_separate"] == 2 and stats["steps_combined"] == 4
+
+
+def test_statistics_count_segment_no_data_fallbacks():
+    epochs = _epochs(4)
+    pipeline = _pipeline(FakeBackend(
+        segment_empty_at=[epochs[-1].epoch_seconds]))
+    for when in epochs:
+        pipeline.read_all(SAT, when)
+    assert pipeline.combine_statistics()["segment_no_data_fallbacks"] == 1

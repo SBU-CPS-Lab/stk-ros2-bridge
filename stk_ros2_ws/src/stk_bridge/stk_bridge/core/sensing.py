@@ -220,6 +220,11 @@ class SensingPipeline:
         #: The segment result shared within one read_all call.
         self._combined: Dict[str, object] = {}
         self._combined_fallbacks = 0
+        #: End-of-run accounting for (B); see combine_summary_line.
+        self._combine_counts = {"steps_combined": 0, "steps_separate": 0,
+                                "verifications": 0,
+                                "verifications_passed": 0, "mismatches": 0,
+                                "revision_resets": 0}
 
     def attach_diagnostic(self, diagnostic) -> None:
         """Attach a core.equivalence_diagnostic.EquivalenceDiagnostic."""
@@ -349,6 +354,7 @@ class SensingPipeline:
             return
         revision = self._backend.revision
         if revision != self._combine_revision:
+            self._combine_counts["revision_resets"] += 1
             LOGGER.info("backend revision changed (%s -> %s): combined "
                         "attitude/rate was %s; reading separately until it "
                         "is verified again", self._combine_revision,
@@ -366,7 +372,9 @@ class SensingPipeline:
             return                      # no data this step; try the next
         angle = sign_aligned_angle(q_att, q_seg)
         self._combine_revision = self._backend.revision
+        self._combine_counts["verifications"] += 1
         if angle <= COMBINE_TOLERANCE_RAD:
+            self._combine_counts["verifications_passed"] += 1
             self._combine_state = "active"
             LOGGER.info(
                 "combined attitude/rate enabled at %s on %s: 'Attitude "
@@ -375,6 +383,7 @@ class SensingPipeline:
                 "segment query now serves attitude and rate",
                 when, object_path, angle, COMBINE_TOLERANCE_RAD)
         else:
+            self._combine_counts["mismatches"] += 1
             self._combine_state = "rejected"
             LOGGER.warning(
                 "combined attitude/rate NOT enabled at %s on %s: the "
@@ -435,6 +444,31 @@ class SensingPipeline:
             health.stale_reads += 1
             return None
         return self._rate_sample(dp.ATTITUDE_SEGMENT, data, mapping, when)
+
+    def combine_statistics(self) -> Dict[str, object]:
+        """(B) accounting for the whole session, for the end-of-run line."""
+        stats: Dict[str, object] = {
+            "configured": bool(self._config.combine_attitude_rate),
+            "state": self._combine_state}
+        stats.update(self._combine_counts)
+        #: Verifications after the first; each follows a revision reset.
+        stats["re_verifications"] = max(
+            0, self._combine_counts["verifications"] - 1)
+        stats["segment_no_data_fallbacks"] = self._combined_fallbacks
+        return stats
+
+    def combine_summary_line(self) -> str:
+        """One line for bridge.log at bridge stop (verifies (B) live)."""
+        c = self.combine_statistics()
+        return (f"combined attitude/rate summary: configured "
+                f"{c['configured']}, state {c['state']}; steps combined "
+                f"{c['steps_combined']}, separate {c['steps_separate']}; "
+                f"verifications {c['verifications']} (passed "
+                f"{c['verifications_passed']}, mismatches "
+                f"{c['mismatches']}); re-verifications "
+                f"{c['re_verifications']} after revision resets "
+                f"{c['revision_resets']}; segment NO-DATA fallbacks "
+                f"{c['segment_no_data_fallbacks']}")
 
     @property
     def angle_rate_scale(self) -> conv.AngleRateScale:
@@ -730,6 +764,9 @@ class SensingPipeline:
                                     else self.read_angular_rate)}
         observe = self._diagnostic is not None and channels is None
         verify = self._combine_state == "pending" and channels is None
+        if channels is None:
+            self._combine_counts["steps_combined" if combined
+                                 else "steps_separate"] += 1
         if observe or verify:
             self._last_raw = {}
         result: Dict[str, object] = {}
