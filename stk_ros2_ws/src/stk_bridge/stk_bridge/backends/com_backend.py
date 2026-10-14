@@ -430,6 +430,17 @@ class ComBackend(StkBackend):
     def revision(self) -> int:
         return self._revision
 
+    def get_propagator_type(self, object_path: str) -> Optional[str]:
+        # IAgSatellite.PropagatorType (AgEVePropagatorType); the live
+        # 12.6 inspection read 'ePropagatorHPOP' this way. PropagatorName,
+        # used by list_objects, is not on the 12.6 Object Model.
+        obj = self._get_object(object_path)
+        try:
+            name = getattr(obj.PropagatorType, "name", None)
+        except Exception:                   # noqa: BLE001 - not a vehicle
+            return None
+        return name if isinstance(name, str) else None
+
     def get_scenario_stop_time(self) -> StkTime:
         self.require_connected()
         scenario = self._root.CurrentScenario
@@ -1064,6 +1075,7 @@ class ComBackend(StkBackend):
         ephemeris from injected samples instead).
         """
         obj = self._get_object(object_path)
+        self._revision += 1             # the ephemeris may be regenerated
         try:
             obj.Propagator.Propagate()
             return True
@@ -1239,6 +1251,7 @@ class ComBackend(StkBackend):
         if velocity_mps is not None:
             args += [f"{velocity_mps[0]!r}", f"{velocity_mps[1]!r}",
                      f"{velocity_mps[2]!r}"]
+        self._revision += 1             # an orbit write
         self._execute(" ".join(args))
 
     def enable_realtime_attitude(self, object_path: str) -> None:
@@ -1278,6 +1291,7 @@ class ComBackend(StkBackend):
 
     def load_external_ephemeris(self, object_path: str,
                                 file_path: str) -> None:
+        self._revision += 1             # an orbit write
         self._execute(
             f"SetState {object_path} FromFile {proto.quote(file_path)}"
         )

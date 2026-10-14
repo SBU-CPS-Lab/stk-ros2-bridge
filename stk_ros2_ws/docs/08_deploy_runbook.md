@@ -972,6 +972,59 @@ from a clean commit with the run's bridge configuration copy set to
 group them by `sensing_mode`. Before relying on the combined read, its
 determinism signature must equal the separate-read reference exactly.
 
+At bridge stop, `bridge.log` has one `combined attitude/rate summary` line:
+steps in combined and separate mode, verifications (passed, mismatches),
+re-verifications after revision resets, and segment NO-DATA fallbacks. In a
+normal ACAV run expect one verification, which passes; two separate steps
+(t = 0.1 s, before any command, and the verification step); and one
+fallback (the terminal epoch).
+
+### Batched HPOP orbit reads
+
+`sensing.orbit_batch_samples` (100 in `bridge_params_acav.yaml`, 1 = off in
+the generic bridge) serves lockstep orbit reads from blocks. A block is two
+interval queries (Cartesian Position and Velocity) over the next 100 lockstep
+epochs. STK's own HPOP rows are used: nothing is interpolated or propagated in
+Python. A block is used only if its UTCG millisecond grid, row counts and
+values validate, and its first and last rows match instantaneous STK reads
+within `orbit_batch_audit_position_m` (1e-6 m) and
+`orbit_batch_audit_velocity_mps` (1e-9 m/s). Otherwise its epochs are read
+instantaneously and the fallback is logged. That is six orbit queries per
+100 steps instead of 200.
+
+It is used only:
+
+- in lockstep;
+- for a satellite whose STK propagator is confirmed HPOP or TwoBody;
+- when the scenario stop time read from STK matches the scenario window
+  (`run_acav_run.py` writes `orbit_batch_expected_window_s` from the
+  scenario specification).
+
+Blocks never reach the stop time, so the terminal epoch (720 s) is read
+instantaneously. Cached rows are dropped on scenario or object lifecycle
+changes, propagation, orbit writes, `SetAttitude Standard` / `ClearData`
+(once, at the first command) and raw Connect commands. Attitude samples do
+not drop them, because the ACAV force model is attitude-independent
+(spherical drag and SRP, confirmed by `inspect_hpop_force_model.py`).
+
+**Disable batching** (`orbit_batch_samples: 1` in the run's bridge
+configuration copy) for any run that edits the scenario in STK while the
+bridge runs, and for any attitude-dependent force model (for example
+N-plate drag or SRP, or a plug-in). Neither can notify the cache. E1 never
+batches: `run_acav_run.py` writes `orbit_batch_samples: 1` for both arms.
+
+At bridge stop, `bridge.log` has one `orbit batch summary` line: blocks
+loaded, audits passed and failed, validation and query failures, fallback
+blocks, invalidations, and epochs served from the cache versus read
+instantaneously (plus terminal and unsupported). In a normal ACAV run
+expect one invalidation (the first command) and one terminal epoch. Before
+relying on batching, the run's determinism signature must equal the
+reference exactly. If it changes, stop and analyse; don't accept it.
+
+**Equivalence diagnostic runs** must set both `combine_attitude_rate: false`
+and `orbit_batch_samples: 1` in their bridge configuration copy. Otherwise
+the diagnostic compares the new paths with themselves.
+
 ### COM sensing optimisation and comparison
 
 The COM backend reuses resolved Data Provider handles for the same object,

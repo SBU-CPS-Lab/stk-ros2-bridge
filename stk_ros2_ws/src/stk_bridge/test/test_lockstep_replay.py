@@ -21,12 +21,14 @@ from stk_bridge.backends.base import DataProviderQuery, StkTime
 from stk_bridge.backends.com_backend import ComBackend
 from stk_bridge.core.actuation import ActuationDispatcher
 from stk_bridge.core.frames import FrameRegistry
+from stk_bridge.core.orbit_batch import OrbitBatch
 from stk_bridge.core.sensing import SensingConfig, SensingPipeline
 from stk_bridge.nodes.bridge_node import StkBridgeNode
 
 from test_equivalence_diagnostic import (   # noqa: I100 - shared fake
     EPOCH,
     SAT,
+    STOP,
     FakeBackend,
     _attitude,
     _epochs,
@@ -51,7 +53,9 @@ class RecordingRoot:
         access = SimpleNamespace(
             ComputeAccess=lambda: None,
             ComputedAccessIntervalTimes=SimpleNamespace(Count=0))
-        return SimpleNamespace(GetAccessToObject=lambda target: access)
+        return SimpleNamespace(
+            GetAccessToObject=lambda target: access,
+            PropagatorType=SimpleNamespace(name="ePropagatorHPOP"))
 
 
 class ReplayBackend(ComBackend):
@@ -70,7 +74,7 @@ class ReplayBackend(ComBackend):
         return self._providers.list_objects()
 
 
-def _replay(steps, access_at=150):
+def _replay(steps, access_at=150, batch=False):
     providers = FakeBackend()
     backend = ReplayBackend(providers)
     dispatcher = ActuationDispatcher(backend, FrameRegistry(),
@@ -85,6 +89,9 @@ def _replay(steps, access_at=150):
     pipeline.set_attitude_write_probe(
         lambda path, when: StkBridgeNode._inertial_sample_written(
             node, path, when))
+    if batch:
+        pipeline.attach_orbit_batch(OrbitBatch(
+            samples=100, step_s=0.1, stop_time=StkTime(STOP)))
 
     revisions = []
     per_step = []
@@ -105,7 +112,7 @@ def _replay(steps, access_at=150):
                 stop=StkTime(EPOCH + 720.0), step_s=10.0))
         pipeline.read_all(SAT, when)
         revisions.append(backend.revision)
-        per_step.append([q.provider_name
+        per_step.append([(q.provider_name, q.is_instantaneous)
                          for q in providers.queries[before:]
                          if q.object_path == SAT])
     return backend, pipeline, revisions, per_step
@@ -131,9 +138,10 @@ def test_activation_at_the_first_written_epoch_then_three_queries():
                 "Attitude Quaternions", "Attitude Segment Quaternions"]
     combined = ["Cartesian Position", "Cartesian Velocity",
                 "Attitude Segment Quaternions"]
-    assert per_step[0] == separate            # t = 0.1 s: nothing written
-    assert per_step[1] == separate            # first written epoch: verify
-    assert per_step[2:] == [combined] * 298   # steady state
+    names = [[name for name, _ in step] for step in per_step]
+    assert names[0] == separate               # t = 0.1 s: nothing written
+    assert names[1] == separate               # first written epoch: verify
+    assert names[2:] == [combined] * 298      # steady state
     assert pipeline.sensing_mode == "combined_attitude_rate"
 
 
@@ -175,3 +183,41 @@ def test_bridge_stop_logs_the_summary_once(caplog):
     lines = [r.getMessage() for r in caplog.records
              if r.getMessage().startswith("combined attitude/rate summary")]
     assert lines == [pipeline.combine_summary_line()]
+    orbit = [r.getMessage() for r in caplog.records
+             if r.getMessage().startswith("orbit batch summary")]
+    assert orbit == [pipeline.orbit_batch_summary_line()]
+
+
+def _orbit_counts(steps):
+    """(interval, instantaneous) orbit queries per step."""
+    orbit = ("Cartesian Position", "Cartesian Velocity")
+    return [(sum(1 for n, inst in step if n in orbit and not inst),
+             sum(1 for n, inst in step if n in orbit and inst))
+            for step in steps]
+
+
+def test_batched_replay_has_no_per_step_invalidation():
+    backend, pipeline, revisions, per_step = _replay(300, batch=True)
+    assert set(revisions[1:]) == {2}
+    counts = _orbit_counts(per_step)
+    # t = 0.1 s: a block is loaded (2 interval + 4 audit reads). The first
+    # command's SetAttitude Standard + ClearData is structural, so at
+    # t = 0.2 s that block is dropped and reloaded; after that only the
+    # block starts at t = 10.2 s and 20.2 s read the orbit.
+    loads = [i for i, c in enumerate(counts) if c != (0, 0)]
+    assert loads == [0, 1, 101, 201]
+    assert all(counts[i] == (2, 4) for i in loads)
+    stats = pipeline.orbit_batch_statistics()
+    assert stats["blocks_loaded"] == 4
+    assert stats["invalidations_revision"] == 1
+    assert stats["audits_passed"] == 4 and stats["audits_failed"] == 0
+    assert stats["epochs_cached"] == 300
+    # The combined attitude/rate read is unaffected by batching.
+    assert pipeline.combine_statistics()["verifications"] == 1
+
+
+def test_steady_state_is_six_orbit_queries_per_hundred_steps():
+    _, _, _, per_step = _replay(300, batch=True)
+    counts = _orbit_counts(per_step[101:201])
+    assert sum(i for i, _ in counts) == 2
+    assert sum(n for _, n in counts) == 4

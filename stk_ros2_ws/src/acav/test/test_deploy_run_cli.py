@@ -701,3 +701,42 @@ class TestSensingModeLabelsAndE1Exclusion:
             attitude_provider="ECF Attitude Quaternions")
         assert sensing["combine_attitude_rate"] is False
         assert summary["sensing_mode"] == "separate"
+
+
+class TestOrbitBatchWindowCrossCheck:
+    """Decision Q4: the bridge cross-checks STK's stop time against the
+    scenario window, which run_acav_run.py passes in from the spec."""
+
+    def _sensing(self, tmp_path, base_yaml, **overrides):
+        import yaml
+        (tmp_path / "bridge.yaml").write_text(base_yaml, encoding="utf-8")
+        config = _config(tmp_path, **overrides)
+        launched = []
+        deps = Deps(popen=lambda argv, **k: launched.append(argv)
+                    or FakeProcess(),
+                    wait_for_bridge_connected=lambda *a: ConnectResult(
+                        True, "com"),
+                    wait_for_twin_ack=lambda *a: True, prompt=lambda m: None)
+        assert execute_run(config, deps) == 0
+        params = dict(item.split(":=", 1) for item in launched[0]
+                      if ":=" in item)
+        with open(json.loads(params["config_file"]),
+                  encoding="utf-8") as handle:
+            return yaml.safe_load(handle)["sensing"]
+
+    def test_the_window_is_passed_when_batching(self, tmp_path):
+        from acav.spec import AcavSpec
+        sensing = self._sensing(tmp_path,
+                                "sensing:\n  orbit_batch_samples: 100\n")
+        assert sensing["orbit_batch_expected_window_s"] == \
+            AcavSpec.load().window_duration_s
+
+    def test_not_passed_without_batching(self, tmp_path):
+        sensing = self._sensing(tmp_path, "sensing: {}\n")
+        assert "orbit_batch_expected_window_s" not in sensing
+
+    def test_not_passed_for_e1(self, tmp_path):
+        sensing = self._sensing(tmp_path,
+                                "sensing:\n  orbit_batch_samples: 100\n",
+                                experiment="E1")
+        assert "orbit_batch_expected_window_s" not in sensing

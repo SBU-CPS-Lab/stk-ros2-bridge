@@ -210,11 +210,28 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
     sensing["combine_attitude_rate"] = combine
     sensing["orbit_batch_samples"] = batch
     sensing["sensing_mode"] = sensing_mode_label(combine)
+    # Decision Q4: the bridge checks STK's stop time against the window.
+    if batch > 1 and sensing.get("orbit_batch_expected_window_s") is None:
+        window = _scenario_window_s(config, logger)
+        if window is not None:
+            sensing["orbit_batch_expected_window_s"] = window
     settings["sensing"] = sensing
     path = os.path.join(log_dir, RUN_BRIDGE_CONFIG)
     with open(path, "w", encoding="utf-8") as handle:
         yaml.safe_dump(settings, handle, sort_keys=False)
     return os.path.abspath(path)
+
+
+def _scenario_window_s(config: RunConfig, logger) -> Optional[float]:
+    """The scenario specification's window, or None if it cannot be read."""
+    try:
+        from acav.spec import AcavSpec
+
+        return float(AcavSpec.load(config.scenario or None).window_duration_s)
+    except Exception as error:              # noqa: BLE001 - reported
+        logger.warning("could not read the scenario window for the orbit "
+                       "batch stop-time cross-check: %s", error)
+        return None
 
 
 def sensing_mode_label(combine_attitude_rate: bool) -> str:

@@ -210,6 +210,8 @@ class StkBridgeNode:
         self.sensing = SensingPipeline(
             self.worker.backend, self.frames, self.sensing_config, report)
         self.sensing.set_attitude_write_probe(self._inertial_sample_written)
+        if self.sensing_config.orbit_batch_samples > 1:
+            self._attach_orbit_batch()
         if self.sensing_config.equivalence_diagnostic:
             self._attach_equivalence_diagnostic()
         self.inbox = CommandInbox(coalesce=bool(
@@ -237,6 +239,47 @@ class StkBridgeNode:
         return (written is not None
                 and abs(written[0] - when.epoch_seconds) <= 1e-6
                 and bool(written[2]))
+
+    def _attach_orbit_batch(self) -> None:
+        """(C): lockstep only, and only with a stop time STK confirms."""
+        from stk_bridge.core.orbit_batch import OrbitBatch, stop_time_problem
+        from stk_bridge.core.time_sync import ExecutionMode
+
+        config = self.sensing_config
+        if self.time_sync.mode is not ExecutionMode.LOCKSTEP:
+            LOGGER.warning("sensing.orbit_batch_samples is %d but the bridge "
+                           "is in %s mode; orbit batching is lockstep-only "
+                           "and stays off", config.orbit_batch_samples,
+                           self.time_sync.mode.name)
+            return
+        try:
+            stop = self.worker.call(
+                lambda backend: backend.get_scenario_stop_time(),
+                "scenario stop time")
+        except Exception as exc:            # noqa: BLE001 - stays off
+            stop = None
+            LOGGER.warning("could not read the scenario stop time: %s", exc)
+        problem = stop_time_problem(self.scenario.epoch, stop,
+                                    config.orbit_batch_expected_window_s)
+        if problem:
+            LOGGER.warning("orbit batching disabled for this run: %s",
+                           problem)
+            return
+        self.sensing.attach_orbit_batch(OrbitBatch(
+            samples=config.orbit_batch_samples,
+            step_s=self.time_sync.config.step_s, stop_time=stop,
+            audit_position_m=config.orbit_batch_audit_position_m,
+            audit_velocity_mps=config.orbit_batch_audit_velocity_mps))
+        LOGGER.info("orbit batching on: %d-epoch blocks before the stop "
+                    "time %s, audited to %.0e m / %.0e m/s",
+                    config.orbit_batch_samples, stop,
+                    config.orbit_batch_audit_position_m,
+                    config.orbit_batch_audit_velocity_mps)
+        if config.equivalence_diagnostic:
+            LOGGER.warning("the equivalence diagnostic compares orbit block "
+                           "rows with themselves while batching is on; run "
+                           "it with orbit_batch_samples: 1 and "
+                           "combine_attitude_rate: false")
 
     def _attach_equivalence_diagnostic(self) -> None:
         """Opt-in, observe-only; see core/equivalence_diagnostic.py."""
@@ -323,6 +366,7 @@ class StkBridgeNode:
             # Once per run; the loop and worker have stopped, so the
             # counters are final.
             LOGGER.info("%s", self.sensing.combine_summary_line())
+            LOGGER.info("%s", self.sensing.orbit_batch_summary_line())
         if getattr(self, "_diagnostic", None) is not None:
             self._diagnostic.close()
 

@@ -108,6 +108,15 @@ sensing:
   # its quaternion equals 'Attitude Quaternions' (core/sensing.py).
   # run_acav_run.py turns it off for E1 and forced providers.
   combine_attitude_rate: true
+  # (C) Lockstep orbit reads from audited 100-epoch HPOP blocks
+  # (core/orbit_batch.py). Both block ends must match instantaneous
+  # reads within these strict tolerances or the block is not used.
+  # Valid only while no force depends on attitude and nothing edits
+  # the scenario outside the bridge; run_acav_run.py sets it to 1
+  # for E1.
+  orbit_batch_samples: 100
+  orbit_batch_audit_position_m: 1.0e-6
+  orbit_batch_audit_velocity_mps: 1.0e-9
   rate_groups:
     fast:   { rate_hz: 10.0 }
     medium: { rate_hz: 1.0 }

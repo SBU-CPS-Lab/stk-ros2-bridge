@@ -445,6 +445,15 @@ class StkBackend(abc.ABC):
         """
         return None
 
+    def get_propagator_type(self, object_path: str) -> Optional[str]:
+        """The object's propagator type name, or None if not known.
+
+        On COM this is the AgEVePropagatorType enum name, e.g.
+        'ePropagatorHPOP'. Orbit batching runs only for a confirmed HPOP
+        or TwoBody propagator, so None means "do not batch".
+        """
+        return None
+
     def get_scenario_stop_time(self) -> Optional[StkTime]:
         """The open scenario's analysis stop time, or None if unknown.
 

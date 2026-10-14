@@ -93,6 +93,8 @@ sensing:
   equivalence_diagnostic: false
   # (B) Off in the generic bridge. See core/sensing.py.
   combine_attitude_rate: false
+  # (C) Orbit batching off in the generic bridge (1 = disabled).
+  orbit_batch_samples: 1
   # rate_groups: see sensing_pipeline.yaml (merged at load time by anyone
   # consuming both files; the bridge node reads rate_groups from here too
   # if sensing_pipeline.yaml is not separately loaded by your launch file)

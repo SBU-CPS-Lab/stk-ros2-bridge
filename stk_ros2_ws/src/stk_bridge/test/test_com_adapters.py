@@ -470,3 +470,39 @@ def test_revision_changes_on_structural_events_not_on_samples():
     assert backend.revision == start + 2
     backend.execute_connect("Unload / *")
     assert backend.revision == start + 3
+
+
+def test_propagator_type_is_read_from_the_satellite_object():
+    """PropagatorName is not on the 12.6 Object Model; the satellite's
+    PropagatorType enum is (the live inspection read ePropagatorHPOP)."""
+    backend = ComBackend()
+    backend._connected = True
+    enum = SimpleNamespace(name="ePropagatorHPOP")
+    backend._root = SimpleNamespace(
+        GetObjectFromPath=lambda path: SimpleNamespace(PropagatorType=enum))
+    assert backend.get_propagator_type("*/Satellite/S") == "ePropagatorHPOP"
+
+
+def test_propagator_type_is_none_when_unreadable():
+    backend = ComBackend()
+    backend._connected = True
+    backend._root = SimpleNamespace(
+        GetObjectFromPath=lambda path: SimpleNamespace())
+    assert backend.get_propagator_type("*/Satellite/S") is None
+
+
+def test_revision_changes_on_orbit_writes_and_propagation():
+    backend = ComBackend()
+    backend._execute = Mock()
+    backend._connected = True
+    backend._root = SimpleNamespace(GetObjectFromPath=lambda path:
+                                    SimpleNamespace(Propagator=SimpleNamespace(
+                                        Propagate=lambda: None)))
+    start = backend.revision
+    backend.propagate("*/Satellite/S")
+    backend.set_position("*/Satellite/S", StkTime(0.0), "ICRF",
+                         (7e6, 0.0, 0.0))
+    backend.load_external_ephemeris("*/Satellite/S", "C:/x.e")
+    assert backend.revision == start + 3
+    backend.set_current_time(StkTime(0.0))
+    assert backend.revision == start + 3

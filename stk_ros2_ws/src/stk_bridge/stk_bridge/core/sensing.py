@@ -113,6 +113,15 @@ class SensingConfig:
     #: quaternion equals the validated 'Attitude Quaternions'. Off by
     #: default; on for ACAV. See SensingPipeline._update_combine_state.
     combine_attitude_rate: bool = False
+    #: (C): epochs per audited orbit block (core/orbit_batch.py). 1, the
+    #: default, disables batching; ACAV uses 100. Lockstep only.
+    orbit_batch_samples: int = 1
+    #: Block-end audit tolerances against instantaneous reads (strict).
+    orbit_batch_audit_position_m: float = 1e-6
+    orbit_batch_audit_velocity_mps: float = 1e-9
+    #: Scenario window the STK stop time must match, when known
+    #: (run_acav_run.py writes it from the scenario specification).
+    orbit_batch_expected_window_s: Optional[float] = None
 
     @classmethod
     def from_config(cls, config: Optional[Dict] = None) -> "SensingConfig":
@@ -141,6 +150,15 @@ class SensingConfig:
                 section.get("equivalence_diagnostic_dir", "") or ""),
             combine_attitude_rate=bool(
                 section.get("combine_attitude_rate", False)),
+            orbit_batch_samples=int(
+                section.get("orbit_batch_samples", 1) or 1),
+            orbit_batch_audit_position_m=float(
+                section.get("orbit_batch_audit_position_m", 1e-6)),
+            orbit_batch_audit_velocity_mps=float(
+                section.get("orbit_batch_audit_velocity_mps", 1e-9)),
+            orbit_batch_expected_window_s=(
+                None if section.get("orbit_batch_expected_window_s") is None
+                else float(section["orbit_batch_expected_window_s"])),
         )
 
 
@@ -208,6 +226,8 @@ class SensingPipeline:
         self._rate_spec = self._select_rate_spec()
         #: Equivalence diagnostic, when attached: observes only.
         self._diagnostic = None
+        #: (C) orbit batch, when attached.
+        self._orbit_batch = None
         self._last_raw: Dict[str, tuple] = {}
         #: (B) state: "off" (not configured or unsupported), "pending"
         #: (separate reads; verify at the next written sample), "active"
@@ -225,6 +245,19 @@ class SensingPipeline:
                                 "verifications": 0,
                                 "verifications_passed": 0, "mismatches": 0,
                                 "revision_resets": 0}
+
+    def attach_orbit_batch(self, batch) -> None:
+        """Attach a core.orbit_batch.OrbitBatch (lockstep only)."""
+        self._orbit_batch = batch
+
+    def orbit_batch_statistics(self) -> Dict[str, int]:
+        return {} if self._orbit_batch is None else dict(
+            self._orbit_batch.counts)
+
+    def orbit_batch_summary_line(self) -> str:
+        if self._orbit_batch is None:
+            return "orbit batch summary: disabled"
+        return self._orbit_batch.summary_line()
 
     def attach_diagnostic(self, diagnostic) -> None:
         """Attach a core.equivalence_diagnostic.EquivalenceDiagnostic."""
@@ -579,6 +612,20 @@ class SensingPipeline:
         frame_id = frame or self._config.position_frame
         stk_frame = self._frames.stk_name(frame_id)
 
+        if self._orbit_batch is not None:
+            served = self._orbit_batch.serve(
+                self._backend, object_path, stk_frame, when,
+                lambda epoch: self._instant_orbit(object_path, stk_frame,
+                                                  epoch))
+            if served is not None:
+                health = self._channel("orbit_position")
+                health.samples += 1
+                health.last_sim_time_s = when.epoch_seconds
+                return StateSample(
+                    time=when, frame=self._frames.ros_id(frame_id),
+                    position_m=served[0], velocity_mps=served[1],
+                    is_extrapolated=self._is_realtime(object_path))
+
         data, mapping = self._read("orbit_position", dp.CARTESIAN_POSITION,
                                    object_path, when, stk_frame)
         if data is None:
@@ -608,6 +655,20 @@ class SensingPipeline:
             position_m=position, velocity_mps=velocity,
             is_extrapolated=self._is_realtime(object_path),
         )
+
+    def _instant_orbit(self, object_path: str, stk_frame: str,
+                       when: StkTime):
+        """Instantaneous position and velocity, for an orbit-block audit."""
+        pdata, pmap = dp.execute(self._backend, dp.CARTESIAN_POSITION,
+                                 object_path, frame=stk_frame,
+                                 start=when, stop=when)
+        vdata, vmap = dp.execute(self._backend, dp.CARTESIAN_VELOCITY,
+                                 object_path, frame=stk_frame,
+                                 start=when, stop=when)
+        return (tuple(dp.first_value(pdata, dp.CARTESIAN_POSITION, pmap, n)
+                      for n in ("x", "y", "z")),
+                tuple(dp.first_value(vdata, dp.CARTESIAN_VELOCITY, vmap, n)
+                      for n in ("vx", "vy", "vz")))
 
     def read_attitude(self, object_path: str, when: StkTime
                       ) -> Optional[AttitudeSample]:
