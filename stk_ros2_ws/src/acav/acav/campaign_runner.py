@@ -29,6 +29,11 @@ What this layer is actually responsible for
   exits cleanly without writing anything is a failure; scoring it as a
   run that captured nothing would put launch problems into the study's
   headline metric.
+* **Never resuming over records made by other code.** When the caller
+  says which code is running (``RunnerOptions.code_version``), a record
+  that would be resumed over must come from the same code; otherwise the
+  campaign is refused before anything runs, unless the operator
+  explicitly allows the mixture.
 """
 
 from __future__ import annotations
@@ -43,6 +48,11 @@ from acav.campaign import Campaign, RunSpec
 from acav.run_record import RecordError, RunRecord, read_record
 
 LOGGER = logging.getLogger(__name__)
+
+
+class CampaignRefused(Exception):
+    """The campaign was not started; the message says why and what to do."""
+
 
 #: A launcher executes one run and is expected to leave a readable
 #: record at ``output_path``. It may raise; the runner records that as a
@@ -117,6 +127,14 @@ class RunnerOptions:
     stop_on_error: bool = False
     #: Write the manifest and report what would run, launching nothing.
     dry_run: bool = False
+    #: The code running this campaign (acav.code_version.describe). When
+    #: set, resuming over a record from other code is refused; None keeps
+    #: the guard off for programmatic callers.
+    code_version: Optional[str] = None
+    #: Resume over records from other code anyway (logged per run).
+    allow_code_version_mismatch: bool = False
+    #: Resolves a commit to its git tree; see code_version.same_code.
+    tree_of: Optional[Callable[[str], Optional[str]]] = None
 
 
 def run_campaign(campaign: Campaign, launcher: Launcher,
@@ -124,6 +142,9 @@ def run_campaign(campaign: Campaign, launcher: Launcher,
     """Execute ``campaign``, one run at a time, and collect the records."""
     os.makedirs(options.output_dir, exist_ok=True)
     write_manifest(campaign, options.output_dir)
+
+    if not options.dry_run and options.resume:
+        _refuse_resume_across_code(campaign, options)
 
     outcome = CampaignOutcome(campaign=campaign)
     for run in campaign.runs:
@@ -150,6 +171,47 @@ def run_campaign(campaign: Campaign, launcher: Launcher,
             break
 
     return outcome
+
+
+def _refuse_resume_across_code(campaign: Campaign,
+                               options: RunnerOptions) -> None:
+    """Refuse before anything runs if resuming would mix code versions.
+
+    Only records that would actually be resumed over count: a record that
+    is unreadable or does not match its run is re-run anyway.
+    """
+    from acav import code_version
+
+    current = options.code_version
+    if current is None:
+        return
+    tree_of = options.tree_of or code_version.tree_of
+    conflicts = []
+    for run in campaign.runs:
+        record = _load_if_usable(
+            run, os.path.join(options.output_dir, run.output_name))
+        if record is None:
+            continue
+        recorded = record.provenance.code_version
+        if not code_version.same_code(recorded, current, tree_of=tree_of):
+            conflicts.append((run.run_id, recorded or "not recorded"))
+    if not conflicts:
+        return
+    if options.allow_code_version_mismatch:
+        for run_id, recorded in conflicts:
+            LOGGER.warning("resuming over a record from other code: %s "
+                           "(recorded %s, running %s)",
+                           run_id, recorded, current)
+        return
+    listing = "\n".join(f"  {run_id}: {recorded}"
+                        for run_id, recorded in conflicts)
+    raise CampaignRefused(
+        f"{len(conflicts)} completed run(s) in {options.output_dir} were "
+        f"made by other code than the code running now ({current}):\n"
+        f"{listing}\n"
+        f"Resuming would mix code versions in one campaign. Use a new "
+        f"output directory, re-run everything with --no-resume, or pass "
+        f"--resume-across-code-versions to keep them anyway.")
 
 
 def run_config_path(output_path: str) -> str:

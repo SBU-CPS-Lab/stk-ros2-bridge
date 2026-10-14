@@ -213,6 +213,14 @@ record's `provenance.code_version` and the campaign's `campaign.json`.
 from one clean commit. Results already obtained, and what is still to be
 run, are recorded in `09_live_runs_and_results.md`.
 
+`run_acav_campaign run` resumes by skipping runs whose record is already
+in the output directory. It refuses to start, before launching anything,
+if any record it would skip was made by other code: a different tree, a
+`+dirty` or unknown version, or no version at all. A commit whose message
+was rewritten keeps its tree and still counts as the same code. Use a new
+output directory, `--no-resume` to re-run everything, or
+`--resume-across-code-versions` to keep the older records anyway.
+
 ### Running validation sessions safely
 
 A session that compares commits switches branches between runs. On

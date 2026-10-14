@@ -54,7 +54,9 @@ from acav.campaign import (
     gain_surface,
     latency_breakdown,
 )
+from acav import code_version
 from acav.campaign_runner import (
+    CampaignRefused,
     CommandLauncher,
     RunnerOptions,
     run_campaign,
@@ -229,6 +231,9 @@ def _parser() -> argparse.ArgumentParser:
                         help="E5: Monte Carlo seeds (default 100)")
     parser.add_argument("--no-resume", action="store_true",
                         help="re-run everything, including completed runs")
+    parser.add_argument("--resume-across-code-versions", action="store_true",
+                        help="resume over completed runs that other code "
+                             "made (refused by default)")
     parser.add_argument("--stop-on-error", action="store_true")
     parser.add_argument("--json", default="", metavar="PATH",
                         help="write the report as JSON as well as printing it")
@@ -298,10 +303,17 @@ def _run(campaign: Campaign, args) -> int:
             "      python launch_one_run.py --out {output} --run {run_id}")
         return 2
 
-    outcome = run_campaign(campaign, CommandLauncher(launch), RunnerOptions(
+    options = RunnerOptions(
         output_dir=args.output_dir,
         resume=not args.no_resume,
-        stop_on_error=args.stop_on_error))
+        stop_on_error=args.stop_on_error,
+        code_version=code_version.describe(prefer_env=False),
+        allow_code_version_mismatch=args.resume_across_code_versions)
+    try:
+        outcome = run_campaign(campaign, CommandLauncher(launch), options)
+    except CampaignRefused as refused:
+        LOGGER.error("%s", refused)
+        return 2
 
     summary = outcome.summary()
     print(json.dumps(summary, indent=2))

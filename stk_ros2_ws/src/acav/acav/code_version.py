@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from typing import Optional
+from typing import Callable, Optional
 
 ENV_VAR = "ACAV_CODE_VERSION"
 
@@ -77,3 +77,26 @@ def is_clean(version: str) -> bool:
     """True for a plain commit hash: no local changes, nothing unknown."""
     return (len(version) == 40
             and all(c in "0123456789abcdef" for c in version))
+
+
+def tree_of(commit: str, directory: str = "") -> Optional[str]:
+    """The git tree of ``commit``, or None if it cannot be resolved."""
+    directory = directory or os.path.dirname(os.path.realpath(__file__))
+    return _git(directory, "rev-parse", "--verify", "--quiet",
+                f"{commit}^{{tree}}") or None
+
+
+def same_code(recorded: str, current: str,
+              tree_of: Callable[[str], Optional[str]] = tree_of) -> bool:
+    """Whether two recorded versions name the same code.
+
+    Both must be clean commits. Equal hashes are the same code; different
+    hashes are the same code only if they resolve to the same git tree,
+    which is what a message-only history rewrite leaves behind.
+    """
+    if not (is_clean(recorded) and is_clean(current)):
+        return False
+    if recorded == current:
+        return True
+    tree = tree_of(recorded)
+    return tree is not None and tree == tree_of(current)
