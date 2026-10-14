@@ -89,6 +89,8 @@ class RunConfig:
     bridge_connect_timeout_s: float = 90.0
     twin_ack_timeout_s: float = 60.0
     ros_domain_id: str = ""
+    #: A one-off measurement that report must never pool (summary.json).
+    diagnostic_label: str = ""
 
     def resolved_log_dir(self) -> str:
         if self.log_dir:
@@ -519,6 +521,7 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
     summary = {
         "run_id": config.run_id, "experiment": config.experiment,
         "code_version": version,
+        "diagnostic_label": config.diagnostic_label,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "steps": [],
     }
@@ -676,7 +679,19 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--bridge-connect-timeout-s", type=float,
                         default=90.0)
     parser.add_argument("--twin-ack-timeout-s", type=float, default=60.0)
+    parser.add_argument("--diagnostic-label", default="", type=_label,
+                        metavar="TEXT",
+                        help="mark this run as a one-off diagnostic; "
+                             "run_acav_campaign report refuses to pool it")
     return parser
+
+
+def _label(text: str) -> str:
+    import re
+    if text and not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", text):
+        raise argparse.ArgumentTypeError(
+            "use 1-64 letters, digits, '.', '_' or '-'")
+    return text
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -693,6 +708,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         prefix=args.prefix, log_dir=args.log_dir,
         bridge_connect_timeout_s=args.bridge_connect_timeout_s,
         twin_ack_timeout_s=args.twin_ack_timeout_s,
+        diagnostic_label=args.diagnostic_label,
     )
     return execute_run(config)
 

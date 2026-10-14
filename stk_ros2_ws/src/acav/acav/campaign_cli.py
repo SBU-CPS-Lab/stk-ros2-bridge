@@ -136,6 +136,26 @@ def diagnostic_runs(output_dir: str) -> List[str]:
     return found
 
 
+def labelled_runs(output_dir: str) -> List[tuple]:
+    """(run_id, label) of runs in ``output_dir`` with a diagnostic label.
+
+    Set by run_acav_run.py --diagnostic-label for one-off measurements
+    that must never be pooled with ordinary runs.
+    """
+    found = []
+    for path in sorted(glob.glob(os.path.join(output_dir, "*.logs",
+                                              "summary.json"))):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                summary = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        label = str(summary.get("diagnostic_label") or "")
+        if label:
+            found.append((str(summary.get("run_id") or path), label))
+    return found
+
+
 def code_version_summary(records: List[RunRecord]) -> dict:
     """Which code produced these records, and whether that is one commit.
 
@@ -386,6 +406,14 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             "diagnostic on, so its timings are inflated and it must not be "
             "pooled with ordinary runs. Move it to its own directory.",
             diagnostic)
+        return 1
+
+    labelled = labelled_runs(args.output_dir)
+    if labelled:
+        LOGGER.error(
+            "refusing to report: diagnostic run(s) %s must not be pooled "
+            "with ordinary runs. Move them to their own directory.",
+            labelled)
         return 1
 
     report = analyse(args.experiment, records, total_targets)
