@@ -274,6 +274,30 @@ so service queries are unaffected.
 3. **First-query penalty** (§5): execute means of the first live query
    before and after (C) — pending.
 
+## Commit map
+
+On 2026-10-14 the commit messages of this branch were rewritten; trees,
+authors and dates are unchanged. This document and the run records quote
+the old SHAs. They stay resolvable through the local branch
+`backup/perf-e6-throughput-pre-msg-rewrite`, which is not pushed.
+
+| Old | New | Subject |
+|---|---|---|
+| c291dfa | 1c6f90e | fix(acav): prepare standalone run configuration before bridge startup |
+| 80ee188 | 69f4f7e | fix(acav): warn when an existing run config has no run_id |
+| 9f0dfd4 | cb48b21 | docs(dev): phase 1 E6 impact analysis of combined attitude and orbit batching |
+| 5351713 | bf6a74d | feat(acav): add read-only HPOP force-model inspection script |
+| 83c4c77 | 183645d | feat(bridge): add opt-in sensing equivalence diagnostic |
+| 1f6e619 | 9abee01 | docs(dev): record the E6-diag-1 live results in the phase 1 analysis |
+| e77853a | f9d6aa2 | perf(bridge): share validated attitude and angular-rate provider reads |
+| d8da5f8 | ef9079a | test(bridge): replay the lockstep sequence and log a combined-read summary |
+| 5d8b017 | 6c9059b | perf(bridge): batch HPOP orbit reads with exact-grid validation |
+| 6238e1f | a4412a9 | docs(dev): record three more pre-existing issues in the phase 1 analysis |
+| 2849710 | 7e3b111 | fix(bridge): emit sensing summaries before the bridge is terminated |
+| 5723028 | eca37cf | docs(dev): record the E6-BC-1 live results in the phase 1 analysis |
+| fd2c407 | cff9257 | docs(dev): record the Phase 1 final results (provisional timings) |
+| f6a0092 | bf283ad | docs(runbook): add running validation sessions safely |
+
 ## Phase 1 final results — measured by the user, recomputed from the run files
 
 **PROVISIONAL.** These timing numbers come from 3 + 3 runs that were not
