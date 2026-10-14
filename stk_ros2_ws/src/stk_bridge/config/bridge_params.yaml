@@ -87,6 +87,10 @@ sensing:
   enable_access: false
   enable_link_budget: false
   access_pairs: []
+  # Opt-in, observe-only comparison of the current reads with the
+  # proposed optimisations (core/equivalence_diagnostic.py). It
+  # inflates every timing; enable it only in a per-run copy.
+  equivalence_diagnostic: false
   # rate_groups: see sensing_pipeline.yaml (merged at load time by anyone
   # consuming both files; the bridge node reads rate_groups from here too
   # if sensing_pipeline.yaml is not separately loaded by your launch file)

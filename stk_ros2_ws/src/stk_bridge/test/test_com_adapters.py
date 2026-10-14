@@ -433,3 +433,23 @@ class TestSensorConeReadBack:
 
         backend._get_object = raise_it
         assert backend.get_sensor_cone_half_angle_rad("s") is None
+
+
+def test_scenario_stop_time_is_read_from_the_open_scenario():
+    """The orbit-block reader must never request epochs at or after the
+    scenario's stop time; the stop time comes from STK itself."""
+    backend = ComBackend()
+    backend._connected = True
+    backend._root = SimpleNamespace(CurrentScenario=SimpleNamespace(
+        StartTime="1 Jun 2024 10:30:00.000",
+        StopTime="1 Jun 2024 10:42:00.000"))
+    assert backend.get_scenario_stop_time().epoch_seconds == \
+        backend.get_scenario_epoch().epoch_seconds + 720.0
+
+
+def test_scenario_stop_time_without_a_scenario_raises():
+    backend = ComBackend()
+    backend._connected = True
+    backend._root = SimpleNamespace(CurrentScenario=None)
+    with pytest.raises(QueryError):
+        backend.get_scenario_stop_time()

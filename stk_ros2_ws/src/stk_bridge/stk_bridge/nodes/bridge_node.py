@@ -209,6 +209,8 @@ class StkBridgeNode:
 
         self.sensing = SensingPipeline(
             self.worker.backend, self.frames, self.sensing_config, report)
+        if self.sensing_config.equivalence_diagnostic:
+            self._attach_equivalence_diagnostic()
         self.inbox = CommandInbox(coalesce=bool(
             (self.config.get("actuation") or {}).get("coalesce", True)))
 
@@ -223,6 +225,33 @@ class StkBridgeNode:
             target=self._loop, name="stk-bridge-loop", daemon=True)
         self._loop_thread.start()
         LOGGER.info("bridge running in %s mode", self.time_sync.mode.name)
+
+    def _attach_equivalence_diagnostic(self) -> None:
+        """Opt-in, observe-only; see core/equivalence_diagnostic.py."""
+        from stk_bridge.core.equivalence_diagnostic import (
+            EquivalenceDiagnostic,
+        )
+        from stk_bridge.core.time_sync import ExecutionMode
+
+        if self.time_sync.mode is not ExecutionMode.LOCKSTEP:
+            LOGGER.warning("sensing.equivalence_diagnostic is set but the "
+                           "bridge is in %s mode; the diagnostic compares "
+                           "lockstep epochs only and stays off",
+                           self.time_sync.mode.name)
+            return
+        stop = self.worker.call(
+            lambda backend: backend.get_scenario_stop_time(),
+            "scenario stop time")
+        self._diagnostic = EquivalenceDiagnostic(
+            self.sensing_config.equivalence_diagnostic_dir,
+            epoch=self.scenario.epoch, stop_time=stop,
+            step_s=self.time_sync.config.step_s)
+        self.sensing.attach_diagnostic(self._diagnostic)
+        LOGGER.warning(
+            "EQUIVALENCE DIAGNOSTIC ON: published values are unchanged, "
+            "but extra queries inflate every timing -- this run is not an "
+            "E6 measurement. Writing to %s (scenario stop time %s)",
+            self.sensing_config.equivalence_diagnostic_dir, stop)
 
     def _build_interfaces(self, qos_profiles: Dict[str, object]) -> None:
         from rclpy.callback_groups import (
@@ -278,6 +307,8 @@ class StkBridgeNode:
             self._loop_thread.join(timeout=5.0)
             self._loop_thread = None
         self.worker.stop(timeout_s=10.0)
+        if getattr(self, "_diagnostic", None) is not None:
+            self._diagnostic.close()
 
     # -- clock -------------------------------------------------------------
 

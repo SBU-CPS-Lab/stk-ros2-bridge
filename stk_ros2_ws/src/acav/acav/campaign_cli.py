@@ -113,6 +113,27 @@ def load_results(output_dir: str) -> List[RunRecord]:
     return records
 
 
+def diagnostic_runs(output_dir: str) -> List[str]:
+    """Runs in ``output_dir`` made with the sensing equivalence diagnostic.
+
+    Read from each run's ``<run>.logs/summary.json`` (written by
+    run_acav_run.py). Such a run's timings are inflated by the
+    diagnostic's extra queries, so it must never be pooled with ordinary
+    runs.
+    """
+    found = []
+    for path in sorted(glob.glob(os.path.join(output_dir, "*.logs",
+                                              "summary.json"))):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                summary = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if summary.get("equivalence_diagnostic") is True:
+            found.append(str(summary.get("run_id") or path))
+    return found
+
+
 def code_version_summary(records: List[RunRecord]) -> dict:
     """Which code produced these records, and whether that is one commit.
 
@@ -341,6 +362,15 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
     if not records:
         LOGGER.error("no readable records in %s", args.output_dir)
         return 2
+
+    diagnostic = diagnostic_runs(args.output_dir)
+    if diagnostic:
+        LOGGER.error(
+            "refusing to report: %s ran with the sensing equivalence "
+            "diagnostic on, so its timings are inflated and it must not be "
+            "pooled with ordinary runs. Move it to its own directory.",
+            diagnostic)
+        return 1
 
     report = analyse(args.experiment, records, total_targets)
     text = json.dumps(report, indent=2, default=str)

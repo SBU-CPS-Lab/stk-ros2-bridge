@@ -98,6 +98,12 @@ class SensingConfig:
     #: why it must be impossible to switch on by accident. See
     #: docs/C1_case_study_spec.md section 9.
     force_attitude_provider: str = ""
+    #: Opt-in, observe-only comparison of the current reads with the
+    #: alternatives (B) and (C) would use; see
+    #: core/equivalence_diagnostic.py. Off in every shipped config.
+    equivalence_diagnostic: bool = False
+    #: Where it writes; run_acav_run.py sets the run's log directory.
+    equivalence_diagnostic_dir: str = ""
 
     @classmethod
     def from_config(cls, config: Optional[Dict] = None) -> "SensingConfig":
@@ -120,6 +126,10 @@ class SensingConfig:
             enable_link_budget=bool(section.get("enable_link_budget", False)),
             force_attitude_provider=str(
                 section.get("force_attitude_provider", "") or ""),
+            equivalence_diagnostic=bool(
+                section.get("equivalence_diagnostic", False)),
+            equivalence_diagnostic_dir=str(
+                section.get("equivalence_diagnostic_dir", "") or ""),
         )
 
 
@@ -173,6 +183,13 @@ class SensingPipeline:
         self._attitude_forced = False
         self._attitude_spec = self._select_attitude_spec()
         self._rate_spec = self._select_rate_spec()
+        #: Equivalence diagnostic, when attached: observes only.
+        self._diagnostic = None
+        self._last_raw: Dict[str, tuple] = {}
+
+    def attach_diagnostic(self, diagnostic) -> None:
+        """Attach a core.equivalence_diagnostic.EquivalenceDiagnostic."""
+        self._diagnostic = diagnostic
 
     @property
     def attitude_provider(self) -> str:
@@ -331,6 +348,8 @@ class SensingPipeline:
             health.last_error = str(exc)
             raise
 
+        if self._diagnostic is not None:
+            self._last_raw[channel] = (spec, data, mapping)
         if data.row_count == 0:
             health.stale_reads += 1
             health.last_error = (
@@ -525,6 +544,9 @@ class SensingPipeline:
         readers = {"orbit": self.read_orbit,
                    "attitude": self.read_attitude,
                    "angular_rate": self.read_angular_rate}
+        observe = self._diagnostic is not None and channels is None
+        if observe:
+            self._last_raw = {}
         result: Dict[str, object] = {}
         for key in self.FAST_CHANNELS:
             if channels is not None and key not in channels:
@@ -549,6 +571,16 @@ class SensingPipeline:
                     count + 1)
             if sample is not None:
                 result[key] = sample
+        if observe:
+            try:
+                self._diagnostic.observe(
+                    self._backend, object_path,
+                    self._frames.stk_name(self._config.position_frame),
+                    when, self._last_raw.get("attitude"),
+                    self._last_raw.get("angular_rate"), result.get("orbit"))
+            except Exception:               # noqa: BLE001 - observe only
+                LOGGER.warning("equivalence diagnostic failed at %s",
+                               when, exc_info=True)
         return result
 
     def statistics(self) -> Dict[str, Dict]:

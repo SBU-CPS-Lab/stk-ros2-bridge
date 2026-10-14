@@ -192,11 +192,24 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
             "%s sets sensing.force_attitude_provider=%r; this run uses %r",
             config.bridge_config, previous, config.attitude_provider)
     sensing["force_attitude_provider"] = config.attitude_provider
+    # The opt-in equivalence diagnostic writes beside this run's logs.
+    if (sensing.get("equivalence_diagnostic")
+            and not sensing.get("equivalence_diagnostic_dir")):
+        sensing["equivalence_diagnostic_dir"] = os.path.abspath(log_dir)
     settings["sensing"] = sensing
     path = os.path.join(log_dir, RUN_BRIDGE_CONFIG)
     with open(path, "w", encoding="utf-8") as handle:
         yaml.safe_dump(settings, handle, sort_keys=False)
     return os.path.abspath(path)
+
+
+def _diagnostic_enabled(bridge_config: str) -> bool:
+    """Whether the per-run bridge config turns the diagnostic on."""
+    import yaml
+
+    with open(bridge_config, encoding="utf-8") as handle:
+        settings = yaml.safe_load(handle) or {}
+    return bool((settings.get("sensing") or {}).get("equivalence_diagnostic"))
 
 
 class RunConfigError(ValueError):
@@ -497,6 +510,11 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             return EXIT_STEP_FAILED
         run_log.info("bridge config: %s (force_attitude_provider=%r)",
                      bridge_config, config.attitude_provider)
+        summary["equivalence_diagnostic"] = _diagnostic_enabled(bridge_config)
+        if summary["equivalence_diagnostic"]:
+            run_log.warning("sensing equivalence diagnostic ON: this run's "
+                            "timings are inflated and it is not an E6 "
+                            "measurement")
         deps.check_idle(config.prefix)
         recorder = deps.start_recorder(config, log_dir)
         run_log.info("topic capture started: %s", log_dir)

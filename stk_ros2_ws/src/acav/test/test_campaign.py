@@ -608,3 +608,38 @@ class TestReportCliFigures:
         from acav.campaign_cli import _write_figures
 
         _write_figures("E4", {"surface": "not a list"}, [], 1, str(tmp_path))
+
+
+class TestDiagnosticRunsAreNotReported:
+    """A run with the sensing equivalence diagnostic on has inflated
+    timings; `report` must refuse a directory that contains one."""
+
+    def _directory(self, tmp_path, diagnostic):
+        record = _record("E6-dynamics_aware-lockstep-seed0", seed=0)
+        write_record(str(tmp_path / "E6-dynamics_aware-lockstep-seed0.json"),
+                     record)
+        logs = tmp_path / "E6-dynamics_aware-lockstep-seed0.logs"
+        logs.mkdir()
+        (logs / "summary.json").write_text(json.dumps({
+            "run_id": "E6-dynamics_aware-lockstep-seed0",
+            "equivalence_diagnostic": diagnostic}), encoding="utf-8")
+
+    def _report(self, tmp_path):
+        from acav.campaign_cli import main
+        return main(["report", "--experiment", "E6", "--repeats", "1",
+                     "--no-figures", "--output-dir", str(tmp_path)])
+
+    def test_a_diagnostic_run_makes_report_refuse(self, tmp_path, caplog):
+        self._directory(tmp_path, diagnostic=True)
+        assert self._report(tmp_path) == 1
+        assert "equivalence diagnostic" in caplog.text
+
+    def test_an_ordinary_run_is_reported(self, tmp_path):
+        self._directory(tmp_path, diagnostic=False)
+        assert self._report(tmp_path) == 0
+
+    def test_finding_diagnostic_runs(self, tmp_path):
+        from acav.campaign_cli import diagnostic_runs
+        self._directory(tmp_path, diagnostic=True)
+        assert diagnostic_runs(str(tmp_path)) == [
+            "E6-dynamics_aware-lockstep-seed0"]

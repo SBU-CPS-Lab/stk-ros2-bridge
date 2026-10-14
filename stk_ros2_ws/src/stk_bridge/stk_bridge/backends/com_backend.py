@@ -420,6 +420,16 @@ class ComBackend(StkBackend):
         except Exception as exc:
             raise QueryError("ScenarioEpoch", "/", str(exc)) from exc
 
+    def get_scenario_stop_time(self) -> StkTime:
+        self.require_connected()
+        scenario = self._root.CurrentScenario
+        if scenario is None:
+            raise QueryError("ScenarioStopTime", "/", "no scenario loaded")
+        try:
+            return proto.parse_utcg(str(scenario.StopTime))
+        except Exception as exc:
+            raise QueryError("ScenarioStopTime", "/", str(exc)) from exc
+
     def list_objects(self) -> List[ObjectInfo]:
         self.require_connected()
         scenario = self._root.CurrentScenario

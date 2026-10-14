@@ -432,6 +432,16 @@ class StkBackend(abc.ABC):
     @abc.abstractmethod
     def get_scenario_epoch(self) -> StkTime: ...
 
+    def get_scenario_stop_time(self) -> Optional[StkTime]:
+        """The open scenario's analysis stop time, or None if unknown.
+
+        Not abstract: only the COM backend (and Engine, which inherits
+        it) reads it. A caller that needs it -- the orbit-block reader,
+        which must never request an epoch at or after it -- treats None
+        as "do not batch".
+        """
+        return None
+
     @abc.abstractmethod
     def list_objects(self) -> List[ObjectInfo]: ...
 

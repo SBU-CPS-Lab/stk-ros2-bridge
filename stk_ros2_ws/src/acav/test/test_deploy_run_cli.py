@@ -597,3 +597,44 @@ def test_topic_recorder_starts_before_bridge_and_closes_on_connection_failure(tm
         prompt=lambda message: None))
     assert code != 0
     assert events == ['recording', 'bridge', 'closed']
+
+
+class TestEquivalenceDiagnosticFlag:
+    """The diagnostic is enabled only by a per-run bridge configuration,
+    writes next to the run's logs, and marks the run as diagnostic."""
+
+    def _run(self, tmp_path, base_yaml):
+        import yaml
+        (tmp_path / "bridge.yaml").write_text(base_yaml, encoding="utf-8")
+        config = _config(tmp_path)
+        launched = []
+        deps = Deps(popen=lambda argv, **k: launched.append(argv) or FakeProcess(),
+                    wait_for_bridge_connected=lambda *a: ConnectResult(True, "com"),
+                    wait_for_twin_ack=lambda *a: True, prompt=lambda m: None)
+        assert execute_run(config, deps) == 0
+        params = dict(item.split(":=", 1) for item in launched[0] if ":=" in item)
+        with open(json.loads(params["config_file"]), encoding="utf-8") as handle:
+            settings = yaml.safe_load(handle)
+        summary = json.loads((tmp_path / "run.logs" / "summary.json")
+                             .read_text(encoding="utf-8"))
+        return settings, summary, config
+
+    def test_off_by_default_and_recorded_as_false(self, tmp_path):
+        settings, summary, _ = self._run(
+            tmp_path, "sensing:\n  satellites: ['*/Satellite/SSS-1']\n")
+        assert summary["equivalence_diagnostic"] is False
+        assert "equivalence_diagnostic_dir" not in settings["sensing"]
+
+    def test_enabled_writes_next_to_the_logs_and_is_recorded(self, tmp_path):
+        settings, summary, config = self._run(
+            tmp_path, "sensing:\n  equivalence_diagnostic: true\n")
+        assert summary["equivalence_diagnostic"] is True
+        assert settings["sensing"]["equivalence_diagnostic_dir"] == \
+            os.path.abspath(config.resolved_log_dir())
+
+    def test_an_explicit_directory_is_kept(self, tmp_path):
+        settings, summary, _ = self._run(
+            tmp_path, "sensing:\n  equivalence_diagnostic: true\n"
+                      "  equivalence_diagnostic_dir: C:/elsewhere\n")
+        assert settings["sensing"]["equivalence_diagnostic_dir"] == \
+            "C:/elsewhere"

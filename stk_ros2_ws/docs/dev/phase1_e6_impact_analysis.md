@@ -222,6 +222,7 @@ E6 numbers.
 | LOW | Scheduler TwinStatus subscription best-effort depth 1 | `scheduler_node.py:296`, `:307-309`; `qos.py:27-34` |
 | LOW | `time.await_attitude_commands` inert in ACAV | `bridge_node.py:474-476`, `:369-370` |
 | LOW | E6 CLI default `--repeats 20` | `campaign_cli.py:205` |
+| LOW | `conversions.quaternion_angle_between` (2·acos\|a·b\|) has a precision floor ≈ 3e-8 rad; harmless for the 0.1° landed-attitude check, unusable for sub-1e-8 comparisons (the equivalence diagnostic uses a local 4·atan2 form instead) | `conversions.py:162-173`; `bridge_node.py:610-612` |
 | (user) | Startup health timeout at t = 0.1 s; retained `last_error` (`health.py:112`, `:117`) | not investigated |
 
 ## §11 Verdicts (as analysed)
