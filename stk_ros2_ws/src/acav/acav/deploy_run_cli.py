@@ -246,7 +246,9 @@ def standalone_run_config(config: RunConfig, version: str) -> dict:
 def prepare_run_config(config: RunConfig, version: str):
     """Make sure the twin's run configuration exists; return its path.
 
-    Returns ``(absolute path, created)``. A missing file is written from
+    Returns ``(absolute path, created, run_id_verified)``; the last is
+    False only for an existing file without a ``run_id`` key, which
+    cannot be shown to belong to this run. A missing file is written from
     this run's arguments, as UTF-8 without a byte-order mark. An existing
     one -- a campaign run's, or an operator's override -- is left
     byte-for-byte unchanged, but must be a JSON object for this run: a
@@ -264,8 +266,10 @@ def prepare_run_config(config: RunConfig, version: str):
             raise RunConfigError(f"cannot read {path}: {error}") from error
         if raw.startswith(b"\xef\xbb\xbf"):
             raise RunConfigError(
-                f"{path} starts with a UTF-8 byte-order mark; rewrite it as "
-                f"UTF-8 without one (Windows PowerShell Out-File adds it)")
+                f"{path} starts with a UTF-8 byte-order mark (Windows "
+                f"PowerShell Out-File adds one); re-save it as UTF-8 "
+                f"without a byte-order mark, or delete it so it is "
+                f"regenerated from this run's arguments")
         try:
             payload = json.loads(raw.decode("utf-8"))
         except ValueError as error:
@@ -279,14 +283,14 @@ def prepare_run_config(config: RunConfig, version: str):
             raise RunConfigError(
                 f"{path} is for run {payload['run_id']!r}, not "
                 f"{config.run_id!r}")
-        return path, False
+        return path, False, "run_id" in payload
 
     payload = standalone_run_config(config, version)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
         handle.write("\n")
-    return path, True
+    return path, True, True
 
 
 def scheduler_argv(config: RunConfig) -> List[str]:
@@ -472,11 +476,16 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
     try:
         # Before anything is launched: the twin cannot start without it.
         try:
-            run_config, created = prepare_run_config(config, version)
+            run_config, created, verified = prepare_run_config(
+                config, version)
         except RunConfigError as error:
             record("run_config", False, str(error))
             return EXIT_STEP_FAILED
         summary["run_config"] = run_config
+        summary["run_config_run_id_verified"] = verified
+        if not verified:
+            run_log.warning("run config has no run_id; cannot verify it "
+                            "belongs to this run: %s", run_config)
         run_log.info("run config (%s): %s",
                      "created" if created else "existing, unchanged",
                      run_config)

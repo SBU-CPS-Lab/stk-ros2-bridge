@@ -533,6 +533,41 @@ class TestStandaloneRunConfig:
         assert reason in summary["steps"][0]["detail"]
         assert path.read_bytes() == content
 
+    def test_the_bom_rejection_says_how_to_fix_it(self, tmp_path):
+        (tmp_path / "run.runconfig.json").write_bytes(
+            b'\xef\xbb\xbf{"run_id": "E6-seed1"}')
+        code, events, summary, config = self._run(tmp_path)
+        detail = summary["steps"][0]["detail"]
+        assert "re-save it as UTF-8 without a byte-order mark" in detail
+        assert "delete it so it is regenerated" in detail
+
+    def test_an_existing_config_without_run_id_is_used_with_a_warning(
+            self, tmp_path):
+        path = tmp_path / "run.runconfig.json"
+        original = b'{"gains": {}, "fault": null}\n'
+        path.write_bytes(original)
+        code, events, summary, config = self._run(tmp_path)
+        assert code == 0
+        assert path.read_bytes() == original
+        assert summary["run_config_run_id_verified"] is False
+        log = open(os.path.join(config.resolved_log_dir(), "run.log"),
+                   encoding="utf-8").read()
+        assert ("WARNING run config has no run_id; cannot verify it "
+                "belongs to this run") in log
+
+    @pytest.mark.parametrize("content", [
+        None, b'{"run_id": "E6-seed1", "gains": {}}'])
+    def test_a_created_or_matching_config_is_recorded_as_verified(
+            self, tmp_path, content):
+        if content is not None:
+            (tmp_path / "run.runconfig.json").write_bytes(content)
+        code, events, summary, config = self._run(tmp_path)
+        assert code == 0
+        assert summary["run_config_run_id_verified"] is True
+        log = open(os.path.join(config.resolved_log_dir(), "run.log"),
+                   encoding="utf-8").read()
+        assert "has no run_id" not in log
+
     @pytest.mark.parametrize("field, value", [
         ("gains_json", "{oops"), ("gains_json", "[1]"),
         ("fault_json", "{oops"), ("fault_json", "3"),
