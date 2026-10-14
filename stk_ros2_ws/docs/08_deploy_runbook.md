@@ -225,6 +225,12 @@ was rewritten keeps its tree and still counts as the same code. Use a new
 output directory, `--no-resume` to re-run everything, or
 `--resume-across-code-versions` to keep the older records anyway.
 
+When a run is executed again (`--no-resume`, or a record that does not
+match its run), its previous record, `.runconfig.json` and `.logs` folder
+are renamed to `<name>.superseded-<time>` first, never deleted; `report`
+ignores them. If they cannot be renamed (a file still open), that run
+fails without launching.
+
 ### Running validation sessions safely
 
 A session that compares commits switches branches between runs. On

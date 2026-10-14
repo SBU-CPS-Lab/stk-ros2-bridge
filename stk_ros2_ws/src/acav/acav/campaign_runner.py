@@ -168,13 +168,49 @@ def run_campaign(campaign: Campaign, launcher: Launcher,
                     detail="already on disk"))
                 continue
 
-        outcome.outcomes.append(_execute(run, campaign, launcher, path))
+        try:
+            _supersede_previous_attempt(path)
+        except OSError as error:
+            LOGGER.error("not launching %s: %s", run.run_id, error)
+            outcome.outcomes.append(RunOutcome(
+                run.run_id, "failed", path,
+                detail=f"could not move the previous attempt aside: "
+                       f"{error}"))
+        else:
+            outcome.outcomes.append(_execute(run, campaign, launcher, path))
         if options.stop_on_error and outcome.outcomes[-1].status == "failed":
             LOGGER.error("stopping: %s failed and stop_on_error is set",
                          run.run_id)
             break
 
     return outcome
+
+
+def _supersede_previous_attempt(output_path: str) -> None:
+    """Move a previous attempt's record, run config and logs aside.
+
+    Left in place, an old record would be read as the new attempt's
+    result if the launcher exited cleanly without writing one. The files
+    are renamed, never deleted, to ``<name>.superseded-<time>[-<n>]``:
+    names that neither ``report`` (``*.json``) nor the diagnostic scan
+    (``*.logs``) picks up.
+    """
+    import time
+
+    base = os.path.splitext(output_path)[0]
+    previous = [p for p in (output_path, run_config_path(output_path),
+                            f"{base}.logs")
+                if os.path.exists(p)]
+    if not previous:
+        return
+    suffix = f".superseded-{time.strftime('%Y%m%dT%H%M%S')}"
+    attempt = 1
+    while any(os.path.exists(p + suffix) for p in previous):
+        attempt += 1
+        suffix = f".superseded-{time.strftime('%Y%m%dT%H%M%S')}-{attempt}"
+    for path in previous:
+        os.replace(path, path + suffix)
+        LOGGER.info("previous attempt kept as %s", path + suffix)
 
 
 def _refuse_unclean_code(options: RunnerOptions) -> None:
