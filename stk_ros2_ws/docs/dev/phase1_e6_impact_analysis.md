@@ -224,6 +224,9 @@ E6 numbers.
 | LOW | E6 CLI default `--repeats 20` | `campaign_cli.py:205` |
 | LOW | `conversions.quaternion_angle_between` (2·acos\|a·b\|) has a precision floor ≈ 3e-8 rad; harmless for the 0.1° landed-attitude check, unusable for sub-1e-8 comparisons (the equivalence diagnostic uses a local 4·atan2 form instead) | `conversions.py:162-173`; `bridge_node.py:610-612` |
 | (user) | Startup health timeout at t = 0.1 s; retained `last_error` (`health.py:112`, `:117`) | not investigated |
+| MED | `PropagatorName` is not on the STK 12.6 Object Model (absent from the installed agi.stk12 wheel), so `list_objects().propagator_type` from `com_backend.py` `_safe_propagator_name` is probably always `""` on COM. This would affect real-time detection (`sensing.py` `_is_realtime`) and the verifier's printed propagator name. Orbit batching (C) uses `IAgSatellite.PropagatorType` via `get_propagator_type` instead. Not verified live. | `_safe_propagator_name`; agi.stk12 `stkobjects.py` |
+| LOW | In E6-diag-1 the runner's `terminate()` did not end the bridge within 30 s: scheduler exit at 15:56:08.133 (`run.log`), bridge still logging until its own terminal-epoch barrier abort at 15:56:37 and `stop()` at 15:56:38 (`bridge.log`). End-of-run summary lines rely on `stop()` running. Not investigated. | `deploy_run_cli.py` `_stop_process`; `results/E6_diag_83c4c77/E6-diag-1.logs/` |
+| MED (cost) | `build_acav_twin` bakes `RunConfigPath` into the generated model (`build_acav_twin.m:207`, `:530`), so the twin must be rebuilt for every run — the largest remaining fixed cost per run (3–5 min, user's estimate); candidate for a later phase. | |
 
 ## §11 Verdicts (as analysed)
 
