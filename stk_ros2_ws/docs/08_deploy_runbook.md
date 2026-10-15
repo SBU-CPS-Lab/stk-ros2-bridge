@@ -1125,9 +1125,16 @@ gets `time.mode: free_run`, and the twin, whose run config gets
 in lockstep. The twin is rebuilt per run as usual and picks the mode up
 from its run config.
 
-- **Bridge.** The clock follows the wall clock (real-time factor 1), so a
-  720 s window takes about 12 min of loop time, and the number of steps
-  varies from run to run. There is no barrier. Orbit batching is
+- **Start gate.** The bridge holds the clock at exactly t = 0,
+  republishing the initial step, until both the twin and the scheduler
+  have acked once. Without this, the window ran on through the MATLAB
+  handoff and the scheduler's target resolution. `bridge.log` reports
+  `free-run start gate opened after <s> s`. `summary.json` records it as
+  `free_run_start_gate`, and a run whose gate never opened fails its
+  `free_run_start_gate` step.
+- **Bridge.** After the gate opens, the clock follows the wall clock
+  (real-time factor 1), so a 720 s window takes about 12 min of loop
+  time, and the number of steps varies from run to run. There is no barrier. Orbit batching is
   lockstep-only and stays off. Summaries and STK graphics samples are
   taken every 1000 iterations and at the stop time.
 - **Twin.** Each sample at time t integrates enough fixed 0.1 s steps

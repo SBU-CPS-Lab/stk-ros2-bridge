@@ -92,3 +92,17 @@ class TestRunConfig:
                            match="execution_mode"):
             prepare_run_config(_config(tmp_path, execution_mode="free_run",
                                        run_config=str(path)), "v")
+
+
+class TestStartupGateFile:
+    """The free-run start gate's record goes beside the run's logs; a
+    lockstep run's bridge config does not name one."""
+
+    def test_free_run_names_the_gate_file(self, tmp_path):
+        settings = _bridge_settings(tmp_path, execution_mode="free_run")
+        assert settings["startup_gate_file"] == os.path.join(
+            os.path.abspath(str(tmp_path / "run.logs")), "startup_gate.json")
+
+    def test_lockstep_does_not(self, tmp_path):
+        settings = _bridge_settings(tmp_path, execution_mode="lockstep")
+        assert "startup_gate_file" not in settings

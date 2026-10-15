@@ -189,6 +189,8 @@ EXECUTION_MODES = ("lockstep", "free_run")
 GRAPHICS_STATE_FILE = "stk_graphics.json"
 #: A free-run twin's sub-step statistics, written by adcs.simulink_step.
 TWIN_SUBSTEPS_FILE = "twin_substeps.json"
+#: When a free-run bridge's start gate opened, and the wall time it held.
+STARTUP_GATE_FILE = "startup_gate.json"
 #: The startup sample is written before the bridge reports CONNECTED;
 #: the terminal one at the last step, before the scheduler can finish.
 GRAPHICS_STARTUP_TIMEOUT_S = 10.0
@@ -255,6 +257,10 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
     # Where the bridge records STK's graphics state for this run.
     settings["graphics_state_file"] = os.path.join(
         os.path.abspath(log_dir), GRAPHICS_STATE_FILE)
+    # Free-run only: where the bridge records when its start gate opened.
+    if config.execution_mode == "free_run":
+        settings["startup_gate_file"] = os.path.join(
+            os.path.abspath(log_dir), STARTUP_GATE_FILE)
     path = os.path.join(log_dir, RUN_BRIDGE_CONFIG)
     with open(path, "w", encoding="utf-8") as handle:
         yaml.safe_dump(settings, handle, sort_keys=False)
@@ -855,11 +861,22 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 config, deps.read_graphics_state(
                     graphics_file, "end", GRAPHICS_END_TIMEOUT_S),
                 summary, record)
+            gate_ok = True
             if config.execution_mode == "free_run":
                 # The twin's ZOH sub-step statistics (adcs.simulink_step);
                 # None when no sub-step event was recorded.
                 summary["twin_substeps"] = _read_json_or_none(
                     os.path.join(log_dir, TWIN_SUBSTEPS_FILE))
+                # The start gate: the clock ran from t = 0 only once it
+                # opened, so a run without it did not run the window.
+                gate = _read_json_or_none(
+                    os.path.join(log_dir, STARTUP_GATE_FILE))
+                summary["free_run_start_gate"] = gate
+                gate_ok = bool(gate and gate.get("opened"))
+                record("free_run_start_gate", gate_ok,
+                       f"opened after {gate['wait_s']:.1f} s" if gate_ok
+                       else "the bridge never reported its start gate "
+                            "open")
 
             # The scheduler no longer participates in the barrier. Stop the
             # bridge before waiting for a human, otherwise a successful run
@@ -872,7 +889,7 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 "continue: ")
 
         return (EXIT_OK if scheduler_returncode == 0 and graphics_ok
-                else EXIT_STEP_FAILED)
+                and gate_ok else EXIT_STEP_FAILED)
     finally:
         for name, process in (("scheduler", scheduler_proc), ("bridge", bridge_proc)):
             _stop_process(process, name, run_log)
