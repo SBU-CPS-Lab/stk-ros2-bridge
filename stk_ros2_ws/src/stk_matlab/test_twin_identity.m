@@ -63,42 +63,75 @@ function test_twin_identity()
     writeBytes(identityPath, uint8(['{"run_id": "r"}' 10]));
     built = adcs.code_fingerprint();
     zero3 = zeros(1, 3);
-    [~,~,~,~,~,~,~,ready,~,~,identity,n] = adcs.simulink_step( ...
+    % v2 adds the polling rate the model was built with (Simulink pacing,
+    % build_acav_twin's PollingRateHz).
+    [~,~,~,~,~,~,~,ready,~,~,identity,n,due] = adcs.simulink_step( ...
         zeros(1,4), zero3, zero3, zero3, zero3, false, 0, true, ...
-        identityPath, '', built);
+        identityPath, '', built, 100);
     assert(~ready, 'startup sample must not be ready');
+    assert(~due, 'the identity is not due before the twin is ready');
     assert(isa(identity, 'uint8') && isequal(size(identity), [1 128]));
-    expected = sprintf('v1 %s %s %s', ...
+    expected = sprintf('v2 %s %s %s 100Hz', ...
         'ea0ab5a1b67c36408f52f019e011c48fef54dad1f331ff35d7ec1261bc355fbb', ...
         built(1:16), built(1:16));
-    assert(n == 101 && strcmp(char(identity(1:n)), expected), ...
+    assert(n == 107 && strcmp(char(identity(1:n)), expected), ...
         'identity text: %s', char(identity(1:n)));
     assert(all(identity(n+1:end) == 0));
 
     % A model built from other code reports that build fingerprint.
     [~,~,~,~,~,~,~,~,~,~,identity,n] = adcs.simulink_step( ...
         zeros(1,4), zero3, zero3, zero3, zero3, false, 0, true, ...
-        identityPath, '', repmat('f', 1, 64));
+        identityPath, '', repmat('f', 1, 64), 100);
     assert(strcmp(char(identity(69:n)), ...
-        sprintf('%s %s', repmat('f', 1, 16), built(1:16))));
+        sprintf('%s %s 100Hz', repmat('f', 1, 16), built(1:16))));
 
-    % No run config and no build fingerprint: '-' fields, which the
-    % runner refuses.
+    % No run config, no build fingerprint, no polling rate: '-' fields
+    % (the runner refuses the first two).
     [~,~,~,~,~,~,~,~,~,~,identity,n] = adcs.simulink_step( ...
         zeros(1,4), zero3, zero3, zero3, zero3, false, 0, true, '');
-    assert(strcmp(char(identity(1:n)), sprintf('v1 - - %s', built(1:16))));
+    assert(strcmp(char(identity(1:n)), sprintf('v2 - - %s -', built(1:16))));
+
+    % A fractional rate is written without trailing zeros.
+    [~,~,~,~,~,~,~,~,~,~,identity,n] = adcs.simulink_step( ...
+        zeros(1,4), zero3, zero3, zero3, zero3, false, 0, true, ...
+        identityPath, '', built, 12.5);
+    assert(endsWith(char(identity(1:n)), ' 12.5Hz'));
 
     % The identity is fixed at reset: later calls keep it.
     adcs.simulink_step(zeros(1,4), zero3, zero3, zero3, zero3, false, ...
-        0, true, identityPath, '', built);
+        0, true, identityPath, '', built, 100);
     writeBytes(identityPath, uint8(['{"run_id": "changed"}' 10]));
     [~,~,~,~,~,~,~,~,~,~,identity,n] = adcs.simulink_step( ...
         zeros(1,4), zero3, zero3, zero3, zero3, false, 0.1, false, ...
-        identityPath, '', built);
+        identityPath, '', built, 100);
     assert(strcmp(char(identity(1:n)), expected));
     clear adcs.simulink_step
 
+    % -- when the identity is published ----------------------------------
+    % Once the twin is ready, then at most once per wall second (the run
+    % orchestrator subscribes after the twin acks and waits up to 10 s);
+    % again at once after a reset. The ack is not throttled.
+    writeBytes(identityPath, uint8(['{"run_id": "r"}' 10]));
+    pos = [6878137 0 0]; vel = [0 7500 0]; target = [6378137 0 0];
+    dueAt = @(t, reset) dueOf(identityPath, built, pos, vel, target, t, reset);
+    assert(dueAt(0.0, true), 'due on the first ready step');
+    assert(~dueAt(0.1, false), 'not due again within a second');
+    pause(1.05);
+    assert(dueAt(0.2, false), 'due again after a wall second');
+    assert(~dueAt(0.3, false));
+    assert(dueAt(0.0, true), 'due at once after a reset');
+    clear adcs.simulink_step
+
     fprintf('PASS: twin identity output.\n');
+end
+
+function due = dueOf(configPath, built, pos, vel, target, t, reset)
+    persistent q w
+    if reset || isempty(q), q = [0 0 0 1]; w = [0 0 0]; end
+    [~,qCmd,~,~,~,~,~,ready,~,omegaCmd,~,~,due] = adcs.simulink_step( ...
+        q, w, pos, vel, target, true, t, reset, configPath, '', built, 100);
+    assert(ready);
+    q = qCmd; w = omegaCmd;
 end
 
 function writeBytes(path, bytes)

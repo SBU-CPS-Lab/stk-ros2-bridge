@@ -633,8 +633,8 @@ def _label_record(output: str, **provenance) -> None:
                                                **provenance)))
 
 
-#: The twin republishes its identity every step while ready, so a few
-#: seconds after its first ack are plenty.
+#: The twin republishes its identity about once per wall second while
+#: ready, so a few seconds after its first ack are plenty.
 TWIN_IDENTITY_TIMEOUT_S = 10.0
 
 
@@ -667,8 +667,9 @@ def _confirm_twin_identity_ros(run_config: str, timeout_s: float
 def _wait_for_twin_identity_ros(timeout_s: float) -> Optional[str]:
     """The latest identity the twin published, or None.
 
-    The twin publishes RELIABLE + VOLATILE on every ready step, the same
-    as its ack, so the bridge's own command_qos() matches it.
+    The twin publishes RELIABLE + VOLATILE, the same as its ack, about
+    once per wall second while ready, so the bridge's own command_qos()
+    matches it.
     """
     import rclpy
     from stk_bridge.interfaces.qos import command_qos

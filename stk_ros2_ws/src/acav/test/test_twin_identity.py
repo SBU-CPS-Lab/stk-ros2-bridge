@@ -66,8 +66,8 @@ def run_config(tmp_path):
 
 
 def _identity(config=CONFIG_SHA, build=FINGERPRINT_VECTOR[:16],
-              runtime=FINGERPRINT_VECTOR[:16]):
-    return f"v1 {config} {build} {runtime}"
+              runtime=FINGERPRINT_VECTOR[:16], polling="100Hz"):
+    return f"v2 {config} {build} {runtime} {polling}"
 
 
 class TestFingerprint:
@@ -106,17 +106,29 @@ class TestParse:
         assert identity.config_sha256 == CONFIG_SHA
         assert identity.build_fingerprint == FINGERPRINT_VECTOR[:16]
         assert identity.runtime_fingerprint == FINGERPRINT_VECTOR[:16]
-        assert len(_identity()) == 101 <= ti.MAX_IDENTITY_BYTES
+        assert identity.polling_hz == 100.0
+        assert len(_identity()) == 107 <= ti.MAX_IDENTITY_BYTES
 
     def test_no_run_config_is_a_dash(self):
         assert ti.parse_identity(_identity(config="-")).config_sha256 == "-"
 
+    def test_the_polling_rate(self):
+        assert ti.parse_identity(_identity(polling="12.5Hz")).polling_hz \
+            == 12.5
+        assert ti.parse_identity(_identity(polling="-")).polling_hz is None
+
     @pytest.mark.parametrize("text", [
-        "", "v2 " + CONFIG_SHA + " " + "0" * 16 + " " + "0" * 16,
-        "v1 " + CONFIG_SHA + " " + "0" * 16,
-        "v1 " + CONFIG_SHA[:-1] + " " + "0" * 16 + " " + "0" * 16,
-        "v1 " + CONFIG_SHA + " " + "0" * 15 + " " + "0" * 16,
-        "v1 " + CONFIG_SHA.upper() + " " + "0" * 16 + " " + "0" * 16,
+        "",
+        # v1, before the polling rate was part of the identity
+        "v1 " + CONFIG_SHA + " " + "0" * 16 + " " + "0" * 16,
+        "v2 " + CONFIG_SHA + " " + "0" * 16 + " " + "0" * 16,
+        "v2 " + CONFIG_SHA[:-1] + " " + "0" * 16 + " " + "0" * 16 + " 100Hz",
+        "v2 " + CONFIG_SHA + " " + "0" * 15 + " " + "0" * 16 + " 100Hz",
+        "v2 " + CONFIG_SHA.upper() + " " + "0" * 16 + " " + "0" * 16
+        + " 100Hz",
+        "v2 " + CONFIG_SHA + " " + "0" * 16 + " " + "0" * 16 + " 100",
+        "v2 " + CONFIG_SHA + " " + "0" * 16 + " " + "0" * 16 + " 0Hz",
+        "v2 " + CONFIG_SHA + " " + "0" * 16 + " " + "0" * 16 + " fastHz",
     ])
     def test_malformed(self, text):
         with pytest.raises(ValueError):

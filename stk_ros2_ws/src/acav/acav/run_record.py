@@ -117,7 +117,8 @@ class Provenance:
     #: reading ("not recorded") and changes nothing else in the record.
     code_version: str = ""
     #: The twin identity the run orchestrator checked and accepted
-    #: ("v1 <run-config sha256> <build fp> <runtime fp>", see
+    #: ("v2 <run-config sha256> <build fp> <runtime fp> <polling>", or
+    #: "v1 ..." without the polling rate before it was recorded; see
     #: acav.twin_identity); empty when not checked -- every record written
     #: before the check existed. No RECORD_VERSION bump, as above.
     twin_identity: str = ""

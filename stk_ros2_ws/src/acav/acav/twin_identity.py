@@ -5,15 +5,20 @@ The Simulink model is built with its run-config path baked in
 the previous run's config without any error. Once ready, the twin
 publishes on IDENTITY_TOPIC (std_msgs/String):
 
-    v1 <cfg> <build> <runtime>
+    v2 <cfg> <build> <runtime> <polling>
 
 ``cfg``      sha256 of the run-config bytes it parsed (``-`` for none)
 ``build``    code fingerprint written into the model when it was built
 ``runtime``  code fingerprint recomputed from disk at simulation start
+``polling``  the model's step rate per wall second (Simulink pacing,
+             build_acav_twin's PollingRateHz), e.g. ``100Hz``; ``-`` if
+             not given
 
 each fingerprint truncated to FINGERPRINT_CHARS hex digits, so the
-message is 101 bytes. The run orchestrator checks it before starting
-the scheduler (deploy_run_cli.py).
+message is 107 bytes at 100 Hz. The twin publishes it on its first
+ready step and then about once per wall second. The run orchestrator
+checks it before starting the scheduler (deploy_run_cli.py), and the
+record keeps the text (Provenance.twin_identity).
 
 The fingerprint is a sha256 over ``<path>\\0<sha256 of the file>\\n``
 lines, sorted by path, for the twin's MATLAB code, its Simulink build
@@ -30,10 +35,10 @@ import hashlib
 import os
 import re
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 IDENTITY_TOPIC = "/acav/twin_identity"
-FORMAT_VERSION = "v1"
+FORMAT_VERSION = "v2"
 FINGERPRINT_CHARS = 16
 #: Room the twin has for the message (build_acav_twin.m checks it).
 MAX_IDENTITY_BYTES = 128
@@ -48,6 +53,7 @@ _REQUIRED = ("stk_matlab/simulink/build_acav_twin.m",
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _HEX_FP = re.compile(r"[0-9a-f]{%d}" % FINGERPRINT_CHARS)
+_POLLING = re.compile(r"([0-9]+(?:\.[0-9]+)?)Hz")
 
 
 def source_root() -> str:
@@ -91,20 +97,28 @@ class Identity:
     config_sha256: str
     build_fingerprint: str
     runtime_fingerprint: str
+    #: The model's polling rate, Hz; None when the twin gave none.
+    polling_hz: Optional[float] = None
 
 
 def parse_identity(text: str) -> Identity:
     parts = text.split(" ")
-    if len(parts) != 4 or parts[0] != FORMAT_VERSION:
+    if len(parts) != 5 or parts[0] != FORMAT_VERSION:
         raise ValueError(f"expected '{FORMAT_VERSION} <cfg> <build> "
-                         f"<runtime>', got {text!r}")
-    config, build, runtime = parts[1:]
+                         f"<runtime> <polling>', got {text!r}")
+    config, build, runtime, polling = parts[1:]
     if config != "-" and not _HEX64.fullmatch(config):
         raise ValueError(f"bad run-config digest {config!r}")
     for value in (build, runtime):
         if not _HEX_FP.fullmatch(value):
             raise ValueError(f"bad code fingerprint {value!r}")
-    return Identity(config, build, runtime)
+    polling_hz = None
+    if polling != "-":
+        match = _POLLING.fullmatch(polling)
+        if not match or float(match.group(1)) <= 0.0:
+            raise ValueError(f"bad polling rate {polling!r}")
+        polling_hz = float(match.group(1))
+    return Identity(config, build, runtime, polling_hz)
 
 
 def check_identity(text: str, run_config: str, src_root: str) -> List[str]:

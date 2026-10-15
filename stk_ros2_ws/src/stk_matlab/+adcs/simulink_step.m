@@ -1,17 +1,21 @@
 function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, omegaCmd, ...
-    identity, identityLength] = simulink_step(qMeas, omega, pos, vel, targetEci, ...
-    haveTarget, t, reset, runConfigPath, targetId, buildFingerprint)
+    identity, identityLength, identityDue] = simulink_step(qMeas, omega, pos, vel, targetEci, ...
+    haveTarget, t, reset, runConfigPath, targetId, buildFingerprint, pollingHz)
 %SIMULINK_STEP MATLAB-hosted adapter for Normal-mode Simulink simulation.
 % Keep dynamic profile structs and YAML/JSON loading in MATLAB; the
 % Simulink boundary exposes only fixed-size numeric outputs. Reset is
 % asserted by the block on every simulation start, preventing stale state.
 %
 % identity (uint8, 1x128, zero-padded; identityLength bytes used) is
-% "v1 <cfg> <build> <runtime>", fixed at reset: the sha256 of the run
-% config loaded ('-' for none), the code fingerprint written into the
-% model at build time (buildFingerprint, '-' if absent) and the one
-% recomputed from disk now, both cut to 16 hex digits. The model
-% publishes it on /acav/twin_identity; acav/twin_identity.py checks it.
+% "v2 <cfg> <build> <runtime> <polling>", fixed at reset: the sha256 of
+% the run config loaded ('-' for none), the code fingerprint written into
+% the model at build time (buildFingerprint, '-' if absent) and the one
+% recomputed from disk now, both cut to 16 hex digits, and the polling
+% rate the model was built to step at (pollingHz, e.g. "100Hz"; '-' if
+% absent). The model publishes it on /acav/twin_identity when
+% identityDue: on the first ready step after a reset, then at most once
+% per wall second, for a late listener (the run orchestrator subscribes
+% after the twin acks). acav/twin_identity.py checks it.
 %
 % Free-run (run config execution_mode "free_run", E3): samples arrive at
 % irregular wall-clock-driven times. With t0 the first ready sample and
@@ -33,20 +37,22 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
 % stamp offset go to <run>.logs/twin_substeps.json when they change;
 % adcs.simulink_step('substep_statistics') returns them.
     persistent cfg state lastTime lastOutput identityBytes identityCount
-    persistent freeT0 freeSteps freeStats freeStatsPath freeLast
+    persistent freeT0 freeSteps freeStats freeStatsPath freeLast identityTic
     if ischar(qMeas) && strcmp(qMeas, 'substep_statistics')
         torque = freeStats;
         return
     end
     if nargin < 10, targetId = ''; end
     if nargin < 11, buildFingerprint = ''; end
+    if nargin < 12, pollingHz = []; end
     targetId = char(targetId(:).');
     targetId = targetId(targetId ~= char(0));
     if reset || isempty(cfg)
         cfg = adcs.config([], runConfigPath);
         state = adcs.initial_state();
         lastTime = []; lastOutput = {};
-        [identityBytes, identityCount] = identityOf(cfg, buildFingerprint);
+        [identityBytes, identityCount] = identityOf(cfg, buildFingerprint, pollingHz);
+        identityTic = [];
         freeT0 = []; freeSteps = 0; freeLast = [];
         freeStats = struct('samples', 0, 'steps', 0, 'events', 0, ...
             'max_n', 0, 'min_stamp_offset_s', 0);
@@ -67,11 +73,18 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
             norm(targetEci(:)-pos(:)) > 1e-12;
     end
     fresh = false;
+    identityDue = false;
     if ~ready
         torque = zeros(1,3); qCmd = zeros(1,4); omegaCmd = zeros(1,3); mode = 1;
         err = 0; momentum = state.wheelMomentum;
         saturated = false; energy = state.wheelEnergyJ;
         return
+    end
+    % Wall-clock throttle: publishing the identity changes nothing the
+    % twin computes, so it may follow the wall clock.
+    if isempty(identityTic) || toc(identityTic) >= 1.0
+        identityDue = true;
+        identityTic = tic;
     end
     if strcmp(cfg.executionMode, 'free_run')
         if ~isempty(lastTime) && t < lastTime
@@ -225,7 +238,7 @@ function writeSubstepStats(path, stats)
     fclose(fid);
 end
 
-function [bytes, count] = identityOf(cfg, buildFingerprint)
+function [bytes, count] = identityOf(cfg, buildFingerprint, pollingHz)
     config = cfg.runConfigSha256;
     if isempty(config), config = '-'; end
     build = char(buildFingerprint);
@@ -234,8 +247,13 @@ function [bytes, count] = identityOf(cfg, buildFingerprint)
     else
         build = build(1:16);
     end
+    if isempty(pollingHz)
+        polling = '-';
+    else
+        polling = sprintf('%sHz', num2str(pollingHz, 15));
+    end
     runtime = adcs.code_fingerprint();
-    text = uint8(sprintf('v1 %s %s %s', config, build, runtime(1:16)));
+    text = uint8(sprintf('v2 %s %s %s %s', config, build, runtime(1:16), polling));
     bytes = zeros(1, 128, 'uint8');
     count = numel(text);
     bytes(1:count) = text;

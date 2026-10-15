@@ -93,6 +93,19 @@ function modelName = build_acav_twin(options)
         options.Prefix (1,1) string = "stk"
         options.LockstepMode (1,1) logical = true
         options.SampleTime (1,1) double = 0.1
+        % How often the model steps, per wall second (Simulink pacing).
+        % Unpaced, Simulink steps as fast as it can and MATLAB used about
+        % one core in every mode (live runs on 72be372). Every step polls
+        % the subscribers, so the achieved period bounds the latency this
+        % adds: on average half a period per lockstep step (66-76 ms
+        % steps) and at most one period after each free-run sample
+        % (every 0.1-0.13 s at rtf 1.0). Keep it well below 200 Hz:
+        % offline on this host, 200 Hz and above made Simulink busy-wait
+        % (about one core), while 100 Hz was held to about 66 steps/s by
+        % the Windows sleep granularity and used 0.06 cores with no
+        % traffic. The value is part of the twin identity, and the
+        % default part of the code fingerprint.
+        options.PollingRateHz (1,1) double {mustBePositive, mustBeFinite} = 100
         options.SetpointTopic (1,1) string = "/acav/setpoint"
         options.TwinStatusTopic (1,1) string = "/acav/twin_status"
         % Which run config and code the running twin uses; checked by the
@@ -144,6 +157,13 @@ function modelName = build_acav_twin(options)
         'SimulationMode', 'normal', ...
         'FixedStep', num2str(options.SampleTime), ...
         'StopTime', 'inf');
+    % Pacing: simulated seconds per wall second, so the model takes
+    % PollingRateHz steps per wall second instead of spinning. Simulation
+    % time is not used for anything else (every stamp comes from the
+    % bridge's ScenarioTime), and lockstep steps are still ordered by
+    % the barrier, so this changes timing only.
+    set_param(modelName, 'EnablePacing', 'on', ...
+        'PacingRate', options.PollingRateHz * options.SampleTime);
 
     % The model never reads a ROS clock. Every outgoing stamp is derived
     % from the ScenarioTime message of the step being processed (see
@@ -213,7 +233,8 @@ function modelName = build_acav_twin(options)
     add_block('simulink/User-Defined Functions/MATLAB Function', ...
         controlBlock, 'Position', [480 40 680 320]);
     setMatlabFunctionBody(controlBlock, ...
-        guidanceControlSource(options.RunConfigPath, buildFingerprint));
+        guidanceControlSource(options.RunConfigPath, buildFingerprint, ...
+        options.PollingRateHz));
 
     % UnpackTelemetry outputs, in order: qMeas, omega, pos, vel,
     % targetEci, haveTarget, t, objectPath, stepIndex, pathLength,
@@ -369,10 +390,12 @@ function modelName = build_acav_twin(options)
              'applies the command one step late for the whole run.']);
     end
 
-    % -- identity out: std_msgs/String, "v1 <cfg> <build> <runtime>" -----
-    % Published whenever the twin is ready, like the ack, so the run
-    % orchestrator sees it whenever it subscribes. GuidanceControl
-    % outputs 10 and 11 are the zero-padded bytes and their length.
+    % -- identity out: std_msgs/String, "v2 <cfg> <build> <runtime> <Hz>" -
+    % Published on the first ready step and then about once per wall
+    % second (GuidanceControl output 12, identityDue), so the run
+    % orchestrator, which subscribes after the twin acks, sees it within
+    % its 10 s wait. GuidanceControl outputs 10 and 11 are the
+    % zero-padded bytes and their length.
     identityTextBlock = [modelName '/BuildIdentityText'];
     add_block('simulink/User-Defined Functions/MATLAB Function', ...
         identityTextBlock, 'Position', [720 720 900 760]);
@@ -481,8 +504,10 @@ function addPublish(model, name, position, topic, messageType)
     controlPorts = get_param([model '/GuidanceControl'], 'PortHandles');
     publishPorts = get_param(block, 'PortHandles');
     port = 9; % Commands and status are sent only once per telemetry time.
-    % Repeat the ack and the identity for late listeners.
-    if any(strcmp(name, {'LockstepAckPub', 'TwinIdentityPub'})), port = 8; end
+    % The ack repeats on every ready step, for late listeners.
+    if strcmp(name, 'LockstepAckPub'), port = 8; end
+    % The identity: first ready step, then about once per wall second.
+    if strcmp(name, 'TwinIdentityPub'), port = 12; end
     add_line(model, controlPorts.Outport(port), publishPorts.Enable);
 end
 
@@ -555,7 +580,7 @@ function setMessageOutput(blockPath, messageType)
     output.DataType = ros.slros2.internal.bus.Util.rosMsgTypeToDataTypeStr(messageType);
 end
 
-function source = guidanceControlSource(runConfigPath, buildFingerprint)
+function source = guidanceControlSource(runConfigPath, buildFingerprint, pollingHz)
     %GUIDANCECONTROLSOURCE The block body: a thin call into +adcs.
     %
     % Thin on purpose. Everything of substance lives in adcs.twin_step,
@@ -578,9 +603,12 @@ function source = guidanceControlSource(runConfigPath, buildFingerprint)
     if nargin < 2
         buildFingerprint = "";
     end
+    if nargin < 3
+        pollingHz = 100;
+    end
     source = strjoin({
         'function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, ...'
-        '        identity, identityLength] = ...'
+        '        identity, identityLength, identityDue] = ...'
         '        fcn(qMeas, omega, pos, vel, targetEci, haveTarget, t, targetId)'
         '%#codegen'
         '    coder.extrinsic(''adcs.simulink_step'');'
@@ -590,10 +618,12 @@ function source = guidanceControlSource(runConfigPath, buildFingerprint)
         '    torque = zeros(1,3); qCmd = [0 0 0 1]; mode = 1;'
         '    err = 0; momentum = zeros(1,3); saturated = false; energy = 0; ready = false; fresh = false;'
         '    omegaCmd = zeros(1,3); identity = zeros(1,128,''uint8''); identityLength = 0;'
+        '    identityDue = false;'
         sprintf(['    [torque,qCmd,mode,err,momentum,saturated,energy,ready,fresh,omegaCmd,' ...
-            'identity,identityLength] = ' ...
-            'adcs.simulink_step(qMeas,omega,pos,vel,targetEci,haveTarget,t,reset,''%s'',targetId,''%s'');'], ...
-            strrep(char(runConfigPath), '''', ''''''), char(buildFingerprint))
+            'identity,identityLength,identityDue] = ' ...
+            'adcs.simulink_step(qMeas,omega,pos,vel,targetEci,haveTarget,t,reset,''%s'',targetId,''%s'',%s);'], ...
+            strrep(char(runConfigPath), '''', ''''''), char(buildFingerprint), ...
+            num2str(pollingHz, 15))
         'end'
         }, newline);
 end

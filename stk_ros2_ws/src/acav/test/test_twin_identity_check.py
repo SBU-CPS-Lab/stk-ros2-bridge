@@ -43,7 +43,7 @@ def offline(monkeypatch):
 def _identity_for(run_config, config_sha=None, build=None):
     code = ti.code_fingerprint(ti.source_root())[:ti.FINGERPRINT_CHARS]
     config_sha = config_sha or ti.file_sha256(run_config)
-    return f"v1 {config_sha} {build or code} {code}"
+    return f"v2 {config_sha} {build or code} {code} 100Hz"
 
 
 @pytest.fixture
