@@ -17,17 +17,23 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
 % irregular wall-clock-driven times. With t0 the first ready sample and
 % k the steps integrated so far, a sample at t integrates
 %   n = floor((t - t0)/stepS + 1e-6) + 1 - k
-% steps of stepS, holding the received position, velocity and target
-% (zero-order hold); n = 0 holds the last outputs. Counting from t0
+% steps of stepS; n = 0 holds the last outputs. Counting from t0
 % means rounding never accumulates; the 1e-6 step tolerance keeps a
 % sample on the grid (0.3/0.1 = 2.99...96 in floating point) on its
-% step. The state reached, t0 + (k+n)*stepS, lies in (t, t+stepS]; the
+% step. Sub-step j runs at tj = t0 + j*stepS on the newest sample
+% stamped at or before tj (within the same tolerance) -- the previous
+% one, held samples included, while catching up -- with its position
+% and target propagated forward to tj (adcs.geometry_at). Holding one
+% sample's geometry over every sub-step instead pulses the controller's
+% reference rate and costs captures (P2c replay, results/_analysis/p2c).
+% A sample on the step grid is used as received (dt = 0), so on-grid
+% free-run equals lockstep bit for bit. The state reached, t0 + (k+n)*stepS, lies in (t, t+stepS]; the
 % command is still stamped t + stepS by the model, and the difference
 % is recorded. n > 1 occurrences, the largest n and the most negative
 % stamp offset go to <run>.logs/twin_substeps.json when they change;
 % adcs.simulink_step('substep_statistics') returns them.
     persistent cfg state lastTime lastOutput identityBytes identityCount
-    persistent freeT0 freeSteps freeStats freeStatsPath
+    persistent freeT0 freeSteps freeStats freeStatsPath freeLast
     if ischar(qMeas) && strcmp(qMeas, 'substep_statistics')
         torque = freeStats;
         return
@@ -41,7 +47,7 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
         state = adcs.initial_state();
         lastTime = []; lastOutput = {};
         [identityBytes, identityCount] = identityOf(cfg, buildFingerprint);
-        freeT0 = []; freeSteps = 0;
+        freeT0 = []; freeSteps = 0; freeLast = [];
         freeStats = struct('samples', 0, 'steps', 0, 'events', 0, ...
             'max_n', 0, 'min_stamp_offset_s', 0);
         freeStatsPath = substepStatsPath(runConfigPath);
@@ -78,7 +84,10 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
         freeStats.samples = freeStats.samples + 1;
         reached = floor((t - freeT0) / cfg.stepS + 1e-6) + 1;
         n = reached - freeSteps;
+        current = struct('t', t, 'position', pos, 'velocity', vel, ...
+            'targetEci', targetEci, 'haveTarget', haveTarget, 'targetId', targetId);
         if n <= 0
+            freeLast = current;
             [torque,qCmd,mode,err,momentum,saturated,energy,omegaCmd] = lastOutput{:};
             return
         end
@@ -88,14 +97,22 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
             q = lastOutput{2}; w = lastOutput{8};
         end
         for j = freeSteps:(freeSteps + n - 1)
+            tj = freeT0 + j * cfg.stepS;
+            source = current;
+            if ~isempty(freeLast) && t > tj + 1e-6 * cfg.stepS
+                source = freeLast;   % newest sample stamped at or before tj
+            end
+            [p, v, g] = adcs.geometry_at(source.position, source.velocity, ...
+                source.targetEci, tj - source.t, cfg);
             in = struct('quaternion', q, 'omega', w, ...
-                'position', pos, 'velocity', vel, 'targetEci', targetEci, ...
-                'haveTarget', haveTarget, 't', freeT0 + j * cfg.stepS, ...
-                'targetId', targetId);
+                'position', p, 'velocity', v, 'targetEci', g, ...
+                'haveTarget', source.haveTarget, 't', tj, ...
+                'targetId', source.targetId);
             out = adcs.twin_step(in, cfg, state);
             state = out.state;
             q = out.quaternionCmd; w = out.omegaNext;
         end
+        freeLast = current;
         freeSteps = reached;
         freeStats.steps = freeSteps;
         offset = (freeT0 + reached * cfg.stepS) - (t + cfg.stepS);

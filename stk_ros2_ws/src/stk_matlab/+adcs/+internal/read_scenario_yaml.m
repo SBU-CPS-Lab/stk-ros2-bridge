@@ -23,6 +23,7 @@ function values = read_scenario_yaml(path)
               "settle_estimate_s"];
 
     values = struct();
+    section = "";
     for line = lines.'
         stripped = strtrim(line);
         if stripped == "" || startsWith(stripped, "#")
@@ -35,8 +36,17 @@ function values = read_scenario_yaml(path)
         key = strtrim(parts(1));
         rest = strtrim(strjoin(parts(2:end), ":"));
         rest = strtrim(extractBefore(rest + "#", "#"));
+        if ~startsWith(line, [" ", char(9)])
+            section = key;   % a top-level key opens a section
+        end
 
-        if key == "boresight_body_axis"
+        % Two strings, read by section because "placement" occurs more
+        % than once: they say whether the targets are Earth-fixed.
+        if section == "scenario" && key == "central_body"
+            values.central_body = char(rest);
+        elseif section == "targets" && key == "placement"
+            values.target_placement = char(rest);
+        elseif key == "boresight_body_axis"
             values.boresight_body_axis = parse_list(rest);
         elseif ismember(key, wanted) && ~isfield(values, key)
             number = str2double(rest);

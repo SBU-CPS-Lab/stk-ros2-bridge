@@ -73,6 +73,27 @@ function cfg = config(scenarioPath, runConfigPath)
     % its run_id. Empty for the nominal vehicle (no run config).
     cfg.runConfigSha256 = '';
     cfg.runId = '';
+    % Earth's rotation rate, rad/s: the WGS 84 defining parameter omega
+    % (NIMA TR8350.2, 3rd ed., 2000, Table 3.1). The one place the twin
+    % spells it; adcs.geometry_at reads it from here. It rotates the
+    % targets about the inertial z axis, which ignores precession and
+    % nutation (the pole is a fraction of a degree off z): over the
+    % seconds a free-run sub-step propagates, that is metres at most.
+    cfg.earthRateRadS = 7.292115e-5;
+    % That rotation is right only for targets fixed to the Earth. The
+    % scenario places them on the ground (C2 creates STK ground
+    % targets), and anything else must fail here rather than be
+    % propagated as if it were.
+    if ~isfield(raw, 'central_body') || ~strcmp(raw.central_body, 'Earth') || ...
+            ~isfield(raw, 'target_placement') || ...
+            ~strcmp(raw.target_placement, 'ground_track_relative')
+        error('adcs:config:TargetsNotEarthFixed', ...
+            ['%s: the twin propagates targets with the Earth''s rotation, ' ...
+             'which needs scenario.central_body "Earth" and ' ...
+             'targets.placement "ground_track_relative" (Earth-fixed ' ...
+             'ground targets).'], scenarioPath);
+    end
+
     % 'lockstep' (one step per sample, the default) or 'free_run' (ZOH
     % sub-stepping, adcs.simulink_step), from the run config.
     cfg.executionMode = 'lockstep';
