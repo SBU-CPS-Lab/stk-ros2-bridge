@@ -1146,6 +1146,20 @@ from its run config.
   needed more than one step, and the largest such count are written to
   `<run>.logs\twin_substeps.json` and copied into `summary.json` as
   `twin_substeps`.
+- **Pacing.** Cycles run on a fixed-rate schedule from the first
+  cycle's start (the fastest rate group's period, 0.1 s): a cycle that
+  overruns is followed at once and counted. `summary.json` records
+  `free_run_pacing` (cycles, overruns, period).
+- **Sensing.** The combined attitude/rate read and orbit batching are
+  off in free-run, and the record says so (`sensing_mode: separate`,
+  `orbit_batch_samples: 1`).
+- **Real-time factor.** `--real-time-factor RTF` (default: the bridge
+  config's, 1.0) sets how fast free-run time follows the wall clock. It
+  is recorded in `summary.json` and the record, and `report` refuses to
+  pool different values.
+- **Analysis.** `python src\acav\scripts\analyze_coupling.py <folder>`
+  computes the control rate, gaps, sample ages, stamp offsets, write
+  lag, COM stalls and STK read-back deviation from a folder's logs.
 - **Lockstep runs are unchanged.** Their bridge config's time section is
   identical to before, and the twin's lockstep path is bit-identical
   with or without the new key (`test_free_run_twin.m`).

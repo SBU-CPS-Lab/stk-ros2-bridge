@@ -187,3 +187,53 @@ by the startup validation, and if ablated, what effect does it have?
 
 Each injection touches the bridge or the twin, so each needs its own
 gate and a signature check that normal runs are unaffected.
+
+## Noted during the E3 pilot (do not fix yet)
+
+Recorded 2026-10-15 from the E3 pilot analysis (`e3_pilot_analysis.md`).
+
+**Twin loop load.** The twin's Simulink model runs as fast as MATLAB
+allows: 114,737 and 205,422 calls in the two free-run pilot runs, about
+160–285 per second. It publishes the lockstep ack and the twin identity
+on every ready step, in both modes. On this 2-core machine that is a
+candidate cause of the multi-second STK COM calls seen in free-run (up
+to 3.6 s). Measure first (per-process CPU during a run) before changing
+anything.
+
+**Health monitor during startup waits.** The bridge's health monitor
+marks the bridge DISCONNECTED during every startup wait (no COM call
+for 10 s), in lockstep and free-run alike, and back to CONNECTED when
+the loop starts. Benign.
+
+**Free-run never advances STK's animation time.** Only the lockstep
+loop calls `_advance_stk_clock`, so free-run reports `clock advance
+summary: executed 0`. Data providers are queried by explicit time and
+are unaffected. E6's "sense" therefore includes the clock advance only
+in lockstep; E6 is lockstep-only, so this is documented, not changed.
+
+**Lockstep simulation-time precision.** Lockstep time is
+`epoch_seconds + sim_time` at about 1.7e9 s
+(`stk_bridge/core/time_sync.py:388-392`), where a float keeps only about
+2.4e-7 s. `sim_seconds()` is that value minus the epoch, and published
+stamps carry the same rounding (`conversions.py:59-83`), e.g. a stamp
+nanosecond of `36999936` for 0.037 s. The golden lockstep trace
+(`test_lockstep_trace_golden.py`) pins the current behaviour. Consumers
+of epoch-derived time and their tolerances (read-only survey, commit
+`1b561a5`):
+
+| Consumer | Path:line | Tolerance | Below ~2.4e-7 s? |
+|---|---|---|---|
+| Rate group due check | `stk_bridge/core/rate_group.py:65` | 1e-9 s on `sim_seconds()` | **Yes**: the fast group skips 50 of 250 lockstep steps (no callbacks, so harmless; BridgeStatus rate-group statistics are misleading) |
+| Written-sample match (B verification) | `stk_bridge/nodes/bridge_node.py:263` | 1e-6 s on `epoch_seconds` | No (about 4× margin) |
+| Attitude-landed check | `stk_bridge/nodes/bridge_node.py:912` | 1e-6 s | No (about 4× margin) |
+| Orbit block epochs and grid | `stk_bridge/core/orbit_block.py:33`, `:45` | rounded to integer ms | No |
+| Fixed-frame interval sample count | `stk_bridge/backends/com_backend.py:641` | `floor(... + 1e-7)` steps | **Yes**: about 4.8e-7 s / 0.1 s is 4.8e-6 steps, so an interval query could lose one sample (only one-off validation queries use this path today) |
+| Capture hold window | `acav/capture_tracking.py:246`, `acav/metrics.py:181` | ±1e-9 s on `time_s` from `scheduler_node.py:466` | **Yes**, but the current image epochs are whole seconds, which convert exactly; fractional image times from the 3a generator could include or drop the boundary sample |
+| Twin-stamp sanity check | `acav/scheduler_node.py:102` | 5 s | No |
+| Twin telemetry hold | `stk_matlab/simulink/build_acav_twin.m:649` | 1000 ns | No (about 4× margin) |
+| Twin lockstep time-gap guard | `stk_matlab/+adcs/simulink_step.m:149` | 1e-6 s | No |
+| Twin free-run step count | `stk_matlab/+adcs/simulink_step.m:79` | 1e-6 steps (1e-7 s) | **Yes**: a sample within about 1e-7 s before a step boundary can count one step short (free-run times are wall-clock times anyway) |
+| Offline coupling analysis | `acav/coupling_analysis.py` (`_stamp`) | integer seconds subtracted first | Fixed in `1b561a5` |
+
+Any change here alters lockstep behaviour and must be checked against
+the golden trace and the E6-smoke-1 signature.
