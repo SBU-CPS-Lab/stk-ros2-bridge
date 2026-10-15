@@ -231,6 +231,24 @@ are renamed to `<name>.superseded-<time>` first, never deleted; `report`
 ignores them. If they cannot be renamed (a file still open), that run
 fails without launching.
 
+### STK graphics during timed runs
+
+STK's 2D and 3D Graphics windows redraw on every lockstep step. In one
+pair of E6 runs on 2026-10-15 (code f2f5746), closing every 2D and 3D
+Graphics window and minimising STK cut the step from 120.3 to 70.2 ms
+and the loop from 14.6 to 8.5 min, with an identical determinism
+signature. The graphics state is not yet recorded by the code, so until
+it is:
+
+- Decide the graphics state per session and keep it for every run.
+  For runs that time the loop (E6), close every 2D and 3D Graphics
+  window and minimise STK before starting; keep the scenario open.
+- Never pool timing from runs with different graphics states. A one-off
+  run in another state goes in its own directory with
+  `--diagnostic-label`, which `report` refuses to pool.
+- Restore the windows afterwards if you need them; reopening them does
+  not change results already recorded.
+
 ### Running validation sessions safely
 
 A session that compares commits switches branches between runs. On

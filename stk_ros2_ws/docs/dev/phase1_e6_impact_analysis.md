@@ -274,6 +274,55 @@ so service queries are unaffected.
 3. **First-query penalty** (§5): execute means of the first live query
    before and after (C) — pending.
 
+## Phase 2 live session, 2026-10-15 — twin identity and STK graphics (code f2f5746)
+
+Run by the user; every value below recomputed from the run files.
+
+**Twin identity check** (`results/E6_ID_nc_f2f5746`). The three negative
+controls were refused at `twin_identity`, before the scheduler started
+(no `scheduler.log`, no record):
+
+| Run | Twin started with | Refusal in `run.log` |
+|---|---|---|
+| E6-nc1b-previous-model | E6-BC-3's run config (sha256 `5393f7fb…`, equal to that file) | the twin loaded a different run configuration |
+| E6-nc2-stale-config | this run's config, edited after the twin loaded it | the twin loaded a different run configuration |
+| E6-nc3b-stale-model | an untracked `+adcs` file added after the build | the Simulink model was built from other code (build `7904fc701364ba23`, code on disk `1c35ee2d377bb934`); rebuild it |
+
+Two further attempts were operator errors, not code failures:
+E6-nc1-previous-model was started with its own, correct config (digest
+`d64f6895…` equals its file), so it was accepted, and the bridge aborted
+at 10:30 when the model was rebuilt mid-run. E6-nc3-stale-model was
+refused by the idle check because the previous Simulink run was still
+publishing; that refusal is not written to `run.log` or to the summary's
+steps (an open gap, noted for a later fix).
+
+**Positive control** E6-ID-1 (`results/E6_ID_f2f5746`, graphics windows
+as usual): signature identical to E6-smoke-1, 5/5 captured, no SAFE.
+Identity accepted and recorded identically in `summary.json` and
+`provenance.twin_identity`; its config digest equals the sha256 of the
+run's `.runconfig.json`, and build = runtime = checkout fingerprint
+`7904fc701364ba23`.
+
+**STK graphics off** E6-diag-graphics-1 (`results/E6_diag_graphics`,
+label `graphics-off`: every 2D and 3D Graphics window closed, STK
+minimised). Signature identical to E6-ID-1 and E6-smoke-1, 5/5 captured,
+no SAFE. One run each, so these are single measurements:
+
+| Quantity | E6-ID-1 (graphics on) | E6-diag-graphics-1 (off) |
+|---|---|---|
+| Step (scheduler tick-to-tick), ms | 120.3 | 70.2 |
+| Sense, ms | 88.7 | 40.1 |
+| Actuate, ms | 14.1 | 13.7 |
+| Barrier wait, ms | 12.0 | 11.4 |
+| Clock advance execute (run mean), ms | 25.2 | 5.5 |
+| Attitude Segment Quaternions execute (weighted mean), ms | 36.2 | 13.0 |
+| Loop (twin_acking → scheduler_exit), min | 14.56 | 8.54 |
+
+STK's graphics windows cost about 50 ms of each step's sensing, in both
+the clock advance and the segment query. Which part of "off" matters
+(closed windows or the minimised application) was not separated. Timing
+from runs with different graphics states must never be pooled.
+
 ## Commit map
 
 On 2026-10-14 the commit messages of this branch were rewritten; trees,
