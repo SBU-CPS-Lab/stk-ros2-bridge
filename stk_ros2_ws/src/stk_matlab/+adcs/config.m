@@ -69,6 +69,10 @@ function cfg = config(scenarioPath, runConfigPath)
     % -- per-run overrides (E4's gains, E5's fault) -------------------
     cfg.wheelFault = [];
     cfg.attitudeMismatchPolicy = 'strict';
+    % Which run config was loaded: sha256 of the exact bytes parsed, and
+    % its run_id. Empty for the nominal vehicle (no run config).
+    cfg.runConfigSha256 = '';
+    cfg.runId = '';
     if nargin >= 2 && ~isempty(runConfigPath)
         cfg = applyRunConfig(cfg, runConfigPath);
     end
@@ -104,7 +108,16 @@ function cfg = applyRunConfig(cfg, runConfigPath)
              'the treatment it was asked to be.'], runConfigPath);
     end
 
-    raw = jsondecode(fileread(runConfigPath));
+    % Read once, hash and parse the SAME bytes: the digest is how the run
+    % orchestrator checks which config the twin actually loaded.
+    fid = fopen(runConfigPath, 'r');
+    bytes = fread(fid, inf, '*uint8').';
+    fclose(fid);
+    cfg.runConfigSha256 = adcs.internal.sha256_hex(bytes);
+    raw = jsondecode(native2unicode(bytes, 'UTF-8'));
+    if isfield(raw, 'run_id')
+        cfg.runId = char(raw.run_id);
+    end
 
     if isfield(raw, 'attitude_mismatch_policy')
         policy = char(raw.attitude_mismatch_policy);
