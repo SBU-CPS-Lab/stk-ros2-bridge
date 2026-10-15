@@ -38,9 +38,27 @@ from acav.campaign_runner import (
 )
 from acav.fault_injection import WheelFault
 from acav.metrics import CaptureOutcome, RunResult, TargetResult
-from acav.run_record import Provenance, RunRecord, write_record
+from acav.run_record import (Provenance, RunRecord, scenario_targets,
+                              write_record)
 
 WINDOW = 720.0
+SCENARIO = scenario_targets()
+
+
+def covering(record):
+    """``record`` made to cover the installed scenario's targets, as a
+    real run's record does: the missing ones as not attempted, and the
+    scenario named by its digest. For fixtures that go through
+    check_record or report (see test_target_coverage.py)."""
+    import dataclasses
+
+    present = {t.target_id for t in record.result.targets}
+    record.result.targets = list(record.result.targets) + [
+        TargetResult(target_id=i, attempted=False,
+                     outcome=CaptureOutcome.NOT_ATTEMPTED, image_time_s=0.0)
+        for i in SCENARIO.target_ids if i not in present]
+    return dataclasses.replace(record, provenance=dataclasses.replace(
+        record.provenance, scenario_sha256=SCENARIO.sha256))
 
 
 def _result(run_id, seed=None, scheduler="dynamics_aware", error=0.2,
@@ -273,8 +291,8 @@ def _writing_launcher(**overrides):
             gains=dict(run.gains),
             fault=None if run.fault is None else run.fault.to_dict())
         write_record(output_path,
-                     RunRecord(result=result, provenance=provenance,
-                               experiment=run.experiment))
+                     covering(RunRecord(result=result, provenance=provenance,
+                                        experiment=run.experiment)))
     return launch
 
 
@@ -382,8 +400,8 @@ class TestRecordValidation:
     def test_a_matching_record_reports_no_mismatches(self):
         run = RunSpec(experiment="E4", seed=1,
                       gains={"natural_frequency_rad_s": 1.0})
-        record = _record(run.run_id, seed=1,
-                         gains={"natural_frequency_rad_s": 1.0})
+        record = covering(_record(run.run_id, seed=1,
+                                  gains={"natural_frequency_rad_s": 1.0}))
         assert check_record(run, record) == []
 
     def test_a_run_that_forgot_to_mis_pair_is_caught(self):
@@ -406,11 +424,11 @@ class TestRecordValidation:
             provenance=Provenance(backend_type="com",
                                   attitude_provider=run.attitude_provider))
         assert any("not observed" in m for m in check_record(run, unobserved))
-        observed = RunRecord(
+        observed = covering(RunRecord(
             result=_result(run.run_id),
             provenance=Provenance(
                 backend_type="com", attitude_provider=run.attitude_provider,
-                attitude_readback_provider=run.attitude_provider))
+                attitude_readback_provider=run.attitude_provider)))
         assert check_record(run, observed) == []
 
     def test_wrong_gains_are_caught(self):
@@ -423,7 +441,7 @@ class TestRecordValidation:
         the mode it reports, and E3 groups by the observed mode so that
         it is counted where it belongs rather than discarded."""
         run = RunSpec(experiment="E3", execution_mode=LOCKSTEP)
-        record = _record(run.run_id, mode=FREE_RUN)
+        record = covering(_record(run.run_id, mode=FREE_RUN))
         assert check_record(run, record) == []
 
 
@@ -615,7 +633,7 @@ class TestDiagnosticRunsAreNotReported:
     timings; `report` must refuse a directory that contains one."""
 
     def _directory(self, tmp_path, diagnostic):
-        record = _record("E6-dynamics_aware-lockstep-seed0", seed=0)
+        record = covering(_record("E6-dynamics_aware-lockstep-seed0", seed=0))
         write_record(str(tmp_path / "E6-dynamics_aware-lockstep-seed0.json"),
                      record)
         logs = tmp_path / "E6-dynamics_aware-lockstep-seed0.logs"

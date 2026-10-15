@@ -11,17 +11,17 @@ import json
 from acav.campaign_cli import graphics_modes, main
 from acav.run_record import Provenance, RunRecord, write_record
 
-from test_campaign import _result  # noqa: I100 - shared helper
+from test_campaign import _result, covering  # noqa: I100 - shared helper
 
 
 def _directory(tmp_path, *modes):
     for seed, mode in enumerate(modes):
         name = f"E6-dynamics_aware-lockstep-seed{seed}"
-        write_record(str(tmp_path / f"{name}.json"), RunRecord(
+        write_record(str(tmp_path / f"{name}.json"), covering(RunRecord(
             result=_result(name, seed=seed),
             provenance=Provenance(backend_type="com",
                                   execution_mode="lockstep",
-                                  graphics_mode=mode)))
+                                  graphics_mode=mode))))
         logs = tmp_path / f"{name}.logs"
         logs.mkdir()
         (logs / "summary.json").write_text(json.dumps({"run_id": name}),

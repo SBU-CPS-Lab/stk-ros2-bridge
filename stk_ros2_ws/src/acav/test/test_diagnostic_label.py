@@ -14,7 +14,7 @@ from acav.campaign_cli import labelled_runs, main
 from acav.deploy_run_cli import ConnectResult, Deps, execute_run
 from acav.run_record import write_record
 
-from test_campaign import _record             # noqa: I100 - shared helper
+from test_campaign import _record, covering   # noqa: I100 - shared helper
 from test_deploy_run_cli import FakeProcess, _config  # noqa: I100
 
 
@@ -63,7 +63,8 @@ def test_an_unsafe_label_is_an_invocation_error(label):
 
 def _directory(tmp_path, label):
     name = "E6-dynamics_aware-lockstep-seed0"
-    write_record(str(tmp_path / f"{name}.json"), _record(name, seed=0))
+    write_record(str(tmp_path / f"{name}.json"),
+                 covering(_record(name, seed=0)))
     logs = tmp_path / f"{name}.logs"
     logs.mkdir()
     (logs / "summary.json").write_text(json.dumps(

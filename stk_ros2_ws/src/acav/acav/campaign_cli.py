@@ -61,7 +61,8 @@ from acav.campaign_runner import (
     RunnerOptions,
     run_campaign,
 )
-from acav.run_record import RunRecord, read_record, unreportable
+from acav.run_record import RunRecord, read_record, scenario_targets, \
+    target_coverage_problems, unreportable
 from acav.spec import AcavSpec
 
 LOGGER = logging.getLogger(__name__)
@@ -493,6 +494,19 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             "pooled: %s. Move each mode to its own directory.",
             "; ".join(f"{mode or 'not recorded'!r}: {', '.join(ids)}"
                       for mode, ids in sorted(modes.items())))
+        return 1
+
+    scenario = scenario_targets(args.scenario)
+    uncovered = {r.result.run_id: target_coverage_problems(r, scenario)
+                 for r in records}
+    uncovered = {run_id: p for run_id, p in uncovered.items() if p}
+    if uncovered:
+        LOGGER.error(
+            "refusing to report: these records do not cover exactly the "
+            "targets of the scenario %s, so every count in them is wrong: "
+            "%s. Re-run them.", scenario.path,
+            "; ".join(f"{run_id} ({'; '.join(problems)})"
+                      for run_id, problems in sorted(uncovered.items())))
         return 1
 
     report = analyse(args.experiment, records, total_targets)

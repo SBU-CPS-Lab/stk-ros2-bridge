@@ -45,7 +45,9 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence
 
 from acav.campaign import Campaign, RunSpec
-from acav.run_record import RecordError, RunRecord, read_record
+from acav.run_record import (RecordError, RunRecord, ScenarioTargets,
+                              read_record, scenario_targets,
+                              target_coverage_problems)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -151,6 +153,8 @@ def run_campaign(campaign: Campaign, launcher: Launcher,
         _refuse_resume_across_code(campaign, options)
 
     outcome = CampaignOutcome(campaign=campaign)
+    scenario = None if options.dry_run else scenario_targets(
+        campaign.scenario_path)
     for run in campaign.runs:
         path = os.path.join(options.output_dir, run.output_name)
 
@@ -160,7 +164,7 @@ def run_campaign(campaign: Campaign, launcher: Launcher,
             continue
 
         if options.resume:
-            existing = _load_if_usable(run, path)
+            existing = _load_if_usable(run, path, scenario)
             if existing is not None:
                 LOGGER.info("resume: %s already complete", run.run_id)
                 outcome.outcomes.append(RunOutcome(
@@ -177,7 +181,8 @@ def run_campaign(campaign: Campaign, launcher: Launcher,
                 detail=f"could not move the previous attempt aside: "
                        f"{error}"))
         else:
-            outcome.outcomes.append(_execute(run, campaign, launcher, path))
+            outcome.outcomes.append(_execute(run, campaign, launcher, path,
+                                             scenario))
         if options.stop_on_error and outcome.outcomes[-1].status == "failed":
             LOGGER.error("stopping: %s failed and stop_on_error is set",
                          run.run_id)
@@ -318,7 +323,8 @@ def write_run_config(run: RunSpec, output_path: str) -> str:
 
 
 def _execute(run: RunSpec, campaign: Campaign, launcher: Launcher,
-             path: str) -> RunOutcome:
+             path: str, scenario: Optional[ScenarioTargets] = None
+             ) -> RunOutcome:
     LOGGER.info("running %s", run.run_id)
     write_run_config(run, path)
     try:
@@ -342,14 +348,16 @@ def _execute(run: RunSpec, campaign: Campaign, launcher: Launcher,
         return RunOutcome(run.run_id, "failed", path,
                           detail=f"unreadable record: {error}")
 
-    mismatches = check_record(run, record)
+    mismatches = check_record(run, record, scenario)
     return RunOutcome(run.run_id, "completed", path, record=record,
                       mismatches=mismatches,
                       detail="" if not mismatches
                              else "record does not match the requested run")
 
 
-def _load_if_usable(run: RunSpec, path: str) -> Optional[RunRecord]:
+def _load_if_usable(run: RunSpec, path: str,
+                    scenario: Optional[ScenarioTargets] = None
+                    ) -> Optional[RunRecord]:
     """An existing record, if it is readable and matches the run.
 
     A record on disk that does not match the run is not resumed over --
@@ -364,20 +372,23 @@ def _load_if_usable(run: RunSpec, path: str) -> Optional[RunRecord]:
     except (RecordError, ValueError, KeyError, OSError) as error:
         LOGGER.warning("ignoring unreadable record %s: %s", path, error)
         return None
-    if check_record(run, record):
+    if check_record(run, record, scenario):
         LOGGER.warning("ignoring %s: it does not match the requested run",
                        path)
         return None
     return record
 
 
-def check_record(run: RunSpec, record: RunRecord) -> List[str]:
+def check_record(run: RunSpec, record: RunRecord,
+                 scenario: Optional[ScenarioTargets] = None) -> List[str]:
     """Ways ``record`` disagrees with the run that was requested.
 
     Empty means the record describes the run asked for. Every check here
     is one that would otherwise corrupt an experiment silently: a wrong
     seed or fault breaks E5's replay claim, a wrong scheduler breaks
-    E2's comparison, and wrong gains break E4's surface.
+    E2's comparison, and wrong gains break E4's surface. A record whose
+    targets are not exactly its scenario's (``scenario``, by default the
+    installed one) has every count short or padded.
 
     Execution mode is NOT checked here. A bridge that fell back from
     lockstep to free-run has produced a real run in the mode it reports,
@@ -417,6 +428,9 @@ def check_record(run: RunSpec, record: RunRecord) -> List[str]:
         if recorded is None or abs(recorded - value) > 1e-12:
             problems.append(
                 f"gain {key} {recorded!r}, expected {value!r}")
+
+    problems.extend(target_coverage_problems(
+        record, scenario if scenario is not None else scenario_targets()))
     return problems
 
 

@@ -45,7 +45,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from acav.metrics import (
     CaptureOutcome,
@@ -415,3 +415,59 @@ def scenario_digest(path: str) -> str:
 
     with open(path, "rb") as handle:
         return hashlib.sha256(handle.read()).hexdigest()
+
+
+@dataclass(frozen=True)
+class ScenarioTargets:
+    """The target set a record must cover, from one scenario file."""
+
+    path: str
+    sha256: str
+    target_ids: Tuple[str, ...]
+
+
+def scenario_targets(path: str = "") -> ScenarioTargets:
+    """The targets of the scenario at ``path`` (default: the installed one).
+
+    Read from the file, never hard-coded, and paired with its digest so a
+    record can be checked against the scenario it names.
+    """
+    from acav.spec import AcavSpec
+
+    located = AcavSpec.locate(path or None)
+    spec = AcavSpec.load(located)
+    return ScenarioTargets(path=located, sha256=scenario_digest(located),
+                           target_ids=tuple(t.id for t in spec.targets))
+
+
+def target_coverage_problems(record: RunRecord,
+                             scenario: ScenarioTargets) -> List[str]:
+    """Why ``record.result.targets`` is not exactly ``scenario``'s set.
+
+    Empty when it is. A record from another scenario, or naming none,
+    cannot be checked against this one and is refused as such: its
+    target set cannot be established.
+    """
+    named = record.provenance.scenario_sha256
+    if not named:
+        return ["names no scenario (scenario_sha256 is empty), so its "
+                "target set cannot be established"]
+    if named != scenario.sha256:
+        return [f"was made from another scenario (sha256 {named[:12]}..., "
+                f"not {scenario.sha256[:12]}... of {scenario.path})"]
+    ids = [t.target_id for t in record.result.targets]
+    expected = set(scenario.target_ids)
+    problems = []
+    missing = [i for i in scenario.target_ids if i not in ids]
+    if missing:
+        problems.append(f"targets do not cover the scenario: missing "
+                        f"{', '.join(missing)}")
+    extra = sorted({i for i in ids if i not in expected})
+    if extra:
+        problems.append(f"targets do not match the scenario: extra "
+                        f"{', '.join(extra)}")
+    duplicate = sorted({i for i in ids if ids.count(i) > 1})
+    if duplicate:
+        problems.append(f"targets do not match the scenario: duplicate "
+                        f"{', '.join(duplicate)}")
+    return problems

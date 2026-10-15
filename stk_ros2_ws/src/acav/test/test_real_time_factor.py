@@ -34,7 +34,7 @@ from acav.deploy_run_cli import (
 from acav.metrics import RunResult
 from acav.run_record import Provenance, RunRecord, read_record, write_record
 
-from test_campaign import _result  # noqa: I100 - shared helper
+from test_campaign import _result, covering  # noqa: I100 - shared helper
 from test_deploy_run_cli import FakeProcess, _config  # noqa: I100
 
 ACAV_YAML = os.path.join(os.path.dirname(os.path.dirname(
@@ -183,10 +183,10 @@ def _directory(tmp_path, runs):
     """runs: (mode, recorded rtf or None, bridge.log text or None)."""
     for seed, (mode, rtf, log) in enumerate(runs):
         name = f"E6-dynamics_aware-lockstep-seed{seed}"
-        write_record(str(tmp_path / f"{name}.json"), RunRecord(
+        write_record(str(tmp_path / f"{name}.json"), covering(RunRecord(
             result=_result(name, seed=seed),
             provenance=Provenance(backend_type="com", execution_mode=mode,
-                                  real_time_factor=rtf)))
+                                  real_time_factor=rtf))))
         logs = tmp_path / f"{name}.logs"
         logs.mkdir()
         (logs / "summary.json").write_text(json.dumps({"run_id": name}),

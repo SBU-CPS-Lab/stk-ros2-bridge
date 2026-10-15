@@ -269,8 +269,10 @@ class TestReport:
         from acav.campaign import RunSpec
         from acav.campaign_runner import check_record
 
+        from test_campaign import covering
+
         run = RunSpec(experiment="E3", execution_mode="free_run")
-        record = _record("free_run")
+        record = covering(_record("free_run"))
         record.result.run_id = run.run_id
         assert check_record(run, record) == []
 

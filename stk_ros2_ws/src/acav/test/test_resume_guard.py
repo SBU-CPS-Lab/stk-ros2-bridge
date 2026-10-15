@@ -21,6 +21,8 @@ from acav.campaign_runner import CampaignRefused, RunnerOptions, run_campaign
 from acav.metrics import CaptureOutcome, RunResult, TargetResult
 from acav.run_record import Provenance, RunRecord, write_record
 
+from test_campaign import covering  # noqa: I100 - shared helper
+
 A = "a" * 40            # clean commits; A and A2 share one tree
 A2 = "b" * 40
 B = "c" * 40            # a different tree
@@ -44,9 +46,9 @@ def _launcher(version, launched=None):
         provenance = Provenance(backend_type="com",
                                 execution_mode=run.execution_mode,
                                 code_version=version)
-        write_record(output_path, RunRecord(result=result,
-                                            provenance=provenance,
-                                            experiment=run.experiment))
+        write_record(output_path, covering(RunRecord(
+            result=result, provenance=provenance,
+            experiment=run.experiment)))
     return launch
 
 
