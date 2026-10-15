@@ -56,7 +56,7 @@ import abc
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from stk_bridge.exceptions import CommandError
 
@@ -461,6 +461,14 @@ class StkBackend(abc.ABC):
         it) reads it. A caller that needs it -- the orbit-block reader,
         which must never request an epoch at or after it -- treats None
         as "do not batch".
+        """
+        return None
+
+    def graphics_state(self) -> Optional[Dict[str, Any]]:
+        """STK Desktop's graphics windows and main window, or None.
+
+        Not abstract: only STK Desktop has windows (see
+        core/graphics_state.py for the format and why it is recorded).
         """
         return None
 

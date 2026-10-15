@@ -441,6 +441,34 @@ class ComBackend(StkBackend):
             return None
         return name if isinstance(name, str) else None
 
+    def graphics_state(self) -> Optional[Dict[str, Any]]:
+        """Open 2D/3D Graphics windows and the main window's state.
+
+        Read-only, documented calls: IAgUiApplication.Windows,
+        IAgUiWindow.GetServiceByType (null when the window is not of that
+        type), IAgUiApplication.WindowState and Visible (agi.stk12
+        uiapplication.py / uicore.py). None when there is no STK
+        Desktop application object.
+        """
+        if self._stk is None:
+            return None
+        from agi.stk12.uicore import AgEWindowService, AgEWindowState
+
+        windows_2d = windows_3d = 0
+        for window in self._stk.Windows:
+            if window.GetServiceByType(
+                    AgEWindowService.eWindowService2DWindow) is not None:
+                windows_2d += 1
+            if window.GetServiceByType(
+                    AgEWindowService.eWindowService3DWindow) is not None:
+                windows_3d += 1
+        state = {AgEWindowState.eWindowStateMinimized: "minimized",
+                 AgEWindowState.eWindowStateMaximized: "maximized",
+                 AgEWindowState.eWindowStateNormal: "normal"}.get(
+                     self._stk.WindowState, str(self._stk.WindowState))
+        return {"windows_2d": windows_2d, "windows_3d": windows_3d,
+                "main_window": state, "visible": bool(self._stk.Visible)}
+
     def get_scenario_stop_time(self) -> StkTime:
         self.require_connected()
         scenario = self._root.CurrentScenario

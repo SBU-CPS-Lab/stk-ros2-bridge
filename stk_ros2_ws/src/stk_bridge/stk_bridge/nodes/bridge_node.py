@@ -51,6 +51,7 @@ import yaml
 
 from stk_bridge.core import conversions as conv
 from stk_bridge.core.clock_timing import ClockAdvanceTiming
+from stk_bridge.core.graphics_state import GraphicsLog, describe
 from stk_bridge.exceptions import (
     ConventionValidationError,
     LockstepBarrierTimeoutError,
@@ -188,6 +189,10 @@ class StkBridgeNode:
         self._last_startup_log = 0.0
         self._advance_ms = (0.0, 0)
         self._clock_timing = ClockAdvanceTiming()
+        #: STK's graphics state, a recorded run condition (see
+        #: core/graphics_state.py); the runner reads the file.
+        self._graphics_log = GraphicsLog(
+            str(config.get("graphics_state_file") or ""))
         self._commanded_paths: Set[str] = set()
         self._commands_missing = 0
         self._attitude_mismatches = 0
@@ -222,6 +227,9 @@ class StkBridgeNode:
             self.worker.backend, self.frames, self.sensing_config, report)
         self.sensing.set_attitude_write_probe(self._inertial_sample_written)
         self._scenario_stop = self._read_scenario_stop()
+        # Before the interfaces exist, so before CONNECTED is published:
+        # the runner checks this sample right after bridge_connected.
+        self._sample_graphics("startup")
         if self.sensing_config.orbit_batch_samples > 1:
             self._attach_orbit_batch()
         if self.sensing_config.equivalence_diagnostic:
@@ -283,9 +291,31 @@ class StkBridgeNode:
             return
         stop = getattr(self, "_scenario_stop", None)
         if stop is not None and epoch_ms(now) >= epoch_ms(stop):
+            self._sample_graphics("end")
             self._log_sensing_summaries(final=True)
         elif self.time_sync.step_index % SUMMARY_EVERY_STEPS == 0:
+            self._sample_graphics("running")
             self._log_sensing_summaries(final=False)
+
+    def _sample_graphics(self, phase: str) -> None:
+        """Record STK's graphics state (startup, running or end).
+
+        A read that fails is recorded as "unavailable" with its error,
+        which the runner refuses like any other state that is not the
+        one the run requires.
+        """
+        log = getattr(self, "_graphics_log", None)
+        if log is None:
+            return
+        error = ""
+        try:
+            state = self.worker.call(
+                lambda backend: backend.graphics_state(), "graphics state")
+        except Exception as exc:            # noqa: BLE001 - recorded
+            state, error = None, str(exc)
+        step = getattr(self.time_sync, "step_index", 0)
+        entry = log.add(phase, state, step, error)
+        LOGGER.info("STK graphics (%s): %s", phase, describe(entry))
 
     def _attach_orbit_batch(self) -> None:
         """(C): lockstep only, and only with a stop time STK confirms."""
