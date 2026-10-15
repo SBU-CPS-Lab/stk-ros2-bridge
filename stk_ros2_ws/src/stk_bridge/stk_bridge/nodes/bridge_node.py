@@ -280,24 +280,29 @@ class StkBridgeNode:
         if final:
             self._final_summary_logged = True
 
-    def _sensing_summary_checkpoint(self, now) -> None:
-        """Lockstep: final summaries at the terminal epoch, running ones
-        every SUMMARY_EVERY_STEPS steps. Called after sensing and before
-        the barrier wait, which the terminal step never gets past."""
+    def _sensing_summary_checkpoint(self, now, index=None) -> None:
+        """Final summaries at the terminal epoch, running ones every
+        SUMMARY_EVERY_STEPS steps. Lockstep calls it after sensing and
+        before the barrier wait, which the terminal step never gets past,
+        counting by step_index; free-run passes its own iteration count
+        as ``index``, since its step_index stays 0."""
         from stk_bridge.core.orbit_block import epoch_ms
+
+        if index is None:
+            index = self.time_sync.step_index
 
         if (getattr(self, "sensing", None) is None
                 or getattr(self, "_final_summary_logged", False)):
             return
         stop = getattr(self, "_scenario_stop", None)
         if stop is not None and epoch_ms(now) >= epoch_ms(stop):
-            self._sample_graphics("end")
+            self._sample_graphics("end", index)
             self._log_sensing_summaries(final=True)
-        elif self.time_sync.step_index % SUMMARY_EVERY_STEPS == 0:
-            self._sample_graphics("running")
+        elif index % SUMMARY_EVERY_STEPS == 0:
+            self._sample_graphics("running", index)
             self._log_sensing_summaries(final=False)
 
-    def _sample_graphics(self, phase: str) -> None:
+    def _sample_graphics(self, phase: str, index=None) -> None:
         """Record STK's graphics state (startup, running or end).
 
         A read that fails is recorded as "unavailable" with its error,
@@ -313,7 +318,8 @@ class StkBridgeNode:
                 lambda backend: backend.graphics_state(), "graphics state")
         except Exception as exc:            # noqa: BLE001 - recorded
             state, error = None, str(exc)
-        step = getattr(self.time_sync, "step_index", 0)
+        step = (getattr(self.time_sync, "step_index", 0)
+                if index is None else index)
         entry = log.add(phase, state, step, error)
         LOGGER.info("STK graphics (%s): %s", phase, describe(entry))
 
@@ -674,6 +680,10 @@ class StkBridgeNode:
             self._sense_and_publish(now)
         self._run_rate_groups()
         self._publish_status(now)
+        # Summaries and graphics samples, as in lockstep; counted by
+        # iteration because free-run time comes from the wall clock.
+        self._free_iterations = getattr(self, "_free_iterations", 0) + 1
+        self._sensing_summary_checkpoint(now, index=self._free_iterations)
         self.time_sync.sleep_until_next(
             self.scheduler.next_due_time(self.time_sync.sim_seconds()))
 
