@@ -26,3 +26,17 @@ for _path in (_TEST_DIR, _PACKAGE_ROOT,
               os.path.join(_WORKSPACE_SRC, "stk_bridge")):
     if os.path.isdir(_path) and _path not in sys.path:
         sys.path.insert(0, _path)
+
+import pytest  # noqa: E402  (after the path bootstrap)
+
+
+@pytest.fixture(autouse=True)
+def _accept_twin_identity(monkeypatch):
+    """Offline tests have no twin to publish an identity: accept one.
+
+    test_twin_identity_check.py exercises the real check by injecting
+    its own transports; this only replaces the ROS-backed default.
+    """
+    import acav.deploy_run_cli as deploy_run_cli
+    monkeypatch.setattr(deploy_run_cli, "_confirm_twin_identity_ros",
+                        lambda run_config, timeout_s: ("v1 test", []))

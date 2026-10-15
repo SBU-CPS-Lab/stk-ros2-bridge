@@ -211,6 +211,7 @@ class TestExecuteRunHappyPath:
             summary = json.load(handle)
         steps = {s["step"]: s["ok"] for s in summary["steps"]}
         assert steps == {"bridge_connected": True, "twin_acking": True,
+                         "twin_identity": True,
                          "scheduler_exit": True, "topic_capture": True}
         assert bridge_proc.terminated
 

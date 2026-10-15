@@ -57,7 +57,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence, Tuple
 
 LOGGER = logging.getLogger(__name__)
 
@@ -113,6 +113,11 @@ class Deps:
     popen: Callable[..., "subprocess.Popen"] = subprocess.Popen
     wait_for_bridge_connected: Callable[[str, float, str], "ConnectResult"] = None
     wait_for_twin_ack: Callable[[str, float], bool] = None
+    #: (run config path, timeout) -> (identity text, problems); empty
+    #: problems means the twin loaded this run's config and runs this
+    #: checkout's code (see acav/twin_identity.py).
+    confirm_twin_identity: Callable[[str, float],
+                                    Tuple[str, List[str]]] = None
     prompt: Callable[[str], None] = lambda message: input(message)  # noqa: E731
     sleep: Callable[[float], None] = time.sleep
 
@@ -126,6 +131,8 @@ class Deps:
             self.wait_for_bridge_connected = _wait_for_bridge_connected_ros
         if self.wait_for_twin_ack is None:
             self.wait_for_twin_ack = _wait_for_twin_ack_ros
+        if self.confirm_twin_identity is None:
+            self.confirm_twin_identity = _confirm_twin_identity_ros
 
 
 @dataclass
@@ -353,11 +360,13 @@ def prepare_run_config(config: RunConfig, version: str):
     return path, True, True
 
 
-def scheduler_argv(config: RunConfig) -> List[str]:
+def scheduler_argv(config: RunConfig, twin_identity: str = "") -> List[str]:
     # ROS parses parameter values as YAML. Quote strings explicitly so an
     # empty value, JSON payload, numeric-looking ID or Windows path retains
     # its string type. subprocess receives an argv list, not shell text.
     strings = {
+        # The identity the run orchestrator accepted, for the record.
+        "twin_identity": twin_identity,
         "scenario_config": config.scenario,
         "scheduler_type": config.scheduler,
         "prefix": config.prefix,
@@ -472,6 +481,65 @@ def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
             if ticks and f"matlab_twin:{ticks[-1].step_index}" in seen:
                 return True
         return False
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+#: The twin republishes its identity every step while ready, so a few
+#: seconds after its first ack are plenty.
+TWIN_IDENTITY_TIMEOUT_S = 10.0
+
+
+def _confirm_twin_identity(run_config: str, timeout_s: float,
+                           wait: Callable[[float], Optional[str]]
+                           ) -> Tuple[str, List[str]]:
+    """The twin's identity text, and every reason it does not fit."""
+    from acav.twin_identity import (
+        IDENTITY_TOPIC,
+        check_identity,
+        source_root,
+    )
+
+    text = wait(timeout_s)
+    if text is None:
+        return "", [
+            f"no twin identity on {IDENTITY_TOPIC} within {timeout_s:.0f} "
+            f"s; the model predates the identity check or was not built "
+            f"for this code -- rebuild it with build_acav_twin "
+            f"('RunConfigPath', '{run_config}')"]
+    return text, check_identity(text, run_config, source_root())
+
+
+def _confirm_twin_identity_ros(run_config: str, timeout_s: float
+                               ) -> Tuple[str, List[str]]:
+    return _confirm_twin_identity(run_config, timeout_s,
+                                  _wait_for_twin_identity_ros)
+
+
+def _wait_for_twin_identity_ros(timeout_s: float) -> Optional[str]:
+    """The latest identity the twin published, or None.
+
+    The twin publishes RELIABLE + VOLATILE on every ready step, the same
+    as its ack, so the bridge's own command_qos() matches it.
+    """
+    import rclpy
+    from stk_bridge.interfaces.qos import command_qos
+    from std_msgs.msg import String
+
+    from acav.twin_identity import IDENTITY_TOPIC
+
+    seen: List[str] = []
+    rclpy.init(args=None)
+    try:
+        node = rclpy.create_node("deploy_run_wait_for_twin_identity")
+        node.create_subscription(
+            String, IDENTITY_TOPIC,
+            lambda message: seen.append(str(message.data)), command_qos())
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline and not seen:
+            rclpy.spin_once(node, timeout_sec=0.5)
+        return seen[-1] if seen else None
     finally:
         node.destroy_node()
         rclpy.shutdown()
@@ -612,8 +680,20 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             if not twin_ok:
                 return EXIT_STEP_FAILED
 
+            # The twin must have loaded THIS run's config and run this
+            # checkout's code; otherwise the scheduler is never started,
+            # and the bridge cannot advance without it.
+            identity, problems = deps.confirm_twin_identity(
+                run_config, TWIN_IDENTITY_TIMEOUT_S)
+            summary["twin_identity"] = identity
+            summary["twin_identity_problems"] = list(problems)
+            record("twin_identity", not problems,
+                   identity if not problems else "; ".join(problems))
+            if problems:
+                return EXIT_STEP_FAILED
+
             with _open_log(log_dir, "scheduler.log") as scheduler_log:
-                argv = scheduler_argv(config)
+                argv = scheduler_argv(config, twin_identity=identity)
                 run_log.info("launching scheduler: %s", " ".join(argv))
                 scheduler_proc = deps.popen(
                     argv, stdout=scheduler_log, stderr=subprocess.STDOUT)

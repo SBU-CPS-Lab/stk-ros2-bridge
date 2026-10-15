@@ -195,6 +195,8 @@ class SchedulerOptions:
     #: E1's treatment, recorded so a mis-paired run is identifiable in
     #: the results rather than only in the launch command's history.
     attitude_provider: str = ""
+    #: The twin identity the run orchestrator accepted, for the record.
+    twin_identity: str = ""
 
 
 class SchedulerNode:
@@ -794,6 +796,7 @@ class SchedulerNode:
                 attitude_provider=self._recorded_attitude_provider(),
                 attitude_readback_provider=self._readback_provider,
                 code_version=_code_version(),
+                twin_identity=getattr(self._options, "twin_identity", ""),
                 fault=_parse_json_value(self._options.fault_json, "fault"),
                 started_utc=self._started_utc,
                 finished_utc=_utc_now()))
@@ -879,6 +882,7 @@ def main(args=None) -> None:
     node.declare_parameter("gains_json", "")
     node.declare_parameter("fault_json", "")
     node.declare_parameter("attitude_provider", "")
+    node.declare_parameter("twin_identity", "")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -904,6 +908,7 @@ def main(args=None) -> None:
         fault_json=str(node.get_parameter("fault_json").value),
         attitude_provider=str(
             node.get_parameter("attitude_provider").value),
+        twin_identity=str(node.get_parameter("twin_identity").value),
     )
 
     scheduler = SchedulerNode(node, spec, options)

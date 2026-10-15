@@ -116,6 +116,11 @@ class Provenance:
     #: bump for the same reason as attitude_provider: absence has one
     #: reading ("not recorded") and changes nothing else in the record.
     code_version: str = ""
+    #: The twin identity the run orchestrator checked and accepted
+    #: ("v1 <run-config sha256> <build fp> <runtime fp>", see
+    #: acav.twin_identity); empty when not checked -- every record written
+    #: before the check existed. No RECORD_VERSION bump, as above.
+    twin_identity: str = ""
     started_utc: str = ""
     finished_utc: str = ""
     #: Free-text, e.g. which machine, which STK licence features.
@@ -132,6 +137,7 @@ class Provenance:
             "attitude_provider": self.attitude_provider,
             "attitude_readback_provider": self.attitude_readback_provider,
             "code_version": self.code_version,
+            "twin_identity": self.twin_identity,
             "started_utc": self.started_utc,
             "finished_utc": self.finished_utc,
             "notes": self.notes,
@@ -151,6 +157,7 @@ class Provenance:
             attitude_readback_provider=str(
                 raw.get("attitude_readback_provider", "") or ""),
             code_version=str(raw.get("code_version", "") or ""),
+            twin_identity=str(raw.get("twin_identity", "") or ""),
             started_utc=str(raw.get("started_utc", "")),
             finished_utc=str(raw.get("finished_utc", "")),
             notes=str(raw.get("notes", "")),

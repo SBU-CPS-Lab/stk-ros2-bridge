@@ -1067,6 +1067,30 @@ reference exactly. If it changes, stop and analyse; don't accept it.
 and `orbit_batch_samples: 1` in their bridge configuration copy. Otherwise
 the diagnostic compares the new paths with themselves.
 
+### Twin identity check
+
+The Simulink model has its run-config path built in, so pressing Play on
+the previous run's model used to load the previous run's config without
+any error. The twin now publishes, on `/acav/twin_identity`:
+
+    v1 <sha256 of the run config it loaded> <build fp> <runtime fp>
+
+After `twin_acking`, `run_acav_run.py` checks it within 10 s and starts
+the scheduler only if all three hold:
+
+- the config digest equals the sha256 of this run's `.runconfig.json`;
+- the code fingerprint written into the model at build time equals the
+  one recomputed from disk at simulation start (otherwise: rebuild);
+- that fingerprint equals this checkout's (MATLAB runs this checkout).
+
+Otherwise `twin_identity: FAIL` names the reason in `run.log` and the run
+stops; the bridge cannot advance without the scheduler, so nothing runs.
+The accepted identity is in `summary.json` and the record's
+`provenance.twin_identity`. A model built before this check publishes
+no identity and is refused: rebuild it as in 5A.3. The fingerprint hashes
+the files as they are on disk, so a checkout that rewrites line endings
+also requires a rebuild.
+
 ### Clock advance timing
 
 The bridge submits the STK clock advance (`Animate * SetValues ...
