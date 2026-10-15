@@ -187,6 +187,8 @@ RUN_BRIDGE_CONFIG = "bridge_params.yaml"
 EXECUTION_MODES = ("lockstep", "free_run")
 #: The bridge's STK graphics samples for the run, beside the run's logs.
 GRAPHICS_STATE_FILE = "stk_graphics.json"
+#: A free-run twin's sub-step statistics, written by adcs.simulink_step.
+TWIN_SUBSTEPS_FILE = "twin_substeps.json"
 #: The startup sample is written before the bridge reports CONNECTED;
 #: the terminal one at the last step, before the scheduler can finish.
 GRAPHICS_STARTUP_TIMEOUT_S = 10.0
@@ -525,6 +527,14 @@ def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
         rclpy.shutdown()
 
 
+def _read_json_or_none(path: str) -> Optional[dict]:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
 def _read_graphics_state_file(path: str, phase: str,
                               timeout_s: float) -> Optional[dict]:
     from stk_bridge.core.graphics_state import read
@@ -702,6 +712,7 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
     summary = {
         "run_id": config.run_id, "experiment": config.experiment,
         "code_version": version,
+        "execution_mode": config.execution_mode,
         "diagnostic_label": config.diagnostic_label,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "steps": [],
@@ -844,6 +855,11 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 config, deps.read_graphics_state(
                     graphics_file, "end", GRAPHICS_END_TIMEOUT_S),
                 summary, record)
+            if config.execution_mode == "free_run":
+                # The twin's ZOH sub-step statistics (adcs.simulink_step);
+                # None when no sub-step event was recorded.
+                summary["twin_substeps"] = _read_json_or_none(
+                    os.path.join(log_dir, TWIN_SUBSTEPS_FILE))
 
             # The scheduler no longer participates in the barrier. Stop the
             # bridge before waiting for a human, otherwise a successful run
