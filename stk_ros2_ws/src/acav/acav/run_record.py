@@ -198,11 +198,39 @@ class RunRecord:
     def reportable(self) -> bool:
         """May this run's numbers appear in the paper?
 
-        Derived from the observed backend on every access rather than
-        stored, so it cannot be inherited from a copied file or left
-        behind by a regeneration. C6 asserts on this.
+        Derived from the observed backend and the result on every access
+        rather than stored, so it cannot be inherited from a copied file
+        or left behind by a regeneration. C6 asserts on this.
         """
-        return self.provenance.backend_type in REPORTABLE_BACKENDS
+        return not self.unreportable_reasons
+
+    @property
+    def unreportable_reasons(self) -> List[str]:
+        """Why this run may not be reported; empty when it may.
+
+        - The backend is not a real STK one (C1 section 8).
+        - A lockstep run has a target with no twin telemetry in its hold
+          window: the barrier makes the twin report every step, so the
+          harness failed. (In free-run that is a coupling outcome.)
+        - A target's access answer never arrived, in any mode.
+        """
+        reasons: List[str] = []
+        backend = self.provenance.backend_type
+        if backend not in REPORTABLE_BACKENDS:
+            reasons.append(f"backend {backend!r} is not a real STK backend")
+        silent = [t.target_id for t in self.result.targets
+                  if t.outcome is CaptureOutcome.NO_TELEMETRY]
+        if silent and self.provenance.execution_mode == "lockstep":
+            reasons.append(
+                f"lockstep run with no twin telemetry in the hold window of "
+                f"{', '.join(silent)}: the barrier guarantees a sample every "
+                f"step, so the harness failed")
+        unanswered = [t.target_id for t in self.result.targets
+                      if t.outcome is CaptureOutcome.NO_ACCESS_ANSWER]
+        if unanswered:
+            reasons.append(
+                f"no access answer for {', '.join(unanswered)}")
+        return reasons
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -210,6 +238,7 @@ class RunRecord:
             "experiment": self.experiment,
             "provenance": self.provenance.to_dict(),
             "reportable": self.reportable,
+            "unreportable_reasons": self.unreportable_reasons,
             "determinism_signature": self.signature,
             "result": _result_to_dict(self.result),
         }
@@ -269,21 +298,27 @@ def _result_to_dict(result: RunResult) -> Dict[str, Any]:
         "mean_sense_latency_ms": _num(result.mean_sense_latency_ms),
         "mean_actuate_latency_ms": _num(result.mean_actuate_latency_ms),
         "mean_barrier_wait_ms": _num(result.mean_barrier_wait_ms),
-        "targets": [
-            {
-                "target_id": t.target_id,
-                "attempted": t.attempted,
-                "outcome": t.outcome.value,
-                "image_time_s": _num(t.image_time_s),
-                "error_at_image_deg": _num(t.error_at_image_deg),
-                "max_error_in_hold_deg": _num(t.max_error_in_hold_deg),
-                "settle_time_s": _num(t.settle_time_s),
-                "slew_magnitude_deg": _num(t.slew_magnitude_deg),
-                "slew_duration_s": _num(t.slew_duration_s),
-            }
-            for t in result.targets
-        ],
+        "targets": [_target_to_dict(t) for t in result.targets],
     }
+
+
+def _target_to_dict(t: TargetResult) -> Dict[str, Any]:
+    entry = {
+        "target_id": t.target_id,
+        "attempted": t.attempted,
+        "outcome": t.outcome.value,
+        "image_time_s": _num(t.image_time_s),
+        "error_at_image_deg": _num(t.error_at_image_deg),
+        "max_error_in_hold_deg": _num(t.max_error_in_hold_deg),
+        "settle_time_s": _num(t.settle_time_s),
+        "slew_magnitude_deg": _num(t.slew_magnitude_deg),
+        "slew_duration_s": _num(t.slew_duration_s),
+    }
+    # Only when there is one, so a scored target is written exactly as
+    # before the field existed.
+    if t.reason:
+        entry["reason"] = t.reason
+    return entry
 
 
 def _result_from_dict(raw: Dict[str, Any]) -> RunResult:
@@ -305,6 +340,7 @@ def _result_from_dict(raw: Dict[str, Any]) -> RunResult:
             settle_time_s=_from_num(entry.get("settle_time_s")),
             slew_magnitude_deg=_from_num(entry.get("slew_magnitude_deg")),
             slew_duration_s=_from_num(entry.get("slew_duration_s")),
+            reason=str(entry.get("reason", "") or ""),
         ))
 
     seed = raw.get("seed")

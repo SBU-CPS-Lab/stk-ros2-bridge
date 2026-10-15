@@ -195,6 +195,24 @@ def declined_result(entry: DeclinedEntry) -> TargetResult:
     )
 
 
+def no_telemetry_result(entry, reason: str) -> TargetResult:
+    """An attempted target with no twin telemetry in its hold window."""
+    return TargetResult(
+        target_id=entry.target_id, attempted=True,
+        outcome=CaptureOutcome.NO_TELEMETRY,
+        image_time_s=entry.t_image_s, reason=reason,
+    )
+
+
+def no_access_answer_result(entry, reason: str) -> TargetResult:
+    """An attempted target whose access answer never arrived."""
+    return TargetResult(
+        target_id=entry.target_id, attempted=True,
+        outcome=CaptureOutcome.NO_ACCESS_ANSWER,
+        image_time_s=entry.t_image_s, reason=reason,
+    )
+
+
 class CaptureTracker:
     """Buffers telemetry and finalises capture outcomes as targets pass.
 

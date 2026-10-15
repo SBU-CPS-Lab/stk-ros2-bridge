@@ -61,8 +61,9 @@ from stk_bridge.core import data_providers as dp
 from stk_bridge.exceptions import StkBridgeError
 
 from acav.capture_tracking import CaptureTracker, LatencyAggregate, \
-    RunAggregate, TelemetrySample, declined_result
-from acav.metrics import RunResult, TargetResult
+    RunAggregate, TelemetrySample, declined_result, \
+    no_access_answer_result, no_telemetry_result
+from acav.metrics import CaptureOutcome, RunResult, TargetResult
 from acav.scheduling import ScheduleEntry, SchedulePlan, plan
 from acav.spec import AcavSpec
 
@@ -244,10 +245,6 @@ class SchedulerNode:
         self._access_requested: Set[str] = set()
         self._results: Dict[str, TargetResult] = {}
         self._finalized: Set[str] = set()
-        #: Targets whose outcome could not be computed, with the reason.
-        #: They count as done for completion -- they will never be
-        #: scored, and waiting for them would only mean waiting forever.
-        self._unscorable: Dict[str, str] = {}
         self._window_elapsed_wall: Optional[float] = None
         self._shutdown_requested = False
         self._last_sim_time_s: Optional[float] = None
@@ -671,9 +668,13 @@ class SchedulerNode:
             self._results[entry.target_id] = self._tracker.finalize(
                 entry, has_access)
         except ValueError as exc:
-            LOGGER.error("could not finalise %s: %s", entry.target_id, exc)
-            self._unscorable[entry.target_id] = str(exc)
-            return
+            # Recorded, never dropped: a target missing from the result
+            # would leave the counts and the signature short of it.
+            LOGGER.error("could not score %s, recorded as %s: %s",
+                         entry.target_id,
+                         CaptureOutcome.NO_TELEMETRY.value, exc)
+            self._results[entry.target_id] = no_telemetry_result(
+                entry, str(exc))
         self._finalized.add(entry.target_id)
         LOGGER.info("%s finalised: %s (access=%s)", entry.target_id,
                    self._results[entry.target_id].outcome.value, has_access)
@@ -698,9 +699,7 @@ class SchedulerNode:
         """
         if self._shutdown_requested or self._window_elapsed_wall is None:
             return
-        accounted = len(self._finalized) + len(
-            set(self._unscorable) - self._finalized)
-        all_accounted = accounted == len(self._spec.targets)
+        all_accounted = len(self._finalized) == len(self._spec.targets)
         grace_expired = (time.monotonic() - self._window_elapsed_wall
                          >= FINALIZE_GRACE_WALL_S)
         if all_accounted or grace_expired:
@@ -710,21 +709,21 @@ class SchedulerNode:
     def _finish_run(self, forced: bool) -> None:
         self._shutdown_requested = True
         if forced:
-            missing = [t.id for t in self._spec.targets
-                      if t.id not in self._finalized]
-            reasons = {target_id: self._unscorable.get(
-                target_id, "no access answer arrived in time")
-                for target_id in missing}
+            # Only attempted targets can be outstanding: declined ones
+            # are finalised when the schedule is built.
+            reason = (f"no access answer arrived within "
+                      f"{FINALIZE_GRACE_WALL_S:.0f} s of the window's end")
+            missing = [entry for entry in self._plan.attempted
+                       if entry.target_id not in self._finalized]
             LOGGER.error(
-                "finalising the run with %d target(s) never scored: %s. "
-                "Neither CAPTURED nor any other outcome is a valid guess "
-                "for missing data, so these are omitted from the result "
-                "rather than scored as a failure they may not have been.",
-                len(missing), "; ".join(
-                    f"{target_id} ({reason})"
-                    for target_id, reason in reasons.items()))
-            for target_id in missing:
-                self._results.pop(target_id, None)
+                "finalising the run with %d target(s) recorded as %s (%s): "
+                "%s. The record is not reportable.", len(missing),
+                CaptureOutcome.NO_ACCESS_ANSWER.value, reason,
+                ", ".join(entry.target_id for entry in missing))
+            for entry in missing:
+                self._results[entry.target_id] = no_access_answer_result(
+                    entry, reason)
+                self._finalized.add(entry.target_id)
 
         result = self._build_run_result()
         self._write_output(result)
@@ -807,10 +806,9 @@ class SchedulerNode:
                     self._execution_mode, record.reportable)
         if not record.reportable:
             LOGGER.warning(
-                "this run is NOT reportable: the backend was %r. No number "
-                "it produced may appear in the paper (see the case study "
-                "spec, section 8); it is fine for development.",
-                self._backend_type)
+                "this run is NOT reportable: %s. No number it produced may "
+                "appear in the paper; it is fine for development.",
+                "; ".join(record.unreportable_reasons))
 
     def _request_shutdown(self) -> None:
         import rclpy

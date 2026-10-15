@@ -71,6 +71,16 @@ class CaptureOutcome(str, Enum):
     NOT_ATTEMPTED = "not_attempted"
     #: Spacecraft was in SAFE mode at the image epoch (E5 fault runs).
     SAFE_MODE = "safe_mode"
+    #: Attempted, but no twin telemetry fell in the hold window, so the
+    #: criterion could not be applied. In free-run the twin can stall
+    #: past a whole hold window -- an outcome of asynchronous coupling.
+    #: In lockstep the barrier makes the twin report every step, so this
+    #: is an invariant violation and the record is not reportable (see
+    #: run_record.RunRecord.unreportable_reasons).
+    NO_TELEMETRY = "no_telemetry"
+    #: Attempted, but STK's access answer never arrived, so the geometry
+    #: half is unknown. A harness failure in any mode: not reportable.
+    NO_ACCESS_ANSWER = "no_access_answer"
 
 
 @dataclass
@@ -101,6 +111,10 @@ class TargetResult:
     slew_magnitude_deg: float = float("nan")
     #: Measured slew duration, for comparison against slew_model's bound.
     slew_duration_s: float = float("nan")
+    #: Why the target could not be scored (NO_TELEMETRY,
+    #: NO_ACCESS_ANSWER); empty otherwise. Not in the determinism
+    #: signature: the outcome already is.
+    reason: str = ""
 
     @property
     def captured(self) -> bool:

@@ -231,6 +231,8 @@ def analyse(experiment: str, records: List[RunRecord],
         "experiment": experiment,
         "records": len(records),
         "unreportable": [r.result.run_id for r in unreportable(records)],
+        "unreportable_reasons": {r.result.run_id: r.unreportable_reasons
+                                 for r in unreportable(records)},
         "code_versions": code_version_summary(records),
     }
 
@@ -507,10 +509,10 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
 
     if report["unreportable"]:
         LOGGER.error(
-            "%d run(s) in this campaign are NOT reportable -- they did not "
-            "come from a real STK backend, and the case study spec commits "
-            "the paper to publishing no number the mock produced: %s",
-            len(report["unreportable"]), report["unreportable"])
+            "%d run(s) in this campaign are NOT reportable: %s",
+            len(report["unreportable"]), "; ".join(
+                f"{run_id} ({', '.join(reasons)})" for run_id, reasons
+                in report["unreportable_reasons"].items()))
         return 1
 
     if not report["code_versions"]["attributable"]:

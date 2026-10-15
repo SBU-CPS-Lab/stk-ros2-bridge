@@ -81,6 +81,9 @@ STATUS_COLOR: Dict[str, str] = {
     "safe_mode": "#d03b3b",          # critical -- the vehicle tripped
     "not_attempted": "#c3c2b7",      # muted -- a scheduling choice,
                                       # not a failure
+    "no_telemetry": "#7d7b70",       # unscored -- the twin was silent
+                                      # through the hold window
+    "no_access_answer": "#4f4e46",   # unscored -- STK never answered
 }
 
 #: Diverging pair, for a signed quantity (unused by the current figures
@@ -155,6 +158,8 @@ def status_label(outcome: str) -> str:
         "no_access_and_not_settled": "No access, not settled",
         "safe_mode": "SAFE mode",
         "not_attempted": "Not attempted",
+        "no_telemetry": "No telemetry",
+        "no_access_answer": "No access answer",
     }.get(outcome, outcome.replace("_", " ").title())
 
 

@@ -38,7 +38,6 @@ def _node():
         window_duration_s=720.0,
         targets=[SimpleNamespace(id=t) for t in TARGETS])
     node._finalized = set()
-    node._unscorable = {}
     node._window_elapsed_wall = None
     node._shutdown_requested = False
     node._finish_run = Mock()
@@ -57,13 +56,6 @@ class TestRunCompletion:
         node._finalized = set(TARGETS)
         node._check_run_complete(720.0)
         node._finish_run.assert_called_once_with(forced=False)
-
-    def test_an_unscorable_target_does_not_hold_the_run_open(self, clock):
-        node = _node()
-        node._finalized = {"T1", "T2"}
-        node._unscorable = {"T3": "no telemetry samples in the hold window"}
-        node._check_run_complete(720.0)
-        node._finish_run.assert_called_once_with(forced=True)
 
     def test_an_outstanding_access_answer_gets_a_wall_clock_grace(self, clock):
         node = _node()
