@@ -1117,6 +1117,35 @@ no identity and is refused: rebuild it as in 5A.3. The fingerprint hashes
 the files as they are on disk, so a checkout that rewrites line endings
 also requires a rebuild.
 
+### E3 free-run runs
+
+`--execution-mode free_run` now reaches the bridge, whose per-run config
+gets `time.mode: free_run`, and the twin, whose run config gets
+`"execution_mode": "free_run"`. Before this, every E3 "free-run" run ran
+in lockstep. The twin is rebuilt per run as usual and picks the mode up
+from its run config.
+
+- **Bridge.** The clock follows the wall clock (real-time factor 1), so a
+  720 s window takes about 12 min of loop time, and the number of steps
+  varies from run to run. There is no barrier. Orbit batching is
+  lockstep-only and stays off. Summaries and STK graphics samples are
+  taken every 1000 iterations and at the stop time.
+- **Twin.** Each sample at time t integrates enough fixed 0.1 s steps
+  to reach the first step boundary after t, counted from its first
+  sample. Position, velocity and target are held at the sample's values
+  (zero-order hold); when no new step boundary is reached, it holds its
+  outputs. The reached state can be up to one step earlier than the
+  command's stamp (t + 0.1 s). That offset, the number of samples that
+  needed more than one step, and the largest such count are written to
+  `<run>.logs\twin_substeps.json` and copied into `summary.json` as
+  `twin_substeps`.
+- **Lockstep runs are unchanged.** Their bridge config's time section is
+  identical to before, and the twin's lockstep path is bit-identical
+  with or without the new key (`test_free_run_twin.m`).
+- An existing run config whose `execution_mode` differs from the run's
+  is refused, because the twin would otherwise integrate for the wrong
+  mode.
+
 ### Clock advance timing
 
 The bridge submits the STK clock advance (`Animate * SetValues ...
