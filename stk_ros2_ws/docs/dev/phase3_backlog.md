@@ -237,3 +237,85 @@ of epoch-derived time and their tolerances (read-only survey, commit
 
 Any change here alters lockstep behaviour and must be checked against
 the golden trace and the E6-smoke-1 signature.
+
+## Noted after the 72be372 live session (do not fix yet)
+
+Runs: `results/E6_P2d_72be372`, `results/E3_P2d_rtf1_72be372`,
+`results/E3_P2d_rtf05_72be372` (measured 2026-10-15; per-run CPU
+samples in `<run>.cpu.csv`; means below are over gate opening, or
+scheduler start in lockstep, to run completion). The host has 2 physical cores and 4
+logical processors; "cores" below are logical-processor seconds per
+second, so the ceiling is 4.
+
+**The code fingerprint depends on line endings.** `adcs.code_fingerprint`
+(`stk_matlab/+adcs/code_fingerprint.m:58-64`) and
+`acav/twin_identity.py:75-77` hash each file's bytes as stored on disk.
+With `core.autocrlf true` the working tree holds CRLF while the index
+holds LF, so the same commit checked out with other line-ending
+settings gives a different fingerprint for identical code. Proposal:
+hash LF-normalised text (CRLF → LF before hashing) in both, together,
+with the shared test vector updated. Not changed now: it changes every
+recorded twin identity.
+
+**Access can be evaluated before the image epoch is bracketed.** The
+scheduler asks STK for access at `t_i + 0.2 s` of scenario time
+(`acav/scheduler_node.py:91`, `:610-618`), assuming the attitude at
+`t_i` is already written. In lockstep it is: every read-back at a
+written stamp matches it (0.000°). In free-run the twin's commands
+lag, and STK's attitude beyond the newest written sample is about the
+target's off-nadir angle away from it (T1 19.7°, T3 4.5°, T4 25.4°,
+T6 23.5°, i.e. near nadir). At rtf 1.0, T2 scored `no_access` with a
+pointing error of 0.0018°: the newest command at or before 110.0 s was
+stamped 109.959 s; the next (110.537 s) could not be written before the
+bridge sample at 110.547 s; access was requested at ≥ 110.2 s and
+answered by 110.602 s. At rtf 0.5, T4 was close: the next command could
+not be written before 250.257 s, after the 250.2 s request, and access
+was True. STK's attitude at the moment of the access computation is not
+logged, so this is strongly supported, not proven. Proposed rule:
+compute access only once a command stamped ≥ `t_i` has been written
+for the satellite (the bridge already tracks the newest written stamp,
+`stk_bridge/core/actuation.py:284`), retrying until then, with a
+timeout outcome. Lockstep satisfies the condition at the first query,
+so lockstep is unchanged.
+
+**Twin-side stalls at rtf 1.0.** 11 command gaps over 3 s (largest
+16.05 s at t ≈ 502 s) while the bridge kept sampling (16–115 bridge
+samples inside each). During every gap MATLAB used 0.75–1.16 cores,
+about its whole-run mean (1.08), and the sum over all roles was
+1.25–2.25 cores of 4 logical. So the MATLAB process was not short of CPU
+time; what it spent it on cannot be told from these logs (Simulink loop,
+ROS message handling, or hyper-thread sharing of a physical core with
+the bridge). Twin loop iterations with valid data per wall second fell
+from 159 (pilot, rtf 1.0, bridge sleeping about 0.1 s per cycle) to 27
+(rtf 1.0, bridge overrunning 79 % of cycles), and were 132 at rtf 0.5
+(7 % overruns), on the same twin code. That points at contention with
+the busier bridge, not at the twin change. Measure before changing.
+
+**The twin's Simulink loop is unpaced.** `build_acav_twin.m:143-146`
+sets fixed step 0.1 s, normal mode and `StopTime inf`, with no pacing,
+so Simulink steps as fast as it can and calls `adcs.simulink_step` every
+step; the ack and identity publishers fire on every ready step
+(`build_acav_twin.m:483-486`). MATLAB uses about 1 core in every mode
+(E6 lockstep 1.11, free-run 1.08 and 1.18). Options, each to be
+measured:
+- Simulink pacing (`EnablePacing`, a rate well above real time, e.g.
+  polling at 100–200 Hz): lockstep determinism unaffected (the barrier
+  orders the steps); adds up to one poll interval of latency to each
+  lockstep step (E6); changes `build_acav_twin.m`, hence the
+  fingerprint; low risk.
+- Publish the identity once per second or on change (transient-local
+  durability lets a late subscriber still get it), and the ack once per
+  step rather than every Simulink step: no effect on determinism;
+  reduces DDS traffic; changes the fingerprint; low–medium risk (the
+  orchestrator and the barrier must still see them).
+- A blocking receive (MATLAB `ros2subscriber`/`receive` with a timeout
+  instead of Subscribe blocks): largest saving, but replaces the model's
+  I/O; high risk.
+
+**Should the free-run bridge yield when it overruns?** At rtf 1.0 the
+bridge overran 4583 of 5802 cycles and so never slept. A minimum sleep
+(for example 5–10 ms per cycle) would leave CPU to the twin, but it
+changes what "free-run at rtf 1.0" means: the bridge would no longer run
+as fast as the host allows. If adopted, it must be a recorded run
+condition like the pacing, and the rtf 1.0 arm re-run. Alternatives
+outside the code: process priority or CPU affinity, also recorded.
