@@ -129,7 +129,7 @@ and E6.
   `repeats > 1`.
 - `compare_schedulers` (`campaign.py:493`) aggregates without pairing.
 - `RunSpec.seed` and `provenance.scenario_sha256`
-  (`acav/acav/run_record.py:91-94`) exist, and `check_record` already
+  (`acav/acav/run_record.py:92-95`) exist, and `check_record` already
   checks the seed.
 - scipy 1.15.3 is installed on the deploy machine, which provides
   `scipy.stats.wilcoxon` and bootstrap confidence intervals.
@@ -138,7 +138,7 @@ and E6.
 
 1. A per-run scenario path in `RunSpec`, substituted by
    `CommandLauncher` (it currently uses `campaign.scenario_path`,
-   `acav/acav/campaign_runner.py:364`). Also a campaign builder that
+   `acav/acav/campaign_runner.py:487`). Also a campaign builder that
    generates and freezes one scenario file per seed *before* the
    campaign starts, written to the manifest with its sha256.
 2. `check_record` verifies `provenance.scenario_sha256` against the
