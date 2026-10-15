@@ -17,6 +17,7 @@ vector (FINGERPRINT_VECTOR, also in test_twin_identity.m).
 """
 
 import hashlib
+import os
 
 import pytest
 
@@ -168,3 +169,24 @@ class TestCheck:
         problems = ti.check_identity(_identity(), str(tmp_path / "x.json"),
                                      str(src))
         assert problems and "cannot read" in problems[0]
+
+
+class TestModelSource:
+    """The Simulink build and the runner must agree on the topic and the
+    message capacity; the model itself is only built on the deploy
+    machine, so the agreement is checked in the sources."""
+
+    def _source(self, *relative):
+        path = os.path.join(ti.source_root(), *relative)
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_model_publishes_on_the_runners_topic(self):
+        source = self._source("stk_matlab", "simulink", "build_acav_twin.m")
+        assert f'"{ti.IDENTITY_TOPIC}"' in source
+        assert "TwinIdentityPub" in source
+        assert "adcs.code_fingerprint()" in source
+
+    def test_the_adapter_uses_the_runners_capacity(self):
+        source = self._source("stk_matlab", "+adcs", "simulink_step.m")
+        assert f"zeros(1, {ti.MAX_IDENTITY_BYTES}, 'uint8')" in source

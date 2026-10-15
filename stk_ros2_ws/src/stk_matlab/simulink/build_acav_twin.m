@@ -95,6 +95,10 @@ function modelName = build_acav_twin(options)
         options.SampleTime (1,1) double = 0.1
         options.SetpointTopic (1,1) string = "/acav/setpoint"
         options.TwinStatusTopic (1,1) string = "/acav/twin_status"
+        % Which run config and code the running twin uses; checked by the
+        % run orchestrator (acav/twin_identity.py) before the scheduler
+        % starts.
+        options.TwinIdentityTopic (1,1) string = "/acav/twin_identity"
         %#ok<*STRNU>
         % Per-run gain and fault overrides (E4, E5), baked into the
         % GuidanceControl block so the generated model carries them.
@@ -150,6 +154,11 @@ function modelName = build_acav_twin(options)
     % read from the same config twin_step uses at run time.
     stepNs = round(adcs.config([], char(options.RunConfigPath)).stepS * 1e9);
 
+    % The code this model is built from, written into GuidanceControl. At
+    % simulation start adcs.simulink_step recomputes it from disk; the
+    % two differ when the model is stale relative to the code.
+    buildFingerprint = adcs.code_fingerprint();
+
     base = sprintf('/%s/%s', options.Prefix, options.Namespace);
 
     % -- telemetry in ---------------------------------------------------
@@ -204,7 +213,7 @@ function modelName = build_acav_twin(options)
     add_block('simulink/User-Defined Functions/MATLAB Function', ...
         controlBlock, 'Position', [480 40 680 320]);
     setMatlabFunctionBody(controlBlock, ...
-        guidanceControlSource(options.RunConfigPath));
+        guidanceControlSource(options.RunConfigPath, buildFingerprint));
 
     % UnpackTelemetry outputs, in order: qMeas, omega, pos, vel,
     % targetEci, haveTarget, t, objectPath, stepIndex, pathLength,
@@ -360,6 +369,24 @@ function modelName = build_acav_twin(options)
              'applies the command one step late for the whole run.']);
     end
 
+    % -- identity out: std_msgs/String, "v1 <cfg> <build> <runtime>" -----
+    % Published whenever the twin is ready, like the ack, so the run
+    % orchestrator sees it whenever it subscribes. GuidanceControl
+    % outputs 10 and 11 are the zero-padded bytes and their length.
+    identityTextBlock = [modelName '/BuildIdentityText'];
+    add_block('simulink/User-Defined Functions/MATLAB Function', ...
+        identityTextBlock, 'Position', [720 720 900 760]);
+    setMatlabFunctionBody(identityTextBlock, buildIdentityTextSource());
+    setMessageOutput(identityTextBlock, 'std_msgs/String');
+    add_line(modelName, 'GuidanceControl/10', 'BuildIdentityText/1');
+    add_line(modelName, 'GuidanceControl/11', 'BuildIdentityText/2');
+    addBlankMessage(modelName, 'IdentityBlank', [940 710 1090 730], ...
+        'std_msgs/String');
+    add_line(modelName, 'IdentityBlank/1', 'BuildIdentityText/3');
+    addPublish(modelName, 'TwinIdentityPub', [1130 720 1310 760], ...
+        char(options.TwinIdentityTopic), 'std_msgs/String');
+    add_line(modelName, 'BuildIdentityText/1', 'TwinIdentityPub/1');
+
     add_block('built-in/Note', [modelName '/TruthNote'], ...
         'Position', [40 630 1160 690], 'Text', ...
         ['The command published to STK is the ACHIEVED attitude, not ' ...
@@ -454,7 +481,8 @@ function addPublish(model, name, position, topic, messageType)
     controlPorts = get_param([model '/GuidanceControl'], 'PortHandles');
     publishPorts = get_param(block, 'PortHandles');
     port = 9; % Commands and status are sent only once per telemetry time.
-    if strcmp(name, 'LockstepAckPub'), port = 8; end % Repeat ack for late listeners.
+    % Repeat the ack and the identity for late listeners.
+    if any(strcmp(name, {'LockstepAckPub', 'TwinIdentityPub'})), port = 8; end
     add_line(model, controlPorts.Outport(port), publishPorts.Enable);
 end
 
@@ -527,7 +555,7 @@ function setMessageOutput(blockPath, messageType)
     output.DataType = ros.slros2.internal.bus.Util.rosMsgTypeToDataTypeStr(messageType);
 end
 
-function source = guidanceControlSource(runConfigPath)
+function source = guidanceControlSource(runConfigPath, buildFingerprint)
     %GUIDANCECONTROLSOURCE The block body: a thin call into +adcs.
     %
     % Thin on purpose. Everything of substance lives in adcs.twin_step,
@@ -540,11 +568,19 @@ function source = guidanceControlSource(runConfigPath)
     % on whatever happened to be in the base workspace would make two
     % runs of the same .slx mean different things -- which is precisely
     % what E3 exists to rule out.
+    %
+    % buildFingerprint (adcs.code_fingerprint at build time) is baked in
+    % the same way, so the identity the twin publishes can show that the
+    % model is stale relative to the code on disk.
     if nargin < 1
         runConfigPath = "";
     end
+    if nargin < 2
+        buildFingerprint = "";
+    end
     source = strjoin({
-        'function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh] = ...'
+        'function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, ...'
+        '        identity, identityLength] = ...'
         '        fcn(qMeas, omega, pos, vel, targetEci, haveTarget, t, targetId)'
         '%#codegen'
         '    coder.extrinsic(''adcs.simulink_step'');'
@@ -553,9 +589,11 @@ function source = guidanceControlSource(runConfigPath)
         '    started = true;'
         '    torque = zeros(1,3); qCmd = [0 0 0 1]; mode = 1;'
         '    err = 0; momentum = zeros(1,3); saturated = false; energy = 0; ready = false; fresh = false;'
-        sprintf(['    [torque,qCmd,mode,err,momentum,saturated,energy,ready,fresh] = ' ...
-            'adcs.simulink_step(qMeas,omega,pos,vel,targetEci,haveTarget,t,reset,''%s'',targetId);'], ...
-            strrep(char(runConfigPath), '''', ''''''))
+        '    omegaCmd = zeros(1,3); identity = zeros(1,128,''uint8''); identityLength = 0;'
+        sprintf(['    [torque,qCmd,mode,err,momentum,saturated,energy,ready,fresh,omegaCmd,' ...
+            'identity,identityLength] = ' ...
+            'adcs.simulink_step(qMeas,omega,pos,vel,targetEci,haveTarget,t,reset,''%s'',targetId,''%s'');'], ...
+            strrep(char(runConfigPath), '''', ''''''), char(buildFingerprint))
         'end'
         }, newline);
 end
@@ -641,6 +679,27 @@ function source = buildAckTextSource()
         '    for k = 1:n, msg.data(numel(prefix)+k) = digits(n-k+1); end'
         '    msg.data_SL_Info.CurrentLength = uint32(numel(prefix)+n);'
         '    msg.data_SL_Info.ReceivedLength = uint32(numel(prefix)+n);'
+        'end'
+        }, newline);
+end
+
+function source = buildIdentityTextSource()
+    %BUILDIDENTITYTEXTSOURCE The twin identity as std_msgs/String data.
+    % Fails the simulation, rather than truncating, if the message type's
+    % string capacity is smaller than the identity: a cut identity would
+    % be refused by the runner anyway, with a less useful reason.
+    source = strjoin({
+        'function msg = fcn(identity, identityLength, blank)'
+        '%#codegen'
+        '    msg = blank;'
+        '    n = min(double(identityLength), numel(identity));'
+        '    if n > numel(msg.data)'
+        '        error(''Twin identity exceeds the std_msgs/String capacity.'');'
+        '    end'
+        '    msg.data(:) = 0;'
+        '    for k = 1:n, msg.data(k) = identity(k); end'
+        '    msg.data_SL_Info.CurrentLength = uint32(n);'
+        '    msg.data_SL_Info.ReceivedLength = uint32(n);'
         'end'
         }, newline);
 end

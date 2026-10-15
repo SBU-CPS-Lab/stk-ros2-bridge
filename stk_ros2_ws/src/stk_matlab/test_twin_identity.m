@@ -57,6 +57,48 @@ function test_twin_identity()
     assert(cfg.naturalFrequencyRadS == 1.2 && cfg.dampingRatio == 0.6);
 
     fprintf('PASS: code fingerprint vector, run-config digest.\n');
+
+    % -- the identity the model publishes (adcs.simulink_step) ---------
+    identityPath = fullfile(root, 'id.runconfig.json');
+    writeBytes(identityPath, uint8(['{"run_id": "r"}' 10]));
+    built = adcs.code_fingerprint();
+    zero3 = zeros(1, 3);
+    [~,~,~,~,~,~,~,ready,~,~,identity,n] = adcs.simulink_step( ...
+        zeros(1,4), zero3, zero3, zero3, zero3, false, 0, true, ...
+        identityPath, '', built);
+    assert(~ready, 'startup sample must not be ready');
+    assert(isa(identity, 'uint8') && isequal(size(identity), [1 128]));
+    expected = sprintf('v1 %s %s %s', ...
+        'ea0ab5a1b67c36408f52f019e011c48fef54dad1f331ff35d7ec1261bc355fbb', ...
+        built(1:16), built(1:16));
+    assert(n == 101 && strcmp(char(identity(1:n)), expected), ...
+        'identity text: %s', char(identity(1:n)));
+    assert(all(identity(n+1:end) == 0));
+
+    % A model built from other code reports that build fingerprint.
+    [~,~,~,~,~,~,~,~,~,~,identity,n] = adcs.simulink_step( ...
+        zeros(1,4), zero3, zero3, zero3, zero3, false, 0, true, ...
+        identityPath, '', repmat('f', 1, 64));
+    assert(strcmp(char(identity(69:n)), ...
+        sprintf('%s %s', repmat('f', 1, 16), built(1:16))));
+
+    % No run config and no build fingerprint: '-' fields, which the
+    % runner refuses.
+    [~,~,~,~,~,~,~,~,~,~,identity,n] = adcs.simulink_step( ...
+        zeros(1,4), zero3, zero3, zero3, zero3, false, 0, true, '');
+    assert(strcmp(char(identity(1:n)), sprintf('v1 - - %s', built(1:16))));
+
+    % The identity is fixed at reset: later calls keep it.
+    adcs.simulink_step(zeros(1,4), zero3, zero3, zero3, zero3, false, ...
+        0, true, identityPath, '', built);
+    writeBytes(identityPath, uint8(['{"run_id": "changed"}' 10]));
+    [~,~,~,~,~,~,~,~,~,~,identity,n] = adcs.simulink_step( ...
+        zeros(1,4), zero3, zero3, zero3, zero3, false, 0.1, false, ...
+        identityPath, '', built);
+    assert(strcmp(char(identity(1:n)), expected));
+    clear adcs.simulink_step
+
+    fprintf('PASS: twin identity output.\n');
 end
 
 function writeBytes(path, bytes)

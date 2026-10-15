@@ -1,22 +1,34 @@
-function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, omegaCmd] = ...
-    simulink_step(qMeas, omega, pos, vel, targetEci, haveTarget, t, reset, runConfigPath, targetId)
+function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, omegaCmd, ...
+    identity, identityLength] = simulink_step(qMeas, omega, pos, vel, targetEci, ...
+    haveTarget, t, reset, runConfigPath, targetId, buildFingerprint)
 %SIMULINK_STEP MATLAB-hosted adapter for Normal-mode Simulink simulation.
 % Keep dynamic profile structs and YAML/JSON loading in MATLAB; the
 % Simulink boundary exposes only fixed-size numeric outputs. Reset is
 % asserted by the block on every simulation start, preventing stale state.
+%
+% identity (uint8, 1x128, zero-padded; identityLength bytes used) is
+% "v1 <cfg> <build> <runtime>", fixed at reset: the sha256 of the run
+% config loaded ('-' for none), the code fingerprint written into the
+% model at build time (buildFingerprint, '-' if absent) and the one
+% recomputed from disk now, both cut to 16 hex digits. The model
+% publishes it on /acav/twin_identity; acav/twin_identity.py checks it.
     if nargin < 10, targetId = ''; end
+    if nargin < 11, buildFingerprint = ''; end
     targetId = char(targetId(:).');
     targetId = targetId(targetId ~= char(0));
-    persistent cfg state lastTime lastOutput
+    persistent cfg state lastTime lastOutput identityBytes identityCount
     if reset || isempty(cfg)
         cfg = adcs.config([], runConfigPath);
         state = adcs.initial_state();
         lastTime = []; lastOutput = {};
+        [identityBytes, identityCount] = identityOf(cfg, buildFingerprint);
         if strcmp(cfg.attitudeMismatchPolicy, 'e1_readback_ablation')
             warning('adcs:simulink_step:E1Ablation', ...
                 'E1 treatment: mismatch guard disabled; measured attitude drives feedback. Not a nominal run.');
         end
     end
+    identity = identityBytes;
+    identityLength = identityCount;
     % ROS subscribers initially output a zero-filled bus. Do not advance
     % dynamics or acknowledge a step until all required numerics are valid.
     ready = all(isfinite([qMeas(:); omega(:); pos(:); vel(:); t])) && ...
@@ -80,4 +92,20 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
     energy = state.wheelEnergyJ;
     lastTime = t;
     lastOutput = {torque,qCmd,mode,err,momentum,saturated,energy,omegaCmd};
+end
+
+function [bytes, count] = identityOf(cfg, buildFingerprint)
+    config = cfg.runConfigSha256;
+    if isempty(config), config = '-'; end
+    build = char(buildFingerprint);
+    if numel(build) < 16
+        build = '-';
+    else
+        build = build(1:16);
+    end
+    runtime = adcs.code_fingerprint();
+    text = uint8(sprintf('v1 %s %s %s', config, build, runtime(1:16)));
+    bytes = zeros(1, 128, 'uint8');
+    count = numel(text);
+    bytes(1:count) = text;
 end
