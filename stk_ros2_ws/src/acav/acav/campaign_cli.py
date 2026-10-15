@@ -426,6 +426,16 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
         return 1
 
     modes = graphics_modes(records)
+    labelled_modes = {mode: ids for mode, ids in modes.items()
+                      if mode in ("mixed", "unverified")}
+    if labelled_modes:
+        LOGGER.error(
+            "refusing to report: the STK graphics state of these runs is "
+            "not one condition (changed during the run, or its last sample "
+            "is missing), so their timing belongs to none: %s. Re-run them.",
+            "; ".join(f"{mode!r}: {', '.join(ids)}"
+                      for mode, ids in sorted(labelled_modes.items())))
+        return 1
     if len(modes) > 1:
         LOGGER.error(
             "refusing to report: these records were made in different STK "

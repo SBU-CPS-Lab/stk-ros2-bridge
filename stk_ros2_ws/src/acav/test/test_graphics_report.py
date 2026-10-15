@@ -64,3 +64,18 @@ def test_graphics_modes_lists_runs_per_mode(tmp_path):
         "off": ["E6-dynamics_aware-lockstep-seed0",
                 "E6-dynamics_aware-lockstep-seed2"],
         "mixed": ["E6-dynamics_aware-lockstep-seed1"]}
+
+
+def test_mixed_records_are_refused_even_alone(tmp_path, caplog):
+    """A run whose graphics state changed mid-run, or whose last sample
+    is missing, has no single condition its timing belongs to."""
+    _directory(tmp_path, "mixed", "mixed")
+    assert _report(tmp_path, 2) == 1
+    assert "mixed" in caplog.text
+    assert "E6-dynamics_aware-lockstep-seed0" in caplog.text
+
+
+def test_unverified_records_are_refused_even_alone(tmp_path, caplog):
+    _directory(tmp_path, "unverified")
+    assert _report(tmp_path, 1) == 1
+    assert "unverified" in caplog.text

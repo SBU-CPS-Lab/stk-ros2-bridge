@@ -252,8 +252,9 @@ signature. The graphics state is therefore an enforced run condition:
   mode in `summary.json` and the record's `provenance.graphics_mode`. A
   change during the run gives `mixed`, and a missing last sample gives
   `unverified`; either fails the step, keeps the record and labels it.
-- `report` never pools records with different graphics modes, and does
-  not mix them with older records that have none.
+- `report` never pools records with different graphics modes, does not
+  mix them with older records that have none, and refuses any `mixed` or
+  `unverified` record outright: re-run it.
 - Restore the windows after the session if you need them.
 
 ### Running validation sessions safely
