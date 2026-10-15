@@ -306,14 +306,16 @@ class TimeSync:
     # -- lifecycle ---------------------------------------------------------
 
     def start(self, epoch: StkTime,
-              start_offset_s: float = 0.0) -> None:
+              start_offset_s: float = 0.0, paused: bool = False) -> None:
+        """Start the clock; ``paused`` holds it at exactly start_offset_s
+        (the free-run start gate) until resume()."""
         with self._lock:
             self._epoch = epoch
             self._sim_time_s = start_offset_s
             self._sim_anchor = start_offset_s
             self._wall_anchor = time.monotonic()
             self._step_index = 0
-            self._paused = False
+            self._paused = paused
         LOGGER.info(
             "time sync started: mode=%s epoch=%.3f step=%.4fs rtf=%.3f "
             "participants=%s",
@@ -433,6 +435,14 @@ class TimeSync:
 
     def acknowledge(self, participant: str, step_index: int) -> bool:
         return self._barrier.acknowledge(participant, step_index)
+
+    def barrier_participants(self) -> List[str]:
+        return sorted(self._barrier.participants)
+
+    def missing_acks(self) -> List[str]:
+        """Participants that have not acked the current step (step 0
+        throughout free-run, where the barrier never advances)."""
+        return self._barrier.missing()
 
     def sleep_until_next(self, next_due_sim_s: Optional[float]) -> None:
         """Sleep so a free-running/paced loop wakes when work is due.

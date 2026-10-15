@@ -63,6 +63,8 @@ LOGGER = logging.getLogger(__name__)
 #: How often the initial step is republished while lockstep participants
 #: are still starting (wall seconds).
 STARTUP_REPUBLISH_S = 2.0
+#: Free-run start gate: how often to check for the participants' acks.
+FREE_RUN_GATE_POLL_S = 0.05
 #: How often the step rate and E6's phase breakdown are logged.
 TIMING_LOG_PERIOD_S = 60.0
 #: Lockstep steps between "running" sensing summary lines. The final
@@ -240,7 +242,7 @@ class StkBridgeNode:
         qos_profiles = qos_module.from_config(self.config)
         self._build_interfaces(qos_profiles)
 
-        self.time_sync.start(self.scenario.epoch)
+        self._arm_startup_gate(self.scenario.epoch)
         self.health.record_success()
 
         self._running.set()
@@ -667,7 +669,91 @@ class StkBridgeNode:
                 "twin's", path, timeout_s,
                 now + step_s - self.time_sync.epoch)
 
+    def _arm_startup_gate(self, epoch) -> None:
+        """Start the clock; in free-run, held at t = 0 behind a gate.
+
+        Free-run time follows the wall clock, so without the gate the
+        window ran on through the MATLAB handoff and the scheduler's
+        target resolution. With time.wait_for_startup_participants and
+        declared participants, a free-run clock starts paused at exactly
+        t = 0 and _free_gate_iteration opens it once all have acked.
+        Lockstep starts exactly as before (its own startup wait is in
+        _lockstep_iteration).
+        """
+        from stk_bridge.core.time_sync import ExecutionMode
+
+        wait = bool((self.config.get("time") or {}).get(
+            "wait_for_startup_participants", False))
+        participants = self.time_sync.barrier_participants()
+        gated = (self.time_sync.mode is ExecutionMode.FREE_RUN and wait
+                 and bool(participants))
+        self.time_sync.start(epoch, paused=gated)
+        if gated:
+            self._free_gate = {"started": time.monotonic(),
+                               "published": False, "last_publish": 0.0}
+            LOGGER.info("free-run start gate: clock held at t = 0 until %s "
+                        "have acked", participants)
+
+    def _free_gate_iteration(self, gate) -> None:
+        """Hold t = 0: sense once, then republish without COM work until
+        every participant has acked, then resume the clock from t = 0."""
+        now = self.time_sync.now()
+        just_published = not gate["published"]
+        if just_published:
+            self._publish_clock(now)
+            self._free_gate_capturing = True
+            try:
+                self._sense_and_publish(now)
+            finally:
+                self._free_gate_capturing = False
+            self._publish_status(now)
+            gate["published"] = True
+            gate["last_publish"] = time.monotonic()
+        missing = self.time_sync.missing_acks()
+        wall = time.monotonic()
+        if not missing:
+            waited = wall - gate["started"]
+            self.time_sync.resume()
+            self._free_gate = None
+            participants = self.time_sync.barrier_participants()
+            LOGGER.info("free-run start gate opened after %.1f s: %s acked; "
+                        "the clock runs from t = 0", waited, participants)
+            self._write_startup_gate({
+                "opened": True, "wait_s": waited,
+                "participants": participants,
+                "opened_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                            time.gmtime())})
+            return
+        if (not just_published
+                and wall - gate["last_publish"] >= STARTUP_REPUBLISH_S):
+            gate["last_publish"] = wall
+            self._publish_clock(now)
+            for path, samples in getattr(self, "_startup_samples", {}).items():
+                self.publishers[path].publish_samples(samples)
+            self._publish_status(now)
+        if wall - self._last_startup_log >= 30.0:
+            self._last_startup_log = wall
+            LOGGER.info("free-run start gate: waiting at t = 0 for %s",
+                        missing)
+        time.sleep(FREE_RUN_GATE_POLL_S)
+
+    def _write_startup_gate(self, record) -> None:
+        import json
+
+        path = str(self.config.get("startup_gate_file") or "")
+        if not path:
+            return
+        temporary = f"{path}.partial"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+            handle.write("\n")
+        os.replace(temporary, path)
+
     def _free_running_iteration(self) -> None:
+        gate = getattr(self, "_free_gate", None)
+        if gate is not None:
+            self._free_gate_iteration(gate)
+            return
         # No barrier wait outside lockstep -- see BridgeStatus.msg's own
         # field comment: step_samples tells a consumer that phase was
         # never measured this run rather than implying a suspiciously
@@ -924,7 +1010,8 @@ class StkBridgeNode:
                     now - self.time_sync.epoch, self._lockstep_hint())
                 continue
 
-            if self.time_sync.step_index == 1:
+            if (self.time_sync.step_index == 1
+                    or getattr(self, "_free_gate_capturing", False)):
                 if not hasattr(self, '_startup_samples'):
                     self._startup_samples = {}
                 self._startup_samples[path] = samples
