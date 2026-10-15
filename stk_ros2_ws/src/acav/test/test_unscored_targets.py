@@ -177,6 +177,7 @@ def _node(target_ids):
     node._results = {}
     node._finalized = set()
     node._access_requested = set()
+    node._init_access_state()
     node._spec = SimpleNamespace(
         window_duration_s=720.0,
         targets=[SimpleNamespace(id=t, t_image_s=60.0 * (k + 1))

@@ -204,6 +204,15 @@ def no_telemetry_result(entry, reason: str) -> TargetResult:
     )
 
 
+def access_unverified_result(entry, reason: str) -> TargetResult:
+    """An attempted target whose image epoch the attitude never reached."""
+    return TargetResult(
+        target_id=entry.target_id, attempted=True,
+        outcome=CaptureOutcome.ACCESS_UNVERIFIED,
+        image_time_s=entry.t_image_s, reason=reason,
+    )
+
+
 def no_access_answer_result(entry, reason: str) -> TargetResult:
     """An attempted target whose access answer never arrived."""
     return TargetResult(

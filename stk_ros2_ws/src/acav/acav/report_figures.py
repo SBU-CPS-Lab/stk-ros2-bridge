@@ -217,7 +217,7 @@ def e2_outcome_breakdown_figure(schedulers: Dict[str, Any]):
 
     order = ["captured", "not_settled", "no_access",
              "no_access_and_not_settled", "safe_mode", "no_telemetry",
-             "no_access_answer", "not_attempted"]
+             "no_access_answer", "access_unverified", "not_attempted"]
     fig, ax = _figure(width=6.4, height=4.2)
     left = [0.0] * len(names)
     for outcome in order:

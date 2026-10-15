@@ -269,15 +269,30 @@ class ServiceServers:
         return response
 
     def _compute_access(self, request, response):
-        from stk_msgs.msg import AccessInterval, AccessIntervalArray
+        from stk_bridge.core.actuation import attitude_coverage_gap
+
+        stop = conv.ros_time_to_stk(request.stop_time)
+
+        def work(backend):
+            # On the worker, so in order with the attitude writes: what
+            # is checked here is what STK holds when access is computed.
+            gap = attitude_coverage_gap(self._ctx.actuation,
+                                        request.from_object_path, stop)
+            if gap:
+                return None, gap
+            return backend.compute_access(
+                request.from_object_path, request.to_object_path,
+                conv.ros_time_to_stk(request.start_time), stop), ""
 
         try:
-            intervals = self._call(
-                lambda backend: backend.compute_access(
-                    request.from_object_path, request.to_object_path,
-                    conv.ros_time_to_stk(request.start_time),
-                    conv.ros_time_to_stk(request.stop_time)),
-                "ComputeAccess", timeout_s=300.0)
+            intervals, gap = self._call(work, "ComputeAccess",
+                                        timeout_s=300.0)
+            if gap:
+                response.success = False
+                response.message = gap
+                return response
+
+            from stk_msgs.msg import AccessInterval, AccessIntervalArray
 
             array = AccessIntervalArray()
             array.from_object_path = request.from_object_path

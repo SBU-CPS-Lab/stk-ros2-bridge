@@ -53,16 +53,17 @@ import logging
 import math
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from stk_bridge.backends.base import StkTime
 from stk_bridge.core import conversions as conv
 from stk_bridge.core import data_providers as dp
+from stk_bridge.core.actuation import ATTITUDE_NOT_COVERED
 from stk_bridge.exceptions import StkBridgeError
 
 from acav.capture_tracking import CaptureTracker, LatencyAggregate, \
-    RunAggregate, TelemetrySample, declined_result, \
-    no_access_answer_result, no_telemetry_result
+    RunAggregate, TelemetrySample, access_unverified_result, \
+    declined_result, no_access_answer_result, no_telemetry_result
 from acav.metrics import CaptureOutcome, RunResult, TargetResult
 from acav.scheduling import ScheduleEntry, SchedulePlan, plan
 from acav.spec import AcavSpec
@@ -243,6 +244,7 @@ class SchedulerNode:
         self._target_positions: Dict[str, list] = {}
         self._requested_positions: Set[str] = set()
         self._access_requested: Set[str] = set()
+        self._init_access_state()
         self._results: Dict[str, TargetResult] = {}
         self._finalized: Set[str] = set()
         self._window_elapsed_wall: Optional[float] = None
@@ -607,15 +609,37 @@ class SchedulerNode:
 
     # -- access checks ------------------------------------------------------
 
+    def _init_access_state(self) -> None:
+        """Bookkeeping for access requests the bridge defers.
+
+        The bridge answers a request whose stop time the satellite's
+        written attitude does not reach yet with ATTITUDE_NOT_COVERED
+        (stk_bridge.core.actuation.attitude_coverage_gap); such a target
+        is asked again on the next tick. (wall, scenario) seconds of each
+        target's first and latest request give its recorded wait.
+        """
+        self._access_first_request: Dict[str, Tuple[float, float]] = {}
+        self._access_last_request: Dict[str, Tuple[float, float]] = {}
+        self._access_not_covered: Dict[str, str] = {}
+
     def _check_access_due(self, sim_time_s: float) -> None:
         for entry in self._plan.attempted:
             if entry.target_id in self._access_requested:
                 continue
             due_at = entry.t_image_s + self._options.access_query_delay_s
             if sim_time_s >= due_at:
-                self._request_access(entry)
+                self._request_access(entry, sim_time_s)
 
-    def _request_access(self, entry: ScheduleEntry) -> None:
+    def _access_waits(self, target_id: str) -> Tuple[float, float]:
+        """(scenario s, wall s) from the first request to the latest."""
+        first = self._access_first_request.get(target_id)
+        last = self._access_last_request.get(target_id)
+        if first is None or last is None:
+            return float("nan"), float("nan")
+        return last[1] - first[1], last[0] - first[0]
+
+    def _request_access(self, entry: ScheduleEntry,
+                        sim_time_s: float) -> None:
         from stk_msgs.srv import ComputeAccess
 
         self._access_requested.add(entry.target_id)
@@ -632,6 +656,10 @@ class SchedulerNode:
                 "on the next tick", self._options.prefix, entry.target_id)
             self._access_requested.discard(entry.target_id)
             return
+
+        sent = (time.monotonic(), sim_time_s)
+        self._access_first_request.setdefault(entry.target_id, sent)
+        self._access_last_request[entry.target_id] = sent
 
         request = ComputeAccess.Request()
         request.from_object_path = sensor_path
@@ -653,10 +681,20 @@ class SchedulerNode:
             return
 
         if not response.success:
+            self._access_requested.discard(entry.target_id)
+            if response.message.startswith(ATTITUDE_NOT_COVERED):
+                if entry.target_id not in self._access_not_covered:
+                    LOGGER.info(
+                        "access for %s deferred until an attitude sample at "
+                        "or after t = %.3f s is written: %s", entry.target_id,
+                        entry.t_image_s, response.message)
+                self._access_not_covered[entry.target_id] = response.message
+                return
+            self._access_not_covered.pop(entry.target_id, None)
             LOGGER.error("ComputeAccess for %s reported failure: %s",
                         entry.target_id, response.message)
-            self._access_requested.discard(entry.target_id)
             return
+        self._access_not_covered.pop(entry.target_id, None)
 
         image_epoch = self._epoch + entry.t_image_s
         has_access = any(
@@ -675,9 +713,14 @@ class SchedulerNode:
                          CaptureOutcome.NO_TELEMETRY.value, exc)
             self._results[entry.target_id] = no_telemetry_result(
                 entry, str(exc))
+        result = self._results[entry.target_id]
+        result.access_wait_s, result.access_wait_wall_s = (
+            self._access_waits(entry.target_id))
         self._finalized.add(entry.target_id)
-        LOGGER.info("%s finalised: %s (access=%s)", entry.target_id,
-                   self._results[entry.target_id].outcome.value, has_access)
+        LOGGER.info("%s finalised: %s (access=%s, waited %.3f s scenario, "
+                    "%.3f s wall)", entry.target_id, result.outcome.value,
+                    has_access, result.access_wait_s,
+                    result.access_wait_wall_s)
 
     # -- run completion -------------------------------------------------
 
@@ -716,13 +759,23 @@ class SchedulerNode:
             missing = [entry for entry in self._plan.attempted
                        if entry.target_id not in self._finalized]
             LOGGER.error(
-                "finalising the run with %d target(s) recorded as %s (%s): "
-                "%s. The record is not reportable.", len(missing),
-                CaptureOutcome.NO_ACCESS_ANSWER.value, reason,
+                "finalising the run with %d target(s) never scored, "
+                "recorded as %s or %s: %s. The record is not reportable.",
+                len(missing), CaptureOutcome.ACCESS_UNVERIFIED.value,
+                CaptureOutcome.NO_ACCESS_ANSWER.value,
                 ", ".join(entry.target_id for entry in missing))
             for entry in missing:
-                self._results[entry.target_id] = no_access_answer_result(
-                    entry, reason)
+                deferred = self._access_not_covered.get(entry.target_id)
+                if deferred is not None:
+                    result = access_unverified_result(
+                        entry, f"no attitude sample at or after the image "
+                               f"epoch was written by the end of the run "
+                               f"({deferred})")
+                else:
+                    result = no_access_answer_result(entry, reason)
+                result.access_wait_s, result.access_wait_wall_s = (
+                    self._access_waits(entry.target_id))
+                self._results[entry.target_id] = result
                 self._finalized.add(entry.target_id)
 
         result = self._build_run_result()

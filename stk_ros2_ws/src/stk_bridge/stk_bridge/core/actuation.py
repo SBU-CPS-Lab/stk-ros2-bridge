@@ -58,6 +58,41 @@ from stk_bridge.exceptions import (
 
 LOGGER = logging.getLogger(__name__)
 
+#: Start of the ComputeAccess failure message meaning "the satellite's
+#: written attitude does not reach the requested stop time yet; ask
+#: again". The scheduler matches on it (acav/scheduler_node.py).
+ATTITUDE_NOT_COVERED = "attitude not yet written through the stop time"
+
+#: Same tolerance as the bridge's other written-sample matches: epoch
+#: seconds near 1.7e9 carry about 2.4e-7 s of rounding.
+COVERAGE_TOLERANCE_S = 1e-6
+
+
+def attitude_coverage_gap(actuation, object_path: str,
+                          stop: StkTime) -> str:
+    """Why access over ``[.., stop]`` must wait; empty when it need not.
+
+    STK reports a satellite's attitude beyond its newest real-time
+    sample as something other than the twin's (near nadir in this
+    study), so access computed over an epoch the written attitude does
+    not reach yet is computed against an attitude the twin never had.
+    ``object_path`` may be a sensor; its satellite's attitude is the one
+    checked. An object this bridge has never written attitude for is not
+    checked: nothing it could wait for is coming.
+    """
+    path = conv.canonical_object_path(object_path)
+    if "/Sensor/" in path:
+        path = path.split("/Sensor/")[0]
+    written = actuation.last_attitude(path)
+    if written is None:
+        return ""
+    newest = written[0]
+    if newest >= stop.epoch_seconds - COVERAGE_TOLERANCE_S:
+        return ""
+    return (f"{ATTITUDE_NOT_COVERED}: the newest attitude written for "
+            f"{path} is {stop.epoch_seconds - newest:.3f} s short of it "
+            f"({newest:.3f} < {stop.epoch_seconds:.3f} epoch seconds)")
+
 
 @dataclass
 class ChannelState:

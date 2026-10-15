@@ -84,6 +84,8 @@ STATUS_COLOR: Dict[str, str] = {
     "no_telemetry": "#7d7b70",       # unscored -- the twin was silent
                                       # through the hold window
     "no_access_answer": "#4f4e46",   # unscored -- STK never answered
+    "access_unverified": "#a3a196",  # unscored -- the attitude never
+                                      # reached the image epoch
 }
 
 #: Diverging pair, for a signed quantity (unused by the current figures
@@ -160,6 +162,7 @@ def status_label(outcome: str) -> str:
         "not_attempted": "Not attempted",
         "no_telemetry": "No telemetry",
         "no_access_answer": "No access answer",
+        "access_unverified": "Access unverified",
     }.get(outcome, outcome.replace("_", " ").title())
 
 

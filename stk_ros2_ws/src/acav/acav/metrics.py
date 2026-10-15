@@ -81,6 +81,11 @@ class CaptureOutcome(str, Enum):
     #: Attempted, but STK's access answer never arrived, so the geometry
     #: half is unknown. A harness failure in any mode: not reportable.
     NO_ACCESS_ANSWER = "no_access_answer"
+    #: Attempted, but no attitude sample at or after the image epoch was
+    #: written to STK by the end of the run, so access was never computed
+    #: over an attitude the twin had (see scheduler_node's access
+    #: deferral). A harness failure in any mode: not reportable.
+    ACCESS_UNVERIFIED = "access_unverified"
 
 
 @dataclass
@@ -115,6 +120,12 @@ class TargetResult:
     #: NO_ACCESS_ANSWER); empty otherwise. Not in the determinism
     #: signature: the outcome already is.
     reason: str = ""
+    #: How long the access query waited for the written attitude to reach
+    #: the image epoch, scenario and wall seconds, from the first request
+    #: to the one answered (or to the last, for ACCESS_UNVERIFIED). Zero
+    #: in lockstep; NaN when not measured. Not in the signature.
+    access_wait_s: float = float("nan")
+    access_wait_wall_s: float = float("nan")
 
     @property
     def captured(self) -> bool:

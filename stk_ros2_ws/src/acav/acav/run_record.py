@@ -212,7 +212,8 @@ class RunRecord:
         - A lockstep run has a target with no twin telemetry in its hold
           window: the barrier makes the twin report every step, so the
           harness failed. (In free-run that is a coupling outcome.)
-        - A target's access answer never arrived, in any mode.
+        - A target's access answer never arrived, or the written attitude
+          never reached its image epoch, in any mode.
         """
         reasons: List[str] = []
         backend = self.provenance.backend_type
@@ -230,6 +231,12 @@ class RunRecord:
         if unanswered:
             reasons.append(
                 f"no access answer for {', '.join(unanswered)}")
+        unverified = [t.target_id for t in self.result.targets
+                      if t.outcome is CaptureOutcome.ACCESS_UNVERIFIED]
+        if unverified:
+            reasons.append(
+                f"access never computed over a written attitude for "
+                f"{', '.join(unverified)}")
         return reasons
 
     def to_dict(self) -> Dict[str, Any]:
@@ -318,6 +325,9 @@ def _target_to_dict(t: TargetResult) -> Dict[str, Any]:
     # before the field existed.
     if t.reason:
         entry["reason"] = t.reason
+    for key in ("access_wait_s", "access_wait_wall_s"):
+        if not math.isnan(getattr(t, key)):
+            entry[key] = getattr(t, key)
     return entry
 
 
@@ -341,6 +351,8 @@ def _result_from_dict(raw: Dict[str, Any]) -> RunResult:
             slew_magnitude_deg=_from_num(entry.get("slew_magnitude_deg")),
             slew_duration_s=_from_num(entry.get("slew_duration_s")),
             reason=str(entry.get("reason", "") or ""),
+            access_wait_s=_from_num(entry.get("access_wait_s")),
+            access_wait_wall_s=_from_num(entry.get("access_wait_wall_s")),
         ))
 
     seed = raw.get("seed")
