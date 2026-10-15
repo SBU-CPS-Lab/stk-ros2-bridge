@@ -156,6 +156,15 @@ def labelled_runs(output_dir: str) -> List[tuple]:
     return found
 
 
+def graphics_modes(records: List[RunRecord]) -> dict:
+    """provenance.graphics_mode -> run ids ("" for records without one)."""
+    modes: dict = {}
+    for record in records:
+        modes.setdefault(record.provenance.graphics_mode, []).append(
+            record.result.run_id)
+    return {mode: sorted(ids) for mode, ids in modes.items()}
+
+
 def code_version_summary(records: List[RunRecord]) -> dict:
     """Which code produced these records, and whether that is one commit.
 
@@ -414,6 +423,16 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             "refusing to report: diagnostic run(s) %s must not be pooled "
             "with ordinary runs. Move them to their own directory.",
             labelled)
+        return 1
+
+    modes = graphics_modes(records)
+    if len(modes) > 1:
+        LOGGER.error(
+            "refusing to report: these records were made in different STK "
+            "graphics modes, which change the step time and must not be "
+            "pooled: %s. Move each mode to its own directory.",
+            "; ".join(f"{mode or 'not recorded'!r}: {', '.join(ids)}"
+                      for mode, ids in sorted(modes.items())))
         return 1
 
     report = analyse(args.experiment, records, total_targets)
