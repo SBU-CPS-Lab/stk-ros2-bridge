@@ -304,6 +304,8 @@ def write_run_config(run: RunSpec, output_path: str) -> str:
         "experiment": run.experiment,
         "attitude_provider": run.attitude_provider,
         "code_version": _code_version(),
+        # Selects the twin's integration (+adcs/config.m).
+        "execution_mode": run.execution_mode,
         # Explicit guard ablation, never enabled by an ordinary run.
         "attitude_mismatch_policy": (
             "e1_readback_ablation" if run.experiment == "E1" and

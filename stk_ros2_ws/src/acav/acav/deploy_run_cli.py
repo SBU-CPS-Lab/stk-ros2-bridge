@@ -183,6 +183,8 @@ def bridge_launch_argv(config: RunConfig,
 
 #: The per-run bridge configuration, written beside the run's logs.
 RUN_BRIDGE_CONFIG = "bridge_params.yaml"
+#: The execution modes a run may request: E3 compares exactly these two.
+EXECUTION_MODES = ("lockstep", "free_run")
 #: The bridge's STK graphics samples for the run, beside the run's logs.
 GRAPHICS_STATE_FILE = "stk_graphics.json"
 #: The startup sample is written before the bridge reports CONNECTED;
@@ -205,10 +207,18 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
     """
     import yaml
 
+    if config.execution_mode not in EXECUTION_MODES:
+        raise ValueError(f"unknown execution mode {config.execution_mode!r}; "
+                         f"expected one of {list(EXECUTION_MODES)}")
     with open(config.bridge_config, encoding="utf-8-sig") as handle:
         settings = yaml.safe_load(handle) or {}
     if not isinstance(settings, dict):
         raise ValueError(f"{config.bridge_config} is not a YAML mapping")
+    # The run's execution mode, always: before this the base file's mode
+    # (lockstep) was used whatever the run asked for, so an E3 free-run
+    # run silently ran in lockstep.
+    settings.setdefault("time", {})
+    settings["time"]["mode"] = config.execution_mode
     sensing = settings.get("sensing") or {}
     previous = str(sensing.get("force_attitude_provider") or "")
     if previous != config.attitude_provider:
@@ -320,6 +330,9 @@ def standalone_run_config(config: RunConfig, version: str) -> dict:
         "experiment": config.experiment,
         "attitude_provider": config.attitude_provider,
         "code_version": version,
+        # Selects the twin's integration (+adcs/config.m): fixed lockstep
+        # steps, or free-run sub-stepping.
+        "execution_mode": config.execution_mode,
         # The campaign writer's rule, which +adcs/config.m enforces:
         # the ablation only for an E1 run with a forced provider.
         "attitude_mismatch_policy": (
@@ -368,6 +381,14 @@ def prepare_run_config(config: RunConfig, version: str):
             raise RunConfigError(
                 f"{path} is for run {payload['run_id']!r}, not "
                 f"{config.run_id!r}")
+        # Without the key the twin integrates as in lockstep, which is
+        # only right for a lockstep run.
+        recorded_mode = payload.get("execution_mode", "lockstep")
+        if recorded_mode != config.execution_mode:
+            raise RunConfigError(
+                f"{path} has execution_mode {recorded_mode!r} but this run "
+                f"is {config.execution_mode!r}; the twin would integrate "
+                f"for the wrong mode")
         return path, False, "run_id" in payload
 
     payload = standalone_run_config(config, version)
@@ -857,7 +878,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--experiment", default="")
     parser.add_argument("--scheduler", default="dynamics_aware")
-    parser.add_argument("--execution-mode", default="lockstep")
+    parser.add_argument("--execution-mode", default="lockstep",
+                        choices=EXECUTION_MODES)
     parser.add_argument("--seed", default="")
     parser.add_argument("--output", required=True)
     parser.add_argument("--scenario", default="")
