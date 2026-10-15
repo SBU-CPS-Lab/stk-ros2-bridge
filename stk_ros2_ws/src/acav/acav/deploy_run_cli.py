@@ -633,7 +633,14 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             run_log.warning("sensing equivalence diagnostic ON: this run's "
                             "timings are inflated and it is not an E6 "
                             "measurement")
-        deps.check_idle(config.prefix)
+        # A refusal here (another run still publishing) or a failure of
+        # the check itself is a recorded step, not only a console traceback.
+        try:
+            deps.check_idle(config.prefix)
+        except Exception as error:      # noqa: BLE001 - recorded, then fail
+            record("idle_check", False, str(error))
+            return EXIT_STEP_FAILED
+        record("idle_check", True)
         recorder = deps.start_recorder(config, log_dir)
         run_log.info("topic capture started: %s", log_dir)
         with _open_log(log_dir, "bridge.log") as bridge_log:

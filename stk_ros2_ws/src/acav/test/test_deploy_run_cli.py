@@ -210,7 +210,8 @@ class TestExecuteRunHappyPath:
         with open(summary_path) as handle:
             summary = json.load(handle)
         steps = {s["step"]: s["ok"] for s in summary["steps"]}
-        assert steps == {"bridge_connected": True, "twin_acking": True,
+        assert steps == {"idle_check": True,
+                         "bridge_connected": True, "twin_acking": True,
                          "twin_identity": True,
                          "scheduler_exit": True, "topic_capture": True}
         assert bridge_proc.terminated
@@ -373,8 +374,8 @@ def test_busy_graph_prevents_launch(tmp_path):
         raise RuntimeError('Another run is active')
     from unittest.mock import Mock
     popen = Mock()
-    with pytest.raises(RuntimeError, match='Another run'):
-        execute_run(_config(tmp_path), Deps(check_idle=busy, popen=popen))
+    assert execute_run(_config(tmp_path),
+                       Deps(check_idle=busy, popen=popen)) == 1
     popen.assert_not_called()
 
 
