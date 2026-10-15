@@ -244,6 +244,11 @@ leaving the tree half on one commit and half on the other (recorded in
   alive.
 - After every switch, run `git status --porcelain`. It must print
   nothing. If it prints anything, stop and do not start a run.
+- Never run Codex or any other agent or editor with write access on this
+  working tree while another agent is working in it or a run is active. On
+  2026-10-15 at 09:12, two files were reverted to an older content
+  shortly after VS Code and Codex had opened this folder. Give other
+  agents their own `git worktree`.
 
 ## 5A. E1 — two runs to test attitude-frame consistency
 
