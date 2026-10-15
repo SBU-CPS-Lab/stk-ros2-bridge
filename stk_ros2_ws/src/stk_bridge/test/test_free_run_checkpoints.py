@@ -27,7 +27,9 @@ def _free_node(tmp_path, times):
     node.time_sync = SimpleNamespace(
         step_index=0, now=lambda: StkTime(next(clock)),
         sim_seconds=lambda: 0.0, sleep_until_next=lambda due: None)
-    node.scheduler = SimpleNamespace(next_due_time=lambda now: 0.0)
+    node.scheduler = SimpleNamespace(next_due_time=lambda now: 0.0,
+                                     fastest_period_s=lambda: 0.1,
+                                     run_due=lambda *a, **k: 0)
     node._timings = SimpleNamespace(timed=lambda name: _Null())
     for name in ("_apply_commands", "_publish_clock", "_sense_and_publish",
                  "_run_rate_groups", "_publish_status"):

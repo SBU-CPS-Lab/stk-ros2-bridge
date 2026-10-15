@@ -279,6 +279,9 @@ class StkBridgeNode:
         timing = getattr(self, "_clock_timing", None)
         if timing is not None:
             LOGGER.info("%s%s", prefix, timing.summary_line())
+        pacer = getattr(self, "_free_pacer", None)
+        if pacer is not None:
+            LOGGER.info("%s%s", prefix, pacer.summary_line())
         if final:
             self._final_summary_logged = True
 
@@ -758,20 +761,44 @@ class StkBridgeNode:
         # field comment: step_samples tells a consumer that phase was
         # never measured this run rather than implying a suspiciously
         # fast zero.
+        pacer = self._free_run_pacer()
+        scheduled = (pacer.begin(self.time_sync.sim_seconds())
+                     if pacer is not None else None)
         now = self.time_sync.now()
         with self._timings.timed("actuate"):
             self._apply_commands()
         self._publish_clock(now)
         with self._timings.timed("sense"):
             self._sense_and_publish(now)
-        self._run_rate_groups()
+        # Marked at the cycle's scheduled start, so the slower groups keep
+        # their configured rates.
+        self._run_rate_groups(scheduled)
         self._publish_status(now)
         # Summaries and graphics samples, as in lockstep; counted by
         # iteration because free-run time comes from the wall clock.
         self._free_iterations = getattr(self, "_free_iterations", 0) + 1
         self._sensing_summary_checkpoint(now, index=self._free_iterations)
-        self.time_sync.sleep_until_next(
-            self.scheduler.next_due_time(self.time_sync.sim_seconds()))
+        if pacer is None:
+            self.time_sync.sleep_until_next(
+                self.scheduler.next_due_time(self.time_sync.sim_seconds()))
+        else:
+            # Fixed-rate schedule from the cycle start: period =
+            # max(work, period); an overrun starts the next cycle at once.
+            self.time_sync.sleep_until_next(
+                pacer.end(self.time_sync.sim_seconds()))
+
+    def _free_run_pacer(self):
+        """The free-run pacer at the fastest rate group's period, or None
+        when no group is enabled (then the old next-due sleep applies)."""
+        pacer = getattr(self, "_free_pacer", None)
+        if pacer is None:
+            from stk_bridge.core.free_run_pacer import FreeRunPacer
+
+            period = self.scheduler.fastest_period_s()
+            if period is None:
+                return None
+            pacer = self._free_pacer = FreeRunPacer(period)
+        return pacer
 
     # -- loop stages -------------------------------------------------------
 
@@ -1022,9 +1049,12 @@ class StkBridgeNode:
 
         self.health.update_from_sensing(self.sensing.statistics())
 
-    def _run_rate_groups(self) -> None:
+    def _run_rate_groups(self, sim_time_s=None) -> None:
+        # Lockstep passes nothing: the step's own simulation time, as
+        # before. Free-run passes its cycle's scheduled start.
         self.scheduler.run_due(
-            self.time_sync.sim_seconds(),
+            self.time_sync.sim_seconds() if sim_time_s is None
+            else sim_time_s,
             on_error=lambda group, exc: self.health.record_error(
                 f"rate group {group}: {exc}"),
         )

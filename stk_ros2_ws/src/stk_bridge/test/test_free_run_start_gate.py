@@ -38,7 +38,9 @@ def _node(tmp_path, mode="free_run", wait=True):
     node.config = {"time": {"wait_for_startup_participants": wait},
                    "startup_gate_file": str(tmp_path / "gate.json")}
     node.time_sync = _time_sync(mode, wait)
-    node.scheduler = SimpleNamespace(next_due_time=lambda now: 0.0)
+    node.scheduler = SimpleNamespace(next_due_time=lambda now: 0.0,
+                                     fastest_period_s=lambda: 0.1,
+                                     run_due=lambda *a, **k: 0)
     node._timings = SimpleNamespace(timed=lambda name: _Null())
     node._last_startup_log = 0.0
     node.calls = []

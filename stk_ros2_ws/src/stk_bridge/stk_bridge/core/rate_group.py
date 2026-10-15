@@ -192,6 +192,11 @@ class RateGroupScheduler:
             count += 1
         return count
 
+    def fastest_period_s(self) -> Optional[float]:
+        """The shortest period among enabled groups, or None."""
+        periods = [g.period_s for g in self._groups.values() if g.enabled]
+        return min(periods) if periods else None
+
     def next_due_time(self, sim_time_s: float) -> Optional[float]:
         """Earliest simulation time at which any group next runs.
 
