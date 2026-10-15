@@ -127,6 +127,10 @@ class Provenance:
     #: step time, so timing is never pooled across values; empty in
     #: records written before it was recorded. No RECORD_VERSION bump.
     graphics_mode: str = ""
+    #: The bridge's time.real_time_factor for this run, written by the
+    #: run orchestrator; None in records written before it was recorded
+    #: (campaign_cli.effective_real_time_factors says how those count).
+    real_time_factor: Optional[float] = None
     started_utc: str = ""
     finished_utc: str = ""
     #: Free-text, e.g. which machine, which STK licence features.
@@ -145,6 +149,7 @@ class Provenance:
             "code_version": self.code_version,
             "twin_identity": self.twin_identity,
             "graphics_mode": self.graphics_mode,
+            "real_time_factor": self.real_time_factor,
             "started_utc": self.started_utc,
             "finished_utc": self.finished_utc,
             "notes": self.notes,
@@ -166,6 +171,8 @@ class Provenance:
             code_version=str(raw.get("code_version", "") or ""),
             twin_identity=str(raw.get("twin_identity", "") or ""),
             graphics_mode=str(raw.get("graphics_mode", "") or ""),
+            real_time_factor=(None if raw.get("real_time_factor") is None
+                              else float(raw["real_time_factor"])),
             started_utc=str(raw.get("started_utc", "")),
             finished_utc=str(raw.get("finished_utc", "")),
             notes=str(raw.get("notes", "")),

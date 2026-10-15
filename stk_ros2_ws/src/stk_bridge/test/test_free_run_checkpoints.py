@@ -23,6 +23,7 @@ OFF = {"windows_2d": 0, "windows_3d": 0, "main_window": "minimized",
 
 def _free_node(tmp_path, times):
     node = StkBridgeNode.__new__(StkBridgeNode)
+    node.config = {}
     clock = iter(times)
     node.time_sync = SimpleNamespace(
         step_index=0, now=lambda: StkTime(next(clock)),

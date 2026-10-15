@@ -490,6 +490,15 @@ class SensingPipeline:
         stats["segment_no_data_fallbacks"] = self._combined_fallbacks
         return stats
 
+    @property
+    def combine_state(self) -> str:
+        return self._combine_state
+
+    def disable_combine(self, reason: str) -> None:
+        """Turn (B) off for this session (the caller logs ``reason``),
+        e.g. in free-run, where no sense epoch is ever a written sample."""
+        self._combine_state = "off"
+
     def combine_summary_line(self) -> str:
         """One line for bridge.log at bridge stop (verifies (B) live)."""
         c = self.combine_statistics()

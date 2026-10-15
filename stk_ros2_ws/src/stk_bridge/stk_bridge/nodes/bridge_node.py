@@ -228,6 +228,7 @@ class StkBridgeNode:
         self.sensing = SensingPipeline(
             self.worker.backend, self.frames, self.sensing_config, report)
         self.sensing.set_attitude_write_probe(self._inertial_sample_written)
+        self._apply_free_run_sensing_policy()
         self._scenario_stop = self._read_scenario_stop()
         # Before the interfaces exist, so before CONNECTED is published:
         # the runner checks this sample right after bridge_connected.
@@ -282,6 +283,9 @@ class StkBridgeNode:
         pacer = getattr(self, "_free_pacer", None)
         if pacer is not None:
             LOGGER.info("%s%s", prefix, pacer.summary_line())
+            self._write_json_file("free_run_pacing_file", {
+                "cycles": pacer.cycles, "overruns": pacer.overruns,
+                "period_s": pacer.period_s})
         if final:
             self._final_summary_logged = True
 
@@ -740,10 +744,30 @@ class StkBridgeNode:
                         missing)
         time.sleep(FREE_RUN_GATE_POLL_S)
 
+    def _apply_free_run_sensing_policy(self) -> None:
+        """Free-run: (B) explicitly off, whatever the config says.
+
+        (B) verifies only at an epoch where this bridge wrote an inertial
+        sample, which a free-run sense epoch never is, so it would stay
+        "pending" all run. Lockstep is untouched.
+        """
+        from stk_bridge.core.time_sync import ExecutionMode
+
+        if (self.time_sync.mode is ExecutionMode.FREE_RUN
+                and self.sensing.combine_state != "off"):
+            reason = ("in free-run: it verifies only at an epoch where an "
+                      "inertial sample was written, which a free-run sense "
+                      "epoch never is; attitude and rate are read separately")
+            self.sensing.disable_combine(reason)
+            LOGGER.info("combined attitude/rate (B) is off %s", reason)
+
     def _write_startup_gate(self, record) -> None:
+        self._write_json_file("startup_gate_file", record)
+
+    def _write_json_file(self, config_key, record) -> None:
         import json
 
-        path = str(self.config.get("startup_gate_file") or "")
+        path = str(self.config.get(config_key) or "")
         if not path:
             return
         temporary = f"{path}.partial"

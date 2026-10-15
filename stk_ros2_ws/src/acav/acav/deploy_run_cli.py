@@ -92,6 +92,8 @@ class RunConfig:
     #: STK graphics state the run requires: "off" (no 2D/3D Graphics
     #: window, STK minimised) unless "on" is asked for explicitly.
     graphics_mode: str = "off"
+    #: time.real_time_factor for the bridge; None keeps the base config's.
+    real_time_factor: Optional[float] = None
     #: A one-off measurement that report must never pool (summary.json).
     diagnostic_label: str = ""
 
@@ -189,6 +191,8 @@ EXECUTION_MODES = ("lockstep", "free_run")
 GRAPHICS_STATE_FILE = "stk_graphics.json"
 #: A free-run twin's sub-step statistics, written by adcs.simulink_step.
 TWIN_SUBSTEPS_FILE = "twin_substeps.json"
+#: A free-run bridge's pacing summary (cycles, overruns, period_s).
+FREE_RUN_PACING_FILE = "free_run_pacing.json"
 #: When a free-run bridge's start gate opened, and the wall time it held.
 STARTUP_GATE_FILE = "startup_gate.json"
 #: The startup sample is written before the bridge reports CONNECTED;
@@ -223,6 +227,8 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
     # run silently ran in lockstep.
     settings.setdefault("time", {})
     settings["time"]["mode"] = config.execution_mode
+    if config.real_time_factor is not None:
+        settings["time"]["real_time_factor"] = config.real_time_factor
     sensing = settings.get("sensing") or {}
     previous = str(sensing.get("force_attitude_provider") or "")
     if previous != config.attitude_provider:
@@ -245,6 +251,12 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
         combine = False
     if config.experiment == "E1":
         batch = 1
+    # Free-run: (B) can never verify (no sense epoch is a written sample)
+    # and (C) reads epochs ahead of the wall clock, which an asynchronous
+    # loop must not do; written off so the record says what ran.
+    if config.execution_mode == "free_run":
+        combine = False
+        batch = 1
     sensing["combine_attitude_rate"] = combine
     sensing["orbit_batch_samples"] = batch
     sensing["sensing_mode"] = sensing_mode_label(combine)
@@ -257,10 +269,13 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
     # Where the bridge records STK's graphics state for this run.
     settings["graphics_state_file"] = os.path.join(
         os.path.abspath(log_dir), GRAPHICS_STATE_FILE)
-    # Free-run only: where the bridge records when its start gate opened.
+    # Free-run only: where the bridge records when its start gate opened
+    # and its pacing summary.
     if config.execution_mode == "free_run":
         settings["startup_gate_file"] = os.path.join(
             os.path.abspath(log_dir), STARTUP_GATE_FILE)
+        settings["free_run_pacing_file"] = os.path.join(
+            os.path.abspath(log_dir), FREE_RUN_PACING_FILE)
     path = os.path.join(log_dir, RUN_BRIDGE_CONFIG)
     with open(path, "w", encoding="utf-8") as handle:
         yaml.safe_dump(settings, handle, sort_keys=False)
@@ -293,8 +308,11 @@ def _sensing_labels(bridge_config: str) -> dict:
     import yaml
 
     with open(bridge_config, encoding="utf-8") as handle:
-        sensing = (yaml.safe_load(handle) or {}).get("sensing") or {}
+        settings = yaml.safe_load(handle) or {}
+    sensing = settings.get("sensing") or {}
+    settings_time = settings.get("time") or {}
     return {
+        "real_time_factor": float(settings_time.get("real_time_factor", 1.0)),
         "equivalence_diagnostic": bool(sensing.get("equivalence_diagnostic")),
         "sensing_mode": sensing_mode_label(
             bool(sensing.get("combine_attitude_rate", False))),
@@ -593,12 +611,12 @@ def _check_graphics_end(config: RunConfig, data: Optional[dict],
     record("stk_graphics_end", ok,
            mode if ok else f"{mode}; this run required "
                            f"'{config.graphics_mode}' throughout")
-    _label_graphics_mode(config.output, mode)
+    _label_record(config.output, graphics_mode=mode)
     return ok
 
 
-def _label_graphics_mode(output: str, mode: str) -> None:
-    """Write the run's graphics mode into its record, if there is one.
+def _label_record(output: str, **provenance) -> None:
+    """Write run conditions into the run's record, if there is one.
 
     Provenance only: the determinism signature is computed from the
     result, so it is unchanged.
@@ -612,7 +630,7 @@ def _label_graphics_mode(output: str, mode: str) -> None:
     record = read_record(output)
     write_record(output, dataclasses.replace(
         record, provenance=dataclasses.replace(record.provenance,
-                                               graphics_mode=mode)))
+                                               **provenance)))
 
 
 #: The twin republishes its identity every step while ready, so a few
@@ -861,6 +879,8 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 config, deps.read_graphics_state(
                     graphics_file, "end", GRAPHICS_END_TIMEOUT_S),
                 summary, record)
+            _label_record(config.output,
+                          real_time_factor=summary["real_time_factor"])
             gate_ok = True
             if config.execution_mode == "free_run":
                 # The twin's ZOH sub-step statistics (adcs.simulink_step);
@@ -873,6 +893,8 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                     os.path.join(log_dir, STARTUP_GATE_FILE))
                 summary["free_run_start_gate"] = gate
                 gate_ok = bool(gate and gate.get("opened"))
+                summary["free_run_pacing"] = _read_json_or_none(
+                    os.path.join(log_dir, FREE_RUN_PACING_FILE))
                 record("free_run_start_gate", gate_ok,
                        f"opened after {gate['wait_s']:.1f} s" if gate_ok
                        else "the bridge never reported its start gate "
@@ -931,6 +953,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--bridge-connect-timeout-s", type=float,
                         default=90.0)
     parser.add_argument("--twin-ack-timeout-s", type=float, default=60.0)
+    parser.add_argument("--real-time-factor", type=_positive_finite,
+                        default=None, metavar="RTF",
+                        help="time.real_time_factor for this run's bridge "
+                             "(free-run speed); default: the bridge "
+                             "config's value")
     parser.add_argument("--graphics-mode", choices=("off", "on"),
                         default="off",
                         help="STK graphics state this run requires: off (no "
@@ -941,6 +968,17 @@ def _parser() -> argparse.ArgumentParser:
                         help="mark this run as a one-off diagnostic; "
                              "run_acav_campaign report refuses to pool it")
     return parser
+
+
+def _positive_finite(text: str) -> float:
+    import math
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}")
+    if not math.isfinite(value) or value <= 0.0:
+        raise argparse.ArgumentTypeError("must be a finite number > 0")
+    return value
 
 
 def _label(text: str) -> str:
@@ -966,6 +1004,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         bridge_connect_timeout_s=args.bridge_connect_timeout_s,
         twin_ack_timeout_s=args.twin_ack_timeout_s,
         graphics_mode=args.graphics_mode,
+        real_time_factor=args.real_time_factor,
         diagnostic_label=args.diagnostic_label,
     )
     return execute_run(config)

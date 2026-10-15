@@ -156,6 +156,44 @@ def labelled_runs(output_dir: str) -> List[tuple]:
     return found
 
 
+def effective_real_time_factors(output_dir: str) -> dict:
+    """Effective real-time factor -> run ids, for the records in a folder.
+
+    The recorded provenance.real_time_factor when present. A record
+    without it (written before it was recorded) counts as 1.0 only if it
+    is lockstep -- lockstep time advances by steps, never by the wall
+    clock, so the factor cannot have shaped it -- or if its bridge.log
+    shows "rtf=1.000"; otherwise it is "unknown", which report refuses.
+    """
+    import re
+
+    found: dict = {}
+    for path in sorted(glob.glob(os.path.join(output_dir, "*.json"))):
+        name = os.path.basename(path)
+        if name == "campaign.json" or name.endswith(".runconfig.json"):
+            continue
+        try:
+            record = read_record(path)
+        except Exception:                       # noqa: BLE001 - load_results
+            continue
+        value = record.provenance.real_time_factor
+        if value is None:
+            if record.provenance.execution_mode == "lockstep":
+                value = 1.0
+            else:
+                log = os.path.join(path[:-len(".json")] + ".logs",
+                                   "bridge.log")
+                try:
+                    with open(log, encoding="utf-8", errors="replace") as f:
+                        match = re.search(r"time sync started: .*?rtf=([0-9.]+)",
+                                          f.read())
+                except OSError:
+                    match = None
+                value = float(match.group(1)) if match else "unknown"
+        found.setdefault(value, []).append(record.result.run_id)
+    return {value: sorted(ids) for value, ids in found.items()}
+
+
 def graphics_modes(records: List[RunRecord]) -> dict:
     """provenance.graphics_mode -> run ids ("" for records without one)."""
     modes: dict = {}
@@ -423,6 +461,16 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             "refusing to report: diagnostic run(s) %s must not be pooled "
             "with ordinary runs. Move them to their own directory.",
             labelled)
+        return 1
+
+    factors = effective_real_time_factors(args.output_dir)
+    if len(factors) > 1 or "unknown" in factors:
+        LOGGER.error(
+            "refusing to report: these records do not share one real-time "
+            "factor, which sets how fast free-run time follows the wall "
+            "clock: %s. Move each value to its own directory.",
+            "; ".join(f"{value!r}: {', '.join(ids)}"
+                      for value, ids in factors.items()))
         return 1
 
     modes = graphics_modes(records)
