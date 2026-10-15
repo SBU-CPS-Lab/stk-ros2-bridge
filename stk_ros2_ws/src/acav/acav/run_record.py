@@ -121,6 +121,12 @@ class Provenance:
     #: acav.twin_identity); empty when not checked -- every record written
     #: before the check existed. No RECORD_VERSION bump, as above.
     twin_identity: str = ""
+    #: STK's graphics state for the whole run, written by the run
+    #: orchestrator from the bridge's samples: "off", "on", "mixed" or
+    #: "unverified" (stk_bridge/core/graphics_state.py). It changes the
+    #: step time, so timing is never pooled across values; empty in
+    #: records written before it was recorded. No RECORD_VERSION bump.
+    graphics_mode: str = ""
     started_utc: str = ""
     finished_utc: str = ""
     #: Free-text, e.g. which machine, which STK licence features.
@@ -138,6 +144,7 @@ class Provenance:
             "attitude_readback_provider": self.attitude_readback_provider,
             "code_version": self.code_version,
             "twin_identity": self.twin_identity,
+            "graphics_mode": self.graphics_mode,
             "started_utc": self.started_utc,
             "finished_utc": self.finished_utc,
             "notes": self.notes,
@@ -158,6 +165,7 @@ class Provenance:
                 raw.get("attitude_readback_provider", "") or ""),
             code_version=str(raw.get("code_version", "") or ""),
             twin_identity=str(raw.get("twin_identity", "") or ""),
+            graphics_mode=str(raw.get("graphics_mode", "") or ""),
             started_utc=str(raw.get("started_utc", "")),
             finished_utc=str(raw.get("finished_utc", "")),
             notes=str(raw.get("notes", "")),

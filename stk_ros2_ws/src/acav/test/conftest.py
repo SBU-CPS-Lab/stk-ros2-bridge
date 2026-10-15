@@ -40,3 +40,16 @@ def _accept_twin_identity(monkeypatch):
     import acav.deploy_run_cli as deploy_run_cli
     monkeypatch.setattr(deploy_run_cli, "_confirm_twin_identity_ros",
                         lambda run_config, timeout_s: ("v1 test", []))
+
+
+@pytest.fixture(autouse=True)
+def _graphics_off(monkeypatch):
+    """Offline tests have no bridge to sample STK: report "off" (the
+    default every run requires). test_graphics_mode_runner.py injects
+    its own samples."""
+    import acav.deploy_run_cli as deploy_run_cli
+    entry = {"windows_2d": 0, "windows_3d": 0, "main_window": "minimized",
+             "visible": True, "mode": "off", "step": 0}
+    data = {"startup": entry, "samples": [], "end": entry}
+    monkeypatch.setattr(deploy_run_cli, "_read_graphics_state_file",
+                        lambda path, phase, timeout_s: data)

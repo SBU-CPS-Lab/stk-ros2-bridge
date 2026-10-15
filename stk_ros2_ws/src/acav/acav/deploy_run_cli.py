@@ -89,6 +89,9 @@ class RunConfig:
     bridge_connect_timeout_s: float = 90.0
     twin_ack_timeout_s: float = 60.0
     ros_domain_id: str = ""
+    #: STK graphics state the run requires: "off" (no 2D/3D Graphics
+    #: window, STK minimised) unless "on" is asked for explicitly.
+    graphics_mode: str = "off"
     #: A one-off measurement that report must never pool (summary.json).
     diagnostic_label: str = ""
 
@@ -118,6 +121,10 @@ class Deps:
     #: checkout's code (see acav/twin_identity.py).
     confirm_twin_identity: Callable[[str, float],
                                     Tuple[str, List[str]]] = None
+    #: (file, "startup" | "end", timeout) -> the bridge's graphics samples
+    #: once that phase is present, else what is there (or None).
+    read_graphics_state: Callable[[str, str, float],
+                                  Optional[dict]] = None
     prompt: Callable[[str], None] = lambda message: input(message)  # noqa: E731
     sleep: Callable[[float], None] = time.sleep
 
@@ -133,6 +140,8 @@ class Deps:
             self.wait_for_twin_ack = _wait_for_twin_ack_ros
         if self.confirm_twin_identity is None:
             self.confirm_twin_identity = _confirm_twin_identity_ros
+        if self.read_graphics_state is None:
+            self.read_graphics_state = _read_graphics_state_file
 
 
 @dataclass
@@ -174,6 +183,12 @@ def bridge_launch_argv(config: RunConfig,
 
 #: The per-run bridge configuration, written beside the run's logs.
 RUN_BRIDGE_CONFIG = "bridge_params.yaml"
+#: The bridge's STK graphics samples for the run, beside the run's logs.
+GRAPHICS_STATE_FILE = "stk_graphics.json"
+#: The startup sample is written before the bridge reports CONNECTED;
+#: the terminal one at the last step, before the scheduler can finish.
+GRAPHICS_STARTUP_TIMEOUT_S = 10.0
+GRAPHICS_END_TIMEOUT_S = 30.0
 
 
 def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
@@ -225,6 +240,9 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
         if window is not None:
             sensing["orbit_batch_expected_window_s"] = window
     settings["sensing"] = sensing
+    # Where the bridge records STK's graphics state for this run.
+    settings["graphics_state_file"] = os.path.join(
+        os.path.abspath(log_dir), GRAPHICS_STATE_FILE)
     path = os.path.join(log_dir, RUN_BRIDGE_CONFIG)
     with open(path, "w", encoding="utf-8") as handle:
         yaml.safe_dump(settings, handle, sort_keys=False)
@@ -486,6 +504,80 @@ def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
         rclpy.shutdown()
 
 
+def _read_graphics_state_file(path: str, phase: str,
+                              timeout_s: float) -> Optional[dict]:
+    from stk_bridge.core.graphics_state import read
+
+    deadline = time.monotonic() + timeout_s
+    while True:
+        data = read(path)
+        if (data and data.get(phase)) or time.monotonic() >= deadline:
+            return data
+        time.sleep(0.5)
+
+
+def _check_graphics_startup(config: RunConfig, data: Optional[dict],
+                            summary: dict, record) -> bool:
+    from stk_bridge.core.graphics_state import describe
+
+    startup = (data or {}).get("startup")
+    summary["graphics_mode_required"] = config.graphics_mode
+    summary["graphics_startup"] = startup
+    if not startup:
+        record("stk_graphics", False,
+               "the bridge reported no STK graphics state; this run "
+               f"requires '{config.graphics_mode}'")
+        return False
+    if startup["mode"] != config.graphics_mode:
+        if config.graphics_mode == "off":
+            action = ("close every 2D and 3D Graphics window and minimise "
+                      "STK, or pass --graphics-mode on deliberately")
+        else:
+            action = "open the graphics windows this run requires"
+        record("stk_graphics", False,
+               f"STK graphics is {describe(startup)} but this run requires "
+               f"'{config.graphics_mode}': {action}")
+        return False
+    record("stk_graphics", True, describe(startup))
+    return True
+
+
+def _check_graphics_end(config: RunConfig, data: Optional[dict],
+                        summary: dict, record) -> bool:
+    """The whole run's mode, recorded and written into the record."""
+    from stk_bridge.core.graphics_state import UNVERIFIED, summarize
+
+    data = data or {}
+    mode = summarize(data) or UNVERIFIED
+    summary["graphics_mode"] = mode
+    summary["graphics_samples"] = data.get("samples") or []
+    summary["graphics_end"] = data.get("end")
+    ok = mode == config.graphics_mode
+    record("stk_graphics_end", ok,
+           mode if ok else f"{mode}; this run required "
+                           f"'{config.graphics_mode}' throughout")
+    _label_graphics_mode(config.output, mode)
+    return ok
+
+
+def _label_graphics_mode(output: str, mode: str) -> None:
+    """Write the run's graphics mode into its record, if there is one.
+
+    Provenance only: the determinism signature is computed from the
+    result, so it is unchanged.
+    """
+    import dataclasses
+
+    from acav.run_record import read_record, write_record
+
+    if not os.path.exists(output):
+        return
+    record = read_record(output)
+    write_record(output, dataclasses.replace(
+        record, provenance=dataclasses.replace(record.provenance,
+                                               graphics_mode=mode)))
+
+
 #: The twin republishes its identity every step while ready, so a few
 #: seconds after its first ack are plenty.
 TWIN_IDENTITY_TIMEOUT_S = 10.0
@@ -667,6 +759,17 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                     "this run will not be reportable (see run_record.py)",
                     config.backend)
 
+            # STK's graphics state is a run condition: check it before
+            # any handoff time is spent.
+            graphics_file = os.path.join(os.path.abspath(log_dir),
+                                         GRAPHICS_STATE_FILE)
+            if not _check_graphics_startup(
+                    config, deps.read_graphics_state(
+                        graphics_file, "startup",
+                        GRAPHICS_STARTUP_TIMEOUT_S),
+                    summary, record):
+                return EXIT_STEP_FAILED
+
             deps.prompt(
                 "\n"
                 "=== Start the MATLAB/Simulink twin now ===\n"
@@ -715,6 +818,12 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 record("scheduler_exit", scheduler_returncode == 0,
                        f"returncode={scheduler_returncode}")
 
+            # Before the bridge is stopped: its terminal sample is the last.
+            graphics_ok = _check_graphics_end(
+                config, deps.read_graphics_state(
+                    graphics_file, "end", GRAPHICS_END_TIMEOUT_S),
+                summary, record)
+
             # The scheduler no longer participates in the barrier. Stop the
             # bridge before waiting for a human, otherwise a successful run
             # can acquire a spurious missing-ack timeout during teardown.
@@ -725,7 +834,8 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 "(the model has no automatic stop) and press Enter to "
                 "continue: ")
 
-        return EXIT_OK if scheduler_returncode == 0 else EXIT_STEP_FAILED
+        return (EXIT_OK if scheduler_returncode == 0 and graphics_ok
+                else EXIT_STEP_FAILED)
     finally:
         for name, process in (("scheduler", scheduler_proc), ("bridge", bridge_proc)):
             _stop_process(process, name, run_log)
@@ -766,6 +876,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--bridge-connect-timeout-s", type=float,
                         default=90.0)
     parser.add_argument("--twin-ack-timeout-s", type=float, default=60.0)
+    parser.add_argument("--graphics-mode", choices=("off", "on"),
+                        default="off",
+                        help="STK graphics state this run requires: off (no "
+                             "2D/3D Graphics window, STK minimised; the "
+                             "default) or on")
     parser.add_argument("--diagnostic-label", default="", type=_label,
                         metavar="TEXT",
                         help="mark this run as a one-off diagnostic; "
@@ -795,6 +910,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         prefix=args.prefix, log_dir=args.log_dir,
         bridge_connect_timeout_s=args.bridge_connect_timeout_s,
         twin_ack_timeout_s=args.twin_ack_timeout_s,
+        graphics_mode=args.graphics_mode,
         diagnostic_label=args.diagnostic_label,
     )
     return execute_run(config)
