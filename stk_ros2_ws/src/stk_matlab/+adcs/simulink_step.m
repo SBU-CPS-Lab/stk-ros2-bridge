@@ -12,16 +12,39 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
 % model at build time (buildFingerprint, '-' if absent) and the one
 % recomputed from disk now, both cut to 16 hex digits. The model
 % publishes it on /acav/twin_identity; acav/twin_identity.py checks it.
+%
+% Free-run (run config execution_mode "free_run", E3): samples arrive at
+% irregular wall-clock-driven times. With t0 the first ready sample and
+% k the steps integrated so far, a sample at t integrates
+%   n = floor((t - t0)/stepS + 1e-6) + 1 - k
+% steps of stepS, holding the received position, velocity and target
+% (zero-order hold); n = 0 holds the last outputs. Counting from t0
+% means rounding never accumulates; the 1e-6 step tolerance keeps a
+% sample on the grid (0.3/0.1 = 2.99...96 in floating point) on its
+% step. The state reached, t0 + (k+n)*stepS, lies in (t, t+stepS]; the
+% command is still stamped t + stepS by the model, and the difference
+% is recorded. n > 1 occurrences, the largest n and the most negative
+% stamp offset go to <run>.logs/twin_substeps.json when they change;
+% adcs.simulink_step('substep_statistics') returns them.
+    persistent cfg state lastTime lastOutput identityBytes identityCount
+    persistent freeT0 freeSteps freeStats freeStatsPath
+    if ischar(qMeas) && strcmp(qMeas, 'substep_statistics')
+        torque = freeStats;
+        return
+    end
     if nargin < 10, targetId = ''; end
     if nargin < 11, buildFingerprint = ''; end
     targetId = char(targetId(:).');
     targetId = targetId(targetId ~= char(0));
-    persistent cfg state lastTime lastOutput identityBytes identityCount
     if reset || isempty(cfg)
         cfg = adcs.config([], runConfigPath);
         state = adcs.initial_state();
         lastTime = []; lastOutput = {};
         [identityBytes, identityCount] = identityOf(cfg, buildFingerprint);
+        freeT0 = []; freeSteps = 0;
+        freeStats = struct('samples', 0, 'steps', 0, 'events', 0, ...
+            'max_n', 0, 'min_stamp_offset_s', 0);
+        freeStatsPath = substepStatsPath(runConfigPath);
         if strcmp(cfg.attitudeMismatchPolicy, 'e1_readback_ablation')
             warning('adcs:simulink_step:E1Ablation', ...
                 'E1 treatment: mismatch guard disabled; measured attitude drives feedback. Not a nominal run.');
@@ -42,6 +65,73 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
         torque = zeros(1,3); qCmd = zeros(1,4); omegaCmd = zeros(1,3); mode = 1;
         err = 0; momentum = state.wheelMomentum;
         saturated = false; energy = state.wheelEnergyJ;
+        return
+    end
+    if strcmp(cfg.executionMode, 'free_run')
+        if ~isempty(lastTime) && t < lastTime
+            error('adcs:simulink_step:TimeReversed', ...
+                'Telemetry time moved backwards. Stop duplicate clock publishers and restart the run.');
+        end
+        if isempty(freeT0)
+            freeT0 = t;
+        end
+        freeStats.samples = freeStats.samples + 1;
+        reached = floor((t - freeT0) / cfg.stepS + 1e-6) + 1;
+        n = reached - freeSteps;
+        if n <= 0
+            [torque,qCmd,mode,err,momentum,saturated,energy,omegaCmd] = lastOutput{:};
+            return
+        end
+        if isempty(lastOutput)
+            q = qMeas; w = omega;
+        else
+            q = lastOutput{2}; w = lastOutput{8};
+        end
+        for j = freeSteps:(freeSteps + n - 1)
+            in = struct('quaternion', q, 'omega', w, ...
+                'position', pos, 'velocity', vel, 'targetEci', targetEci, ...
+                'haveTarget', haveTarget, 't', freeT0 + j * cfg.stepS, ...
+                'targetId', targetId);
+            out = adcs.twin_step(in, cfg, state);
+            state = out.state;
+            q = out.quaternionCmd; w = out.omegaNext;
+        end
+        freeSteps = reached;
+        freeStats.steps = freeSteps;
+        offset = (freeT0 + reached * cfg.stepS) - (t + cfg.stepS);
+        changed = false;
+        if n > 1
+            freeStats.events = freeStats.events + 1;
+            changed = true;
+            if n > freeStats.max_n || freeStats.events == 1 || ...
+                    any(freeStats.events == 10.^(1:9))
+                fprintf('adcs.simulink_step: free-run sub-steps n=%d at t=%.3f s (%d occurrences, max n %d)\n', ...
+                    n, t, freeStats.events, max(n, freeStats.max_n));
+            end
+        end
+        if n > freeStats.max_n
+            freeStats.max_n = n;
+            changed = true;
+        end
+        if offset < freeStats.min_stamp_offset_s
+            freeStats.min_stamp_offset_s = offset;
+            changed = true;
+        end
+        if changed && ~isempty(freeStatsPath)
+            writeSubstepStats(freeStatsPath, freeStats);
+        end
+        fresh = true;
+        torque = out.torque;
+        qCmd = out.quaternionCmd;
+        omegaCmd = out.omegaNext;
+        names = {'NADIR', 'SLEW', 'SETTLE', 'IMAGE', 'SAFE'};
+        mode = double(find(strcmp(names, state.mode), 1));
+        err = out.boresightErrorRad;
+        momentum = state.wheelMomentum;
+        saturated = logical(out.wheelsSaturated);
+        energy = state.wheelEnergyJ;
+        lastTime = t;
+        lastOutput = {torque,qCmd,mode,err,momentum,saturated,energy,omegaCmd};
         return
     end
     if ~isempty(lastTime) && t <= lastTime
@@ -92,6 +182,30 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
     energy = state.wheelEnergyJ;
     lastTime = t;
     lastOutput = {torque,qCmd,mode,err,momentum,saturated,energy,omegaCmd};
+end
+
+function path = substepStatsPath(runConfigPath)
+%SUBSTEPSTATSPATH <run>.logs/twin_substeps.json beside the run config,
+% or '' when that logs folder does not exist (e.g. a test or a manual run).
+    path = '';
+    runConfigPath = char(runConfigPath);
+    suffix = '.runconfig.json';
+    if numel(runConfigPath) > numel(suffix) && ...
+            strcmp(runConfigPath(end-numel(suffix)+1:end), suffix)
+        logs = [runConfigPath(1:end-numel(suffix)) '.logs'];
+        if isfolder(logs)
+            path = fullfile(logs, 'twin_substeps.json');
+        end
+    end
+end
+
+function writeSubstepStats(path, stats)
+    fid = fopen(path, 'w');
+    if fid < 0
+        return
+    end
+    fwrite(fid, uint8([jsonencode(stats) 10]), 'uint8');
+    fclose(fid);
 end
 
 function [bytes, count] = identityOf(cfg, buildFingerprint)

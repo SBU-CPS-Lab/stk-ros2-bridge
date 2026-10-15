@@ -73,6 +73,9 @@ function cfg = config(scenarioPath, runConfigPath)
     % its run_id. Empty for the nominal vehicle (no run config).
     cfg.runConfigSha256 = '';
     cfg.runId = '';
+    % 'lockstep' (one step per sample, the default) or 'free_run' (ZOH
+    % sub-stepping, adcs.simulink_step), from the run config.
+    cfg.executionMode = 'lockstep';
     if nargin >= 2 && ~isempty(runConfigPath)
         cfg = applyRunConfig(cfg, runConfigPath);
     end
@@ -130,6 +133,20 @@ function cfg = applyRunConfig(cfg, runConfigPath)
             end
         end
         cfg.attitudeMismatchPolicy = policy;
+    end
+
+    if isfield(raw, 'execution_mode')
+        mode = char(raw.execution_mode);
+        if ~any(strcmp(mode, {'lockstep', 'free_run'}))
+            error('adcs:config:ExecutionMode', ...
+                'execution_mode must be lockstep or free_run, not %s.', mode);
+        end
+        if strcmp(mode, 'free_run') && ...
+                strcmp(cfg.attitudeMismatchPolicy, 'e1_readback_ablation')
+            error('adcs:config:ExecutionMode', ...
+                'The E1 read-back ablation is defined for lockstep only.');
+        end
+        cfg.executionMode = mode;
     end
 
     if isfield(raw, 'gains') && ~isempty(raw.gains)
