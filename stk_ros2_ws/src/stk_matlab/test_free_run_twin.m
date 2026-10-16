@@ -81,6 +81,53 @@ function test_free_run_twin()
     assert(norm(outs{5}.qCmd - held{stepsDone(5)}.qCmd) > 1e-9, ...
         'the reference must differ from held geometry, or this test proves nothing');
     assert(stats.events == 2 && stats.max_n == 2, 'n > 1 statistics');
+
+    % -- what happened between publishes (TwinStatus, P10e) ---------------
+    % saturation_events counts rising edges of the saturated flag at every
+    % step, sub-steps included; the maximum error covers every step since
+    % the previous published sample.
+    % A profile authority of 3 asks for more torque than the wheels give,
+    % so the wheels saturate (twice in the first 30 s); the samples come
+    % at irregular intervals, several steps apart.
+    hard = writeConfig(root, 'hard', ['{"run_id": "hard", ' ...
+        '"execution_mode": "free_run", "gains": {"profile_authority": 3.0}}']);
+    hardLock = writeConfig(root, 'hardlock', ['{"run_id": "hardlock", ' ...
+        '"execution_mode": "lockstep", "gains": {"profile_authority": 3.0}}']);
+    hardCfg = adcs.config([], hard);
+    sparse = [0 cumsum(repmat([0.1 0.37 0.21 0.55 0.3], 1, 25))];
+    sparse = sparse(sparse <= 30);
+    sparseOuts = runSequence(hard, sparse, orbit);
+    ref = manualSteps(hardCfg, sparse, orbit, true);
+    flags = cellfun(@(r) r.sat, ref);
+    errors = cellfun(@(r) r.err, ref);
+    edges = cumsum([flags(1), flags(2:end) & ~flags(1:end-1)]);
+    assert(edges(end) >= 1, 'the reference must saturate somewhere');
+    previous = 0;
+    for k = 1:numel(sparse)
+        reached = floor(sparse(k) / cfg.stepS + 1e-6) + 1;
+        if reached <= previous
+            continue                                  % a hold publishes nothing
+        end
+        assert(sparseOuts{k}.satEvents == edges(reached), ...
+            'sample %d: saturation events %d, steps say %d', k, ...
+            sparseOuts{k}.satEvents, edges(reached));
+        assert(abs(sparseOuts{k}.maxErr - max(errors(previous+1:reached))) ...
+            < 1e-15, 'sample %d: max error since the last publish', k);
+        assert(sparseOuts{k}.maxErr >= sparseOuts{k}.err);
+        previous = reached;
+    end
+
+    % In lockstep every step is published: the maximum is the error and
+    % the counter is the published flags' rising edges.
+    published = runSequence(hardLock, (0:299) * cfg.stepS, orbit);
+    published = [published{:}];
+    assert(any([published.saturated]), 'lockstep must saturate too');
+    lockFlags = logical([published.saturated]);
+    lockEdges = cumsum([lockFlags(1), lockFlags(2:end) & ~lockFlags(1:end-1)]);
+    assert(isequal([published.maxErr], [published.err]), ...
+        'lockstep: the maximum since the last publish is the error');
+    assert(isequal([published.satEvents], lockEdges), ...
+        'lockstep: the counter is the rising edges of the flag');
     assert(stats.samples == numel(times) && stats.steps == stepsDone(end));
 
     % -- a sample exactly on the grid is never lost to rounding ----------
@@ -168,8 +215,9 @@ end
 
 function o = step(configPath, t, reset, pos, vel, target, q, w)
     [o.torque, o.qCmd, o.mode, o.err, o.momentum, o.saturated, o.energy, ...
-        o.ready, ~, o.omegaCmd] = adcs.simulink_step(q, w, pos, vel, ...
-        target, true, t, reset, configPath, '');
+        o.ready, ~, o.omegaCmd, ~, ~, ~, o.satEvents, o.maxErr] = ...
+        adcs.simulink_step(q, w, pos, vel, target, true, t, reset, ...
+        configPath, '');
 end
 
 function reference = manualSteps(cfg, times, geometry, propagate)
@@ -202,7 +250,8 @@ function reference = manualSteps(cfg, times, geometry, propagate)
                 't', tj, 'targetId', '');
             out = adcs.twin_step(in, cfg, state);
             state = out.state; q = out.quaternionCmd; w = out.omegaNext;
-            reference{j+1} = struct('qCmd', q); %#ok<AGROW>
+            reference{j+1} = struct('qCmd', q, 'sat', ...
+                logical(out.wheelsSaturated), 'err', out.boresightErrorRad); %#ok<AGROW>
         end
         done = max(done, reached);
     end

@@ -41,3 +41,18 @@ bool wheels_saturated
 # total survives a dropped telemetry sample where a consumer-side
 # integration would silently lose that step's contribution.
 float64 wheel_energy_j
+
+# What happened between two statuses. In free-run the twin integrates
+# several steps per published status, so a brief event between two
+# publishes was invisible to the scheduler (E3 free-run, seed-4 fault:
+# 0 saturation events where lockstep recorded 1). In lockstep every step
+# is published, so these equal what the published fields already show.
+#
+# Cumulative count of steps at which wheels_saturated rose from false to
+# true, counted by the twin at every integration step.
+uint32 saturation_events
+
+# The largest boresight_error_rad over every step since the previous
+# TwinStatus, this one's included; equals boresight_error_rad when one
+# step was integrated. The capture hold window is judged on it.
+float64 max_boresight_error_since_last_rad

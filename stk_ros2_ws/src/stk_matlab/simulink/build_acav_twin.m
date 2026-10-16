@@ -331,7 +331,8 @@ function modelName = build_acav_twin(options)
     addBusAssignment(modelName, 'TwinStatusAssign', [790 300 940 380], ...
         {'boresight_error_rad', 'wheel_momentum_nms.x', ...
          'wheel_momentum_nms.y', 'wheel_momentum_nms.z', ...
-         'wheels_saturated', 'wheel_energy_j'});
+         'wheels_saturated', 'wheel_energy_j', 'saturation_events', ...
+         'max_boresight_error_since_last_rad'});
     add_line(modelName, 'TwinStatusBlank/1', 'TwinStatusAssign/1');
     add_line(modelName, 'GuidanceControl/4', 'TwinStatusAssign/2');
     for k = 1:3
@@ -340,6 +341,10 @@ function modelName = build_acav_twin(options)
     end
     add_line(modelName, 'GuidanceControl/6', 'TwinStatusAssign/6');
     add_line(modelName, 'GuidanceControl/7', 'TwinStatusAssign/7');
+    % What happened between two statuses (free-run sub-steps): the
+    % cumulative saturation count and the largest error since the last.
+    add_line(modelName, 'GuidanceControl/13', 'TwinStatusAssign/8');
+    add_line(modelName, 'GuidanceControl/14', 'TwinStatusAssign/9');
 
     % Stamped with this step's own time: boresight_error_rad and the mode
     % describe the MEASURED attitude at t, which is what the scheduler's
@@ -608,7 +613,7 @@ function source = guidanceControlSource(runConfigPath, buildFingerprint, polling
     end
     source = strjoin({
         'function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, ...'
-        '        identity, identityLength, identityDue] = ...'
+        '        identity, identityLength, identityDue, saturationEvents, maxErrSinceLast] = ...'
         '        fcn(qMeas, omega, pos, vel, targetEci, haveTarget, t, targetId)'
         '%#codegen'
         '    coder.extrinsic(''adcs.simulink_step'');'
@@ -618,9 +623,9 @@ function source = guidanceControlSource(runConfigPath, buildFingerprint, polling
         '    torque = zeros(1,3); qCmd = [0 0 0 1]; mode = 1;'
         '    err = 0; momentum = zeros(1,3); saturated = false; energy = 0; ready = false; fresh = false;'
         '    omegaCmd = zeros(1,3); identity = zeros(1,128,''uint8''); identityLength = 0;'
-        '    identityDue = false;'
+        '    identityDue = false; saturationEvents = uint32(0); maxErrSinceLast = 0;'
         sprintf(['    [torque,qCmd,mode,err,momentum,saturated,energy,ready,fresh,omegaCmd,' ...
-            'identity,identityLength,identityDue] = ' ...
+            'identity,identityLength,identityDue,saturationEvents,maxErrSinceLast] = ' ...
             'adcs.simulink_step(qMeas,omega,pos,vel,targetEci,haveTarget,t,reset,''%s'',targetId,''%s'',%s);'], ...
             strrep(char(runConfigPath), '''', ''''''), char(buildFingerprint), ...
             num2str(pollingHz, 15))

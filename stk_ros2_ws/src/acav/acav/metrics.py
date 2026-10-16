@@ -96,6 +96,18 @@ class PointingSample:
     error_deg: float       # angle between boresight and target line of sight
     has_access: bool       # STK's access answer at this epoch
     mode: str = ""         # Stateflow mode name, for SAFE detection
+    #: The largest error over every twin step since the previous sample
+    #: (TwinStatus.max_boresight_error_since_last_rad, in degrees); None
+    #: from a twin that does not report it. The hold window is judged on
+    #: it, so a free-run excursion between two published samples counts.
+    #: In lockstep it equals error_deg.
+    max_error_since_last_deg: Optional[float] = None
+
+    @property
+    def hold_error_deg(self) -> float:
+        """The error the hold window is judged on."""
+        return (self.error_deg if self.max_error_since_last_deg is None
+                else self.max_error_since_last_deg)
 
 
 @dataclass
@@ -216,16 +228,16 @@ def evaluate_capture(samples: Sequence[PointingSample], image_time_s: float,
     if any(s.mode == safe_mode_name for s in in_window):
         at_image = _closest(in_window, image_time_s)
         return (CaptureOutcome.SAFE_MODE, at_image.error_deg,
-                max(s.error_deg for s in in_window))
+                max(s.hold_error_deg for s in in_window))
 
-    settled = all(s.error_deg <= capture_error_deg for s in in_window)
+    settled = all(s.hold_error_deg <= capture_error_deg for s in in_window)
     # Access is required at the image epoch specifically, not throughout
     # the hold window: the spacecraft may legitimately be slewing into
     # the footprint during settling.
     at_image = _closest(in_window, image_time_s)
     has_access = at_image.has_access
 
-    max_error = max(s.error_deg for s in in_window)
+    max_error = max(s.hold_error_deg for s in in_window)
 
     if has_access and settled:
         outcome = CaptureOutcome.CAPTURED

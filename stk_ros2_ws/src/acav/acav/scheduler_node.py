@@ -77,6 +77,16 @@ RETENTION_MARGIN_S = 5.0
 TARGET_POSITION_STEP_S = 10.0  # Earth-rotation interpolation error below 0.5 m.
 
 
+def _between_publishes(message) -> dict:
+    """TwinStatus's saturation count and largest error since the previous
+    status, or None for each from a message without them."""
+    events = getattr(message, "saturation_events", None)
+    worst = getattr(message, "max_boresight_error_since_last_rad", None)
+    return {"saturation_events": None if events is None else int(events),
+            "max_error_since_last_deg": (None if worst is None
+                                         else math.degrees(worst))}
+
+
 def interpolate_target_position(samples, time_s):
     """ICRF ground-target position at the current simulation epoch."""
     u = max(0.0, min(time_s / TARGET_POSITION_STEP_S, len(samples) - 1))
@@ -473,7 +483,8 @@ class SchedulerNode:
                                     message.wheel_momentum_nms.y,
                                     message.wheel_momentum_nms.z),
                 wheels_saturated=bool(message.wheels_saturated),
-                wheel_energy_J=float(message.wheel_energy_j))
+                wheel_energy_J=float(message.wheel_energy_j),
+                **_between_publishes(message))
             self._tracker.observe(sample)
             # Accumulated even for samples the tracker would discard as
             # outside every hold window: peak momentum and saturation are

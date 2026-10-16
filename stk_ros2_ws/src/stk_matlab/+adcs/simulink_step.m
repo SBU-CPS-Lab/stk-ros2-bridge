@@ -1,5 +1,6 @@
 function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, omegaCmd, ...
-    identity, identityLength, identityDue] = simulink_step(qMeas, omega, pos, vel, targetEci, ...
+    identity, identityLength, identityDue, saturationEvents, maxErrSinceLast] = ...
+    simulink_step(qMeas, omega, pos, vel, targetEci, ...
     haveTarget, t, reset, runConfigPath, targetId, buildFingerprint, pollingHz)
 %SIMULINK_STEP MATLAB-hosted adapter for Normal-mode Simulink simulation.
 % Keep dynamic profile structs and YAML/JSON loading in MATLAB; the
@@ -45,9 +46,17 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
 % achieved Simulink step rate is measured.
 % adcs.simulink_step('loop_statistics') returns the counts. Lockstep
 % counts and writes nothing.
+%
+% For TwinStatus, every integration step (each free-run sub-step too)
+% feeds saturationEvents -- the cumulative count of steps where
+% wheelsSaturated rose from false to true -- and maxErrSinceLast, the
+% largest boresight error over the steps of this sample. In lockstep a
+% sample is one step, so maxErrSinceLast is err and the count matches
+% the published flag's rising edges; in free-run they show what the
+% unpublished sub-steps did.
     persistent cfg state lastTime lastOutput identityBytes identityCount
     persistent freeT0 freeSteps freeStats freeStatsPath freeLast identityTic
-    persistent freeLoop loopTic loopPath
+    persistent freeLoop loopTic loopPath satCount satPrevious lastExtra
     if ischar(qMeas) && strcmp(qMeas, 'substep_statistics')
         torque = freeStats;
         return
@@ -65,6 +74,7 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
         cfg = adcs.config([], runConfigPath);
         state = adcs.initial_state();
         lastTime = []; lastOutput = {};
+        satCount = 0; satPrevious = false; lastExtra = {0, 0};
         [identityBytes, identityCount] = identityOf(cfg, buildFingerprint, pollingHz);
         identityTic = [];
         freeT0 = []; freeSteps = 0; freeLast = [];
@@ -84,6 +94,8 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
     end
     identity = identityBytes;
     identityLength = identityCount;
+    saturationEvents = satCount;
+    maxErrSinceLast = 0;
     % ROS subscribers initially output a zero-filled bus. Do not advance
     % dynamics or acknowledge a step until all required numerics are valid.
     ready = all(isfinite([qMeas(:); omega(:); pos(:); vel(:); t])) && ...
@@ -132,6 +144,7 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
         if n <= 0
             freeLast = current;
             [torque,qCmd,mode,err,momentum,saturated,energy,omegaCmd] = lastOutput{:};
+            [saturationEvents, maxErrSinceLast] = lastExtra{:};
             return
         end
         if isempty(lastOutput)
@@ -139,6 +152,7 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
         else
             q = lastOutput{2}; w = lastOutput{8};
         end
+        maxErrSinceLast = -Inf;
         for j = freeSteps:(freeSteps + n - 1)
             tj = freeT0 + j * cfg.stepS;
             source = current;
@@ -154,7 +168,12 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
             out = adcs.twin_step(in, cfg, state);
             state = out.state;
             q = out.quaternionCmd; w = out.omegaNext;
+            [satCount, satPrevious] = countSaturation( ...
+                satCount, satPrevious, out.wheelsSaturated);
+            maxErrSinceLast = max(maxErrSinceLast, out.boresightErrorRad);
         end
+        saturationEvents = satCount;
+        lastExtra = {saturationEvents, maxErrSinceLast};
         freeLast = current;
         freeSteps = reached;
         freeStats.steps = freeSteps;
@@ -200,6 +219,7 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
                 'Telemetry time moved backwards. Stop duplicate clock publishers and restart the run.');
         end
         [torque,qCmd,mode,err,momentum,saturated,energy,omegaCmd] = lastOutput{:};
+        [saturationEvents, maxErrSinceLast] = lastExtra{:};
         return
     end
     if ~isempty(lastTime)
@@ -240,8 +260,21 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
     momentum = state.wheelMomentum;
     saturated = logical(out.wheelsSaturated);
     energy = state.wheelEnergyJ;
+    [satCount, satPrevious] = countSaturation(satCount, satPrevious, saturated);
+    saturationEvents = satCount;
+    maxErrSinceLast = err;
+    lastExtra = {saturationEvents, maxErrSinceLast};
     lastTime = t;
     lastOutput = {torque,qCmd,mode,err,momentum,saturated,energy,omegaCmd};
+end
+
+function [count, previous] = countSaturation(count, previous, saturated)
+%COUNTSATURATION One step: count a rising edge of the saturated flag.
+    saturated = logical(saturated);
+    if saturated && ~previous
+        count = count + 1;
+    end
+    previous = saturated;
 end
 
 function path = substepStatsPath(runConfigPath)

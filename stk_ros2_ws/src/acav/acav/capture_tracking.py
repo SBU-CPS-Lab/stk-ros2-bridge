@@ -66,6 +66,13 @@ class TelemetrySample:
     wheel_momentum_Nms: tuple = (0.0, 0.0, 0.0)
     wheels_saturated: bool = False
     wheel_energy_J: float = 0.0
+    #: TwinStatus.saturation_events: the twin's own cumulative count,
+    #: over every integration step (free-run sub-steps included); None
+    #: from a twin that does not report it.
+    saturation_events: Optional[int] = None
+    #: TwinStatus.max_boresight_error_since_last_rad, in degrees; None
+    #: from a twin that does not report it.
+    max_error_since_last_deg: Optional[float] = None
 
 
 
@@ -94,6 +101,8 @@ class RunAggregate:
     entered_safe_mode: bool = False
     wheel_energy_J: float = 0.0
     _saturated_previously: bool = False
+    #: The largest TwinStatus.saturation_events seen.
+    _twin_saturation_events: int = 0
 
     def observe(self, sample: TelemetrySample) -> None:
         for axis in range(3):
@@ -110,6 +119,12 @@ class RunAggregate:
         if sample.wheels_saturated and not self._saturated_previously:
             self.wheel_saturation_events += 1
         self._saturated_previously = sample.wheels_saturated
+        # The twin's own count also sees episodes that began and ended
+        # between two published samples (free-run sub-steps); in
+        # lockstep it equals the observed rising edges.
+        if sample.saturation_events is not None:
+            self._twin_saturation_events = max(
+                self._twin_saturation_events, int(sample.saturation_events))
 
         if sample.mode == self.safe_mode_name:
             self.entered_safe_mode = True
@@ -125,7 +140,8 @@ class RunAggregate:
             self.peak_momentum_fraction[0],
             self.peak_momentum_fraction[1],
             self.peak_momentum_fraction[2])
-        result.wheel_saturation_events = self.wheel_saturation_events
+        result.wheel_saturation_events = max(self.wheel_saturation_events,
+                                             self._twin_saturation_events)
         result.entered_safe_mode = self.entered_safe_mode
         result.wheel_energy_J = self.wheel_energy_J
 
@@ -282,7 +298,8 @@ class CaptureTracker:
         """
         samples = [
             PointingSample(time_s=s.time_s, error_deg=s.error_deg,
-                          has_access=has_access, mode=s.mode)
+                          has_access=has_access, mode=s.mode,
+                          max_error_since_last_deg=s.max_error_since_last_deg)
             for s in self.window(entry.t_image_s)
         ]
         outcome, error_at_image, max_error = evaluate_capture(
