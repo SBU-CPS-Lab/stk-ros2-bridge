@@ -236,6 +236,16 @@ class TestTwinLoop:
         assert m["bridge_samples"] == 10
         assert m["bridge_samples_consumed"] == 9
 
+    def test_a_v3_identity_and_an_older_v2_one(self, tmp_path):
+        for version in ("v2", "v3"):
+            (tmp_path / version).mkdir()
+            path = _run(tmp_path / version, "E3-x", "free_run",
+                        cmd=[(0.1, Q0)], att=[(0.0, Q0)], twin=[(0.0, 0.1)],
+                        status=[(0.0, 1.0)], images=[],
+                        twin_identity=IDENTITY_V2.replace("v2", version, 1))
+            assert ca.analyze_run(str(path), 1.0)[
+                "twin_polling_hz_requested"] == 100.0
+
     @pytest.mark.parametrize("identity", [
         "", "v1 " + "a" * 64 + " " + "b" * 16 + " " + "b" * 16, "garbage"])
     def test_no_requested_rate_without_a_v2_identity(self, tmp_path,

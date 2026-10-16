@@ -6,7 +6,10 @@ function test_twin_identity()
 % src/acav/test/test_twin_identity.py). adcs.config must report the
 % sha256 of the exact run-config bytes it parsed, so the runner can tell
 % which config the twin actually loaded.
-    vector = 'aecfd2825eaca8f111a228dab00853ec6b496cea8dd98f52773cf3156e476daa';
+%
+% The fingerprint hashes file text with CRLF turned into LF, so a.m's
+% CRLF below hashes as LF, and line endings never change it.
+    vector = 'c241417d97fa57b740d30e77ee539ddc7d913076acfc4e909f200ca6e65c5ec5';
     root = tempname;
     cleanup = onCleanup(@() rmdir(root, 's'));
     files = {
@@ -27,6 +30,16 @@ function test_twin_identity()
 
     assert(strcmp(adcs.code_fingerprint(root), vector), ...
         'code_fingerprint differs from the shared vector');
+
+    % The same file with LF instead of CRLF: the same fingerprint. A lone
+    % CR is not a line ending and is kept.
+    writeBytes(fullfile(root, 'stk_matlab/+adcs/a.m'), uint8(['a' 10]));
+    assert(strcmp(adcs.code_fingerprint(root), vector), ...
+        'line endings must not change the fingerprint');
+    writeBytes(fullfile(root, 'stk_matlab/+adcs/a.m'), uint8(['a' 13]));
+    assert(~strcmp(adcs.code_fingerprint(root), vector), ...
+        'a lone CR is content');
+    writeBytes(fullfile(root, 'stk_matlab/+adcs/a.m'), uint8(['a' 13 10]));
 
     writeBytes(fullfile(root, 'stk_matlab/+adcs/+internal/b.m'), uint8('c'));
     assert(~strcmp(adcs.code_fingerprint(root), vector), ...
@@ -63,15 +76,16 @@ function test_twin_identity()
     writeBytes(identityPath, uint8(['{"run_id": "r"}' 10]));
     built = adcs.code_fingerprint();
     zero3 = zeros(1, 3);
-    % v2 adds the polling rate the model was built with (Simulink pacing,
-    % build_acav_twin's PollingRateHz).
+    % v2 added the polling rate the model was built with (Simulink pacing,
+    % build_acav_twin's PollingRateHz); v3 marks the fingerprint that
+    % ignores line endings.
     [~,~,~,~,~,~,~,ready,~,~,identity,n,due] = adcs.simulink_step( ...
         zeros(1,4), zero3, zero3, zero3, zero3, false, 0, true, ...
         identityPath, '', built, 100);
     assert(~ready, 'startup sample must not be ready');
     assert(~due, 'the identity is not due before the twin is ready');
     assert(isa(identity, 'uint8') && isequal(size(identity), [1 128]));
-    expected = sprintf('v2 %s %s %s 100Hz', ...
+    expected = sprintf('v3 %s %s %s 100Hz', ...
         'ea0ab5a1b67c36408f52f019e011c48fef54dad1f331ff35d7ec1261bc355fbb', ...
         built(1:16), built(1:16));
     assert(n == 107 && strcmp(char(identity(1:n)), expected), ...
@@ -89,7 +103,7 @@ function test_twin_identity()
     % (the runner refuses the first two).
     [~,~,~,~,~,~,~,~,~,~,identity,n] = adcs.simulink_step( ...
         zeros(1,4), zero3, zero3, zero3, zero3, false, 0, true, '');
-    assert(strcmp(char(identity(1:n)), sprintf('v2 - - %s -', built(1:16))));
+    assert(strcmp(char(identity(1:n)), sprintf('v3 - - %s -', built(1:16))));
 
     % A fractional rate is written without trailing zeros.
     [~,~,~,~,~,~,~,~,~,~,identity,n] = adcs.simulink_step( ...

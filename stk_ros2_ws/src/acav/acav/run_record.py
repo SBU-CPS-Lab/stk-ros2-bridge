@@ -117,8 +117,9 @@ class Provenance:
     #: reading ("not recorded") and changes nothing else in the record.
     code_version: str = ""
     #: The twin identity the run orchestrator checked and accepted
-    #: ("v2 <run-config sha256> <build fp> <runtime fp> <polling>", or
-    #: "v1 ..." without the polling rate before it was recorded; see
+    #: ("v3 <run-config sha256> <build fp> <runtime fp> <polling>"; "v2"
+    #: before the fingerprint ignored line endings, "v1" before the
+    #: polling rate was recorded; see
     #: acav.twin_identity); empty when not checked -- every record written
     #: before the check existed. No RECORD_VERSION bump, as above.
     twin_identity: str = ""
@@ -415,19 +416,34 @@ def unreportable(records: Sequence[RunRecord]) -> List[RunRecord]:
     return [r for r in records if not r.reportable]
 
 
+#: Raw scenario digests written before the digest ignored line endings,
+#: mapped to the line-ending-free digest of the same file. Every record
+#: up to 8345551 names the scenario by the first: the sha256 of
+#: acav_scenario.yaml as checked out with CRLF line endings
+#: (core.autocrlf), whose LF-normalised sha256 is the second. Computed
+#: once from that file; target_coverage_problems accepts a legacy digest
+#: that maps to the current scenario's.
+LEGACY_SCENARIO_DIGESTS = {
+    "c8825803c3073f744ec76f25e3e889606a4c09fcb040aba985cb7e2371706ba9":
+        "c294ae8024093e02b174817e8dcb9ee38fb45dbb783fc60b2cd8cc610e45b28e",
+}
+
+
 def scenario_digest(path: str) -> str:
     """SHA-256 of a scenario file, for :attr:`Provenance.scenario_sha256`.
 
-    Hashing the bytes rather than the parsed spec on purpose: a comment
+    Hashing the text rather than the parsed spec on purpose: a comment
     change is a change to the document under review even when it does
     not alter a value, and the point of the digest is to answer "were
     these runs produced from the same file?" rather than "would they
-    have behaved the same?".
+    have behaved the same?". CRLF is turned into LF first, so the line
+    endings of a checkout do not make it another file.
     """
     import hashlib
 
     with open(path, "rb") as handle:
-        return hashlib.sha256(handle.read()).hexdigest()
+        return hashlib.sha256(
+            handle.read().replace(b"\r\n", b"\n")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -465,7 +481,7 @@ def target_coverage_problems(record: RunRecord,
     if not named:
         return ["names no scenario (scenario_sha256 is empty), so its "
                 "target set cannot be established"]
-    if named != scenario.sha256:
+    if LEGACY_SCENARIO_DIGESTS.get(named, named) != scenario.sha256:
         return [f"was made from another scenario (sha256 {named[:12]}..., "
                 f"not {scenario.sha256[:12]}... of {scenario.path})"]
     ids = [t.target_id for t in record.result.targets]

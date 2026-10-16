@@ -390,7 +390,7 @@ function modelName = build_acav_twin(options)
              'applies the command one step late for the whole run.']);
     end
 
-    % -- identity out: std_msgs/String, "v2 <cfg> <build> <runtime> <Hz>" -
+    % -- identity out: std_msgs/String, "v3 <cfg> <build> <runtime> <Hz>" -
     % Published on the first ready step and then about once per wall
     % second (GuidanceControl output 12, identityDue), so the run
     % orchestrator, which subscribes after the twin acks, sees it within

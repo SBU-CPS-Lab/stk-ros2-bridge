@@ -7,7 +7,7 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
 % asserted by the block on every simulation start, preventing stale state.
 %
 % identity (uint8, 1x128, zero-padded; identityLength bytes used) is
-% "v2 <cfg> <build> <runtime> <polling>", fixed at reset: the sha256 of
+% "v3 <cfg> <build> <runtime> <polling>", fixed at reset: the sha256 of
 % the run config loaded ('-' for none), the code fingerprint written into
 % the model at build time (buildFingerprint, '-' if absent) and the one
 % recomputed from disk now, both cut to 16 hex digits, and the polling
@@ -311,7 +311,7 @@ function [bytes, count] = identityOf(cfg, buildFingerprint, pollingHz)
         polling = sprintf('%sHz', num2str(pollingHz, 15));
     end
     runtime = adcs.code_fingerprint();
-    text = uint8(sprintf('v2 %s %s %s %s', config, build, runtime(1:16), polling));
+    text = uint8(sprintf('v3 %s %s %s %s', config, build, runtime(1:16), polling));
     bytes = zeros(1, 128, 'uint8');
     count = numel(text);
     bytes(1:count) = text;

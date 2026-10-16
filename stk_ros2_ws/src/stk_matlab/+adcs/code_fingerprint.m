@@ -8,7 +8,9 @@ function fingerprint = code_fingerprint(srcRoot)
 % for +adcs/**/*.m, simulink/build_acav_twin.m, the scenario YAML the
 % twin reads and the stk_msgs definitions its bus types come from.
 % acav/twin_identity.py computes the same: both test suites pin one
-% vector (test_twin_identity.m). build_acav_twin writes it into the
+% vector (test_twin_identity.m). Each file's text is hashed with CRLF
+% turned into LF (a lone CR is kept), so a checkout's line endings
+% (core.autocrlf) do not change the fingerprint. build_acav_twin writes it into the
 % model; adcs.simulink_step recomputes it at simulation start, so a
 % model built from other code is visible to the run orchestrator.
     if nargin < 1 || isempty(srcRoot)
@@ -62,4 +64,6 @@ function bytes = readBytes(path)
     end
     closer = onCleanup(@() fclose(fid));
     bytes = fread(fid, inf, '*uint8').';
+    crlf = find(bytes(1:end-1) == 13 & bytes(2:end) == 10);
+    bytes(crlf) = [];
 end

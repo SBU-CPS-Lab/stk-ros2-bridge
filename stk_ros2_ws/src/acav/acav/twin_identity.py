@@ -5,7 +5,7 @@ The Simulink model is built with its run-config path baked in
 the previous run's config without any error. Once ready, the twin
 publishes on IDENTITY_TOPIC (std_msgs/String):
 
-    v2 <cfg> <build> <runtime> <polling>
+    v3 <cfg> <build> <runtime> <polling>
 
 ``cfg``      sha256 of the run-config bytes it parsed (``-`` for none)
 ``build``    code fingerprint written into the model when it was built
@@ -24,8 +24,12 @@ The fingerprint is a sha256 over ``<path>\\0<sha256 of the file>\\n``
 lines, sorted by path, for the twin's MATLAB code, its Simulink build
 script, the scenario YAML it reads and the message definitions its bus
 types come from. +adcs/code_fingerprint.m computes the same; both test
-suites pin one vector. File bytes are hashed as they are on disk, so the
-value is a staleness check for one checkout, not a portable identifier.
+suites pin one vector. Each file's text is hashed with CRLF turned into
+LF, so the line endings a checkout uses (core.autocrlf) do not change it.
+
+Format history: v1 had no polling rate; v2 added it; v3 marks this
+line-ending-free fingerprint. The runner accepts only v3; records keep
+whatever identity text they were written with.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 IDENTITY_TOPIC = "/acav/twin_identity"
-FORMAT_VERSION = "v2"
+FORMAT_VERSION = "v3"
 FINGERPRINT_CHARS = 16
 #: Room the twin has for the message (build_acav_twin.m checks it).
 MAX_IDENTITY_BYTES = 128
@@ -83,10 +87,17 @@ def file_sha256(path: str) -> str:
         return hashlib.sha256(handle.read()).hexdigest()
 
 
+def text_sha256(path: str) -> str:
+    """sha256 of a file's text with CRLF turned into LF (a lone CR kept)."""
+    with open(path, "rb") as handle:
+        return hashlib.sha256(
+            handle.read().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def code_fingerprint(src_root: str) -> str:
     lines = b"".join(
         relative.encode("utf-8") + b"\0"
-        + file_sha256(os.path.join(src_root, *relative.split("/"))).encode()
+        + text_sha256(os.path.join(src_root, *relative.split("/"))).encode()
         + b"\n"
         for relative in fingerprint_files(src_root))
     return hashlib.sha256(lines).hexdigest()
@@ -101,9 +112,12 @@ class Identity:
     polling_hz: Optional[float] = None
 
 
-def parse_identity(text: str) -> Identity:
+def parse_identity(text: str, versions=(FORMAT_VERSION,)) -> Identity:
+    """The identity in ``text``. Only the current format by default (the
+    runner's check); an analysis of older records may pass ("v2", "v3"),
+    which share the layout."""
     parts = text.split(" ")
-    if len(parts) != 5 or parts[0] != FORMAT_VERSION:
+    if len(parts) != 5 or parts[0] not in versions:
         raise ValueError(f"expected '{FORMAT_VERSION} <cfg> <build> "
                          f"<runtime> <polling>', got {text!r}")
     config, build, runtime, polling = parts[1:]

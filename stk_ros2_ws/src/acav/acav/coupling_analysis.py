@@ -28,7 +28,7 @@ the E3 free-run pilot analysis used:
   -- the window spans window_s / rtf wall seconds, since free-run time
   is wall time since the gate times rtf -- the share of them that were
   holds (n = 0; every fresh call publishes one command), and the
-  requested polling rate from the twin identity ("v2 ... <rate>Hz");
+  requested polling rate from the twin identity ("v2"/"v3 ... <rate>Hz");
 * bridge samples consumed: distinct bridge sample stamps (attitude.txt)
   and how many the twin answered with a command stamped one step later.
 
@@ -290,11 +290,11 @@ def analyze_run(record_path: str, window_s: float) -> Dict[str, object]:
 
 
 def _polling_hz(identity: str) -> Optional[float]:
-    """The requested polling rate in a v2 twin identity, else None."""
+    """The requested polling rate in a v2 or v3 twin identity, else None."""
     from acav.twin_identity import parse_identity
 
     try:
-        return parse_identity(identity).polling_hz
+        return parse_identity(identity, versions=("v2", "v3")).polling_hz
     except ValueError:
         return None
 

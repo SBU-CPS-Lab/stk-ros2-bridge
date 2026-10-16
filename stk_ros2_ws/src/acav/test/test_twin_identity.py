@@ -38,8 +38,9 @@ DECOY_FILES = {
     "stk_matlab/simulink/build_twin_template.m": b"template",
     "acav/config/other.yaml": b"x: 1\n",
 }
+#: Over LF-normalised file text: a.m's CRLF hashes as LF.
 FINGERPRINT_VECTOR = (
-    "aecfd2825eaca8f111a228dab00853ec6b496cea8dd98f52773cf3156e476daa")
+    "c241417d97fa57b740d30e77ee539ddc7d913076acfc4e909f200ca6e65c5ec5")
 
 CONFIG_BYTES = b'{"run_id": "r"}\n'
 CONFIG_SHA = "ea0ab5a1b67c36408f52f019e011c48fef54dad1f331ff35d7ec1261bc355fbb"
@@ -67,7 +68,7 @@ def run_config(tmp_path):
 
 def _identity(config=CONFIG_SHA, build=FINGERPRINT_VECTOR[:16],
               runtime=FINGERPRINT_VECTOR[:16], polling="100Hz"):
-    return f"v2 {config} {build} {runtime} {polling}"
+    return f"v3 {config} {build} {runtime} {polling}"
 
 
 class TestFingerprint:
@@ -121,7 +122,9 @@ class TestParse:
         "",
         # v1, before the polling rate was part of the identity
         "v1 " + CONFIG_SHA + " " + "0" * 16 + " " + "0" * 16,
-        "v2 " + CONFIG_SHA + " " + "0" * 16 + " " + "0" * 16,
+        # v2, before line endings were normalised: refused for new runs
+        "v2 " + CONFIG_SHA + " " + "0" * 16 + " " + "0" * 16 + " 100Hz",
+        "v3 " + CONFIG_SHA + " " + "0" * 16 + " " + "0" * 16,
         "v2 " + CONFIG_SHA[:-1] + " " + "0" * 16 + " " + "0" * 16 + " 100Hz",
         "v2 " + CONFIG_SHA + " " + "0" * 15 + " " + "0" * 16 + " 100Hz",
         "v2 " + CONFIG_SHA.upper() + " " + "0" * 16 + " " + "0" * 16
