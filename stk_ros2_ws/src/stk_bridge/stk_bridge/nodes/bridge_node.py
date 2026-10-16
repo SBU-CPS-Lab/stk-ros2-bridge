@@ -791,9 +791,14 @@ class StkBridgeNode:
         now = self.time_sync.now()
         with self._timings.timed("actuate"):
             self._apply_commands()
-        self._publish_clock(now)
         with self._timings.timed("sense"):
             self._sense_and_publish(now)
+        # After sensing, with the same `now`: the twin steps only when the
+        # telemetry it holds is stamped with the latest ScenarioTime, so a
+        # clock published before sensing left it unable to step for a
+        # whole sensing time per cycle (E3 at rtf 1.0 on 4b26de0: 31 % of
+        # samples answered). Lockstep and the start gate keep their order.
+        self._publish_clock(now)
         # Marked at the cycle's scheduled start, so the slower groups keep
         # their configured rates.
         self._run_rate_groups(scheduled)
