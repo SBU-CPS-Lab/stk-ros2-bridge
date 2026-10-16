@@ -22,7 +22,15 @@ the E3 free-run pilot analysis used:
 * STK read-back: read-backs at a written stamp, and those beyond the
   newest written sample with their angle to it;
 * run conditions: execution mode, graphics mode, real-time factor,
-  start-gate wait and free-run pacing.
+  start-gate wait and free-run pacing;
+* the twin's loop (free-run): its ready calls (calls with matched
+  telemetry stamps, summary.json twin_substeps.samples) per wall second
+  -- the window spans window_s / rtf wall seconds, since free-run time
+  is wall time since the gate times rtf -- the share of them that were
+  holds (n = 0; every fresh call publishes one command), and the
+  requested polling rate from the twin identity ("v2 ... <rate>Hz");
+* bridge samples consumed: distinct bridge sample stamps (attitude.txt)
+  and how many the twin answered with a command stamped one step later.
 
 Percentiles are ``sorted[n // 2]`` and ``sorted[int(0.9 * n)]``, as in the
 pilot analysis. A lockstep run gives 10 Hz, age 0 and deviation 0.
@@ -158,6 +166,14 @@ def analyze_run(record_path: str, window_s: float) -> Dict[str, object]:
     gaps = [b - a for a, b in zip(cmd_t, cmd_t[1:])]
     long_gaps = [g for g in gaps if g > GAP_S]
 
+    bridge_samples = sorted({round(t, 6) for t in att_t if t > -1e-9})
+    consumed = 0
+    for stamp in cmd_t:
+        k = bisect.bisect_left(bridge_samples, stamp - step - 1e-6)
+        if k < len(bridge_samples) and abs(
+                bridge_samples[k] - (stamp - step)) < 1e-6:
+            consumed += 1
+
     substeps = summary.get("twin_substeps")
     if substeps:
         n_source = "twin_substeps"
@@ -214,6 +230,8 @@ def analyze_run(record_path: str, window_s: float) -> Dict[str, object]:
     rtf = summary.get("real_time_factor", provenance.real_time_factor)
     if rtf is None:
         rtf = facts.get("real_time_factor")
+    ready_calls = int(substeps["samples"]) if substeps and         "samples" in substeps else None
+    wall_span = window_s / rtf if rtf and window_s else None
     return {
         "run_id": record.result.run_id,
         "execution_mode": provenance.execution_mode,
@@ -255,7 +273,30 @@ def analyze_run(record_path: str, window_s: float) -> Dict[str, object]:
         "readback_after_median_deg": _p50(after),
         "readback_after_p90_deg": _p90(after),
         "readback_after_max_deg": max(after) if after else None,
+        "twin_polling_hz_requested": _polling_hz(provenance.twin_identity),
+        "twin_ready_calls": ready_calls,
+        "twin_ready_calls_per_wall_s": (
+            ready_calls / wall_span if ready_calls is not None and wall_span
+            else None),
+        "twin_fresh_calls": len(cmd_t),
+        "twin_hold_share": (
+            (ready_calls - len(cmd_t)) / ready_calls if ready_calls
+            else None),
+        "bridge_samples": len(bridge_samples),
+        "bridge_samples_consumed": consumed,
+        "consumed_share": (consumed / len(bridge_samples)
+                           if bridge_samples else None),
     }
+
+
+def _polling_hz(identity: str) -> Optional[float]:
+    """The requested polling rate in a v2 twin identity, else None."""
+    from acav.twin_identity import parse_identity
+
+    try:
+        return parse_identity(identity).polling_hz
+    except ValueError:
+        return None
 
 
 def analyze_folder(folder: str, out_dir: str, window_s: float

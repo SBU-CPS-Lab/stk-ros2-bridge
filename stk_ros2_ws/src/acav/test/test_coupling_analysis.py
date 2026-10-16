@@ -25,6 +25,7 @@ EPOCH = 1717237800.0
 Q0 = (0.0, 0.0, 0.0, 1.0)
 # 10 degrees about x.
 Q10 = (math.sin(math.radians(5)), 0.0, 0.0, math.cos(math.radians(5)))
+IDENTITY_V2 = "v2 " + "a" * 64 + " " + "b" * 16 + " " + "b" * 16 + " 100Hz"
 
 
 def _stamp(t):
@@ -76,7 +77,7 @@ def _bridge_log(mode, rtf, pacing=None):
 
 
 def _run(folder, name, mode, cmd, att, twin, status, images, summary=None,
-         pacing=None, rtf=1.0):
+         pacing=None, rtf=1.0, twin_identity=""):
     """cmd/att: [(t, q)]; twin: [(t, err_deg)]; status: [(t, ms)]."""
     targets = [TargetResult(target_id=f"T{i + 1}", attempted=True,
                             outcome=CaptureOutcome.CAPTURED,
@@ -87,7 +88,8 @@ def _run(folder, name, mode, cmd, att, twin, status, images, summary=None,
         result=RunResult(run_id=name, scheduler="dynamics_aware",
                          targets=targets),
         provenance=Provenance(backend_type="com", execution_mode=mode,
-                              graphics_mode="off", real_time_factor=rtf)))
+                              graphics_mode="off", real_time_factor=rtf,
+                              twin_identity=twin_identity)))
     logs = folder / f"{name}.logs"
     logs.mkdir()
     _write(logs / "cmd.txt", [_attitude_doc(t, q) for t, q in cmd])
@@ -128,7 +130,9 @@ def free_run(tmp_path):
                 images=[0.6, 1.9], rtf=0.5, pacing=(40, 3),
                 summary={"free_run_start_gate": {"opened": True,
                                                  "wait_s": 12.5},
-                         "twin_substeps": {"events": 2, "max_n": 13}})
+                         "twin_substeps": {"samples": 20, "events": 2,
+                                           "max_n": 13}},
+                twin_identity=IDENTITY_V2)
 
 
 class TestParsing:
@@ -198,6 +202,49 @@ class TestFreeRun:
         # bridge sample after t: lags 0.15, 0.15, 1.2 and 0.05 s.
         assert m["write_lag_behind"] == 4
         assert m["write_lag_max_s"] == pytest.approx(1.2)
+
+
+class TestTwinLoop:
+    """How much of the bridge's output the twin used (P5b). The twin's
+    ready calls are its free-run calls with matched telemetry stamps
+    (summary.json twin_substeps.samples); every fresh call publishes one
+    command, so the rest are holds (n = 0). Free-run time is wall time
+    since the gate times rtf, so the window spans window_s / rtf wall
+    seconds."""
+
+    def test_free_run(self, free_run):
+        m = ca.analyze_run(str(free_run), window_s=2.0)
+        assert m["twin_polling_hz_requested"] == 100.0
+        assert m["twin_ready_calls"] == 20
+        assert m["twin_ready_calls_per_wall_s"] == pytest.approx(5.0)
+        assert m["twin_fresh_calls"] == 4
+        assert m["twin_hold_share"] == pytest.approx(0.8)
+        # Distinct bridge stamps 0, 0.25, 0.5, 1.8, 1.95; the commands
+        # answer the first four.
+        assert m["bridge_samples"] == 5
+        assert m["bridge_samples_consumed"] == 4
+        assert m["consumed_share"] == pytest.approx(0.8)
+
+    def test_lockstep_consumes_every_sample(self, lockstep):
+        m = ca.analyze_run(str(lockstep), window_s=1.0)
+        assert m["twin_ready_calls"] is None          # not logged in lockstep
+        assert m["twin_ready_calls_per_wall_s"] is None
+        assert m["twin_hold_share"] is None
+        assert m["twin_polling_hz_requested"] is None  # no identity recorded
+        # Bridge samples 0.1 .. 1.0; the commands 0.1 .. 1.0 answer
+        # 0.0 .. 0.9, of which 0.1 .. 0.9 were captured.
+        assert m["bridge_samples"] == 10
+        assert m["bridge_samples_consumed"] == 9
+
+    @pytest.mark.parametrize("identity", [
+        "", "v1 " + "a" * 64 + " " + "b" * 16 + " " + "b" * 16, "garbage"])
+    def test_no_requested_rate_without_a_v2_identity(self, tmp_path,
+                                                      identity):
+        path = _run(tmp_path, "E3-x", "free_run", cmd=[(0.1, Q0)],
+                    att=[(0.0, Q0)], twin=[(0.0, 0.1)], status=[(0.0, 1.0)],
+                    images=[], twin_identity=identity)
+        assert ca.analyze_run(str(path), 1.0)[
+            "twin_polling_hz_requested"] is None
 
 
 class TestFolder:
