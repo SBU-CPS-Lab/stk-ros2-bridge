@@ -18,7 +18,11 @@ function run_twin_session(runConfigPath, stopFile)
 %
 % (times local, yyyy-mm-ddTHH:MM:SS.FFF). It exits non-zero unless the
 % stop was clean. The runner keeps <run>.logs\matlab.log (-logfile) in
-% every case. The ack wait, the twin identity check and the free-run
+% every case. Simulink reports a run-time error to its Diagnostic Viewer,
+% not to this script, so the viewer's messages are kept in
+% simulink_diagnostics.txt beside the stop file, copied into
+% matlab_session.json (simulink_diagnostics) and printed to matlab.log
+% when the simulation stops by itself. The ack wait, the twin identity check and the free-run
 % start gate stay with the runner.
     here = fileparts(mfilename('fullpath'));
     sessionPath = fullfile(fileparts(stopFile), 'matlab_session.json');
@@ -26,8 +30,11 @@ function run_twin_session(runConfigPath, stopFile)
         'release', version('-release'), 'pid', feature('getpid'), ...
         'run_config', runConfigPath, 'started_at', stamp(), ...
         'built_at', '', 'running_at', '', 'stop_requested_at', '', ...
-        'stopped_at', '', 'exit', '', 'error', '');
+        'stopped_at', '', 'exit', '', 'error', '', ...
+        'simulink_diagnostics', '');
     writeSession(sessionPath, session);
+    diagnosticsPath = fullfile(fileparts(stopFile), 'simulink_diagnostics.txt');
+    diaryOn = false;
     model = '';
     try
         cd(here);
@@ -37,6 +44,9 @@ function run_twin_session(runConfigPath, stopFile)
         session.built_at = stamp();
         writeSession(sessionPath, session);
         clear adcs.simulink_step
+        if isfile(diagnosticsPath), delete(diagnosticsPath); end
+        sldiagviewer.diary(diagnosticsPath, 'UTF-8');
+        diaryOn = true;
         set_param(model, 'SimulationCommand', 'start');
         waitFor(@() strcmp(get_param(model, 'SimulationStatus'), 'running'), 120);
         session.running_at = stamp();
@@ -44,8 +54,11 @@ function run_twin_session(runConfigPath, stopFile)
         while ~isfile(stopFile)
             status = get_param(model, 'SimulationStatus');
             if ~strcmp(status, 'running')
+                [session.simulink_diagnostics, diaryOn] = ...
+                    readDiagnostics(diagnosticsPath, diaryOn);
                 error('run_twin_session:Stopped', ...
-                    'the simulation stopped by itself (status %s)', status);
+                    'the simulation stopped by itself (status %s): %s', ...
+                    status, session.simulink_diagnostics);
             end
             pause(0.5);
         end
@@ -54,6 +67,17 @@ function run_twin_session(runConfigPath, stopFile)
     catch err
         session.exit = 'error';
         session.error = getReport(err, 'extended', 'hyperlinks', 'off');
+        if isempty(session.simulink_diagnostics)
+            [session.simulink_diagnostics, diaryOn] = ...
+                readDiagnostics(diagnosticsPath, diaryOn);
+        end
+        if ~isempty(session.simulink_diagnostics)
+            fprintf('run_twin_session: Simulink diagnostics:\n%s\n', ...
+                session.simulink_diagnostics);
+        end
+    end
+    if diaryOn
+        sldiagviewer.diary('off');
     end
     % Always: stop the simulation and close the model.
     try
@@ -73,6 +97,18 @@ function run_twin_session(runConfigPath, stopFile)
     writeSession(sessionPath, session);
     if ~strcmp(session.exit, 'clean_stop')
         error('run_twin_session:NotClean', '%s', session.error);
+    end
+end
+
+function [text, diaryOn] = readDiagnostics(path, diaryOn)
+%READDIAGNOSTICS The Diagnostic Viewer messages logged so far ('' if none).
+    if diaryOn
+        sldiagviewer.diary('off');          % flushes the file
+        diaryOn = false;
+    end
+    text = '';
+    if isfile(path)
+        text = strtrim(fileread(path));
     end
 end
 
