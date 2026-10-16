@@ -195,6 +195,23 @@ def effective_real_time_factors(output_dir: str) -> dict:
     return {value: sorted(ids) for value, ids in found.items()}
 
 
+def twin_launch_modes(output_dir: str) -> dict:
+    """summary.json twin_launch -> run ids ("manual" when absent: every run
+    before --twin-launch existed was started by hand)."""
+    modes: dict = {}
+    for path in sorted(glob.glob(os.path.join(output_dir, "*.logs",
+                                              "summary.json"))):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                summary = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        mode = str(summary.get("twin_launch") or "manual")
+        modes.setdefault(mode, []).append(
+            str(summary.get("run_id") or path))
+    return {mode: sorted(ids) for mode, ids in modes.items()}
+
+
 def graphics_modes(records: List[RunRecord]) -> dict:
     """provenance.graphics_mode -> run ids ("" for records without one)."""
     modes: dict = {}
@@ -308,6 +325,12 @@ def _parser() -> argparse.ArgumentParser:
                         help="run from code that is not a clean commit "
                              "(refused by default)")
     parser.add_argument("--stop-on-error", action="store_true")
+    parser.add_argument("--twin-launch", choices=("manual", "matlab-batch"),
+                        default="manual",
+                        help="run verb: manual (the default; each run asks "
+                             "for the twin to be started by hand) or "
+                             "matlab-batch (each run starts and stops "
+                             "MATLAB itself)")
     parser.add_argument("--json", default="", metavar="PATH",
                         help="write the report as JSON as well as printing it")
     parser.add_argument("--no-figures", action="store_true",
@@ -382,9 +405,12 @@ def _run(campaign: Campaign, args) -> int:
         stop_on_error=args.stop_on_error,
         code_version=code_version.describe(prefer_env=False),
         allow_code_version_mismatch=args.resume_across_code_versions,
-        allow_dirty=args.allow_dirty)
+        allow_dirty=args.allow_dirty,
+        twin_launch=args.twin_launch)
     try:
-        outcome = run_campaign(campaign, CommandLauncher(launch), options)
+        outcome = run_campaign(
+            campaign, CommandLauncher(launch, twin_launch=args.twin_launch),
+            options)
     except CampaignRefused as refused:
         LOGGER.error("%s", refused)
         return 2
@@ -494,6 +520,21 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             "pooled: %s. Move each mode to its own directory.",
             "; ".join(f"{mode or 'not recorded'!r}: {', '.join(ids)}"
                       for mode, ids in sorted(modes.items())))
+        return 1
+
+    launch_modes = twin_launch_modes(args.output_dir)
+    if len(launch_modes) > 1:
+        # The twin's code, config and results in lockstep are the same;
+        # but a GUI session with the model open and a batch session load
+        # the host differently, and free-run results and every timing
+        # depend on that load -- the same reason graphics modes are kept
+        # apart.
+        LOGGER.error(
+            "refusing to report: these records were made with different "
+            "twin launch modes, which load the host differently: %s. Move "
+            "each mode to its own directory.",
+            "; ".join(f"{mode!r}: {', '.join(ids)}"
+                      for mode, ids in sorted(launch_modes.items())))
         return 1
 
     scenario = scenario_targets(args.scenario)

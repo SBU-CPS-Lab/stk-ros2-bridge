@@ -25,7 +25,7 @@ import os
 import subprocess
 import time
 from dataclasses import asdict, dataclass
-from typing import Callable, List, Optional
+from typing import Callable, Iterable, List, Optional, Tuple
 
 STOP_FILE = "twin.stop"
 MATLAB_LOG_FILE = "matlab.log"
@@ -70,6 +70,8 @@ class SessionResult:
     how: str
     exit_code: Optional[int]
     detail: str = ""
+    #: The PID of the process the runner started (the MATLAB launcher).
+    pid: Optional[int] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -118,11 +120,12 @@ class MatlabBatchTwin:
         if self.process is None:
             self._result = SessionResult("not_started", None)
             return self._result
+        pid = getattr(self.process, "pid", None)
         early = self.process.poll()
         if early is not None:
             self._result = SessionResult(
                 "early_exit", early,
-                "MATLAB exited before the runner asked it to stop")
+                "MATLAB exited before the runner asked it to stop", pid)
             return self._result
         with open(self.stop_file, "w", encoding="utf-8"):
             pass
@@ -131,12 +134,71 @@ class MatlabBatchTwin:
             code = self.process.poll()
             if code is not None:
                 self._result = SessionResult(
-                    "clean_stop" if code == 0 else "error_exit", code)
+                    "clean_stop" if code == 0 else "error_exit", code,
+                    pid=pid)
                 return self._result
             self._sleep(POLL_S)
         self._kill_tree(self.process.pid)
         self._result = SessionResult(
             "timeout_killed", self.process.poll(),
             f"no exit within {timeout_s:.0f} s of the stop file; killed "
-            f"the process tree of PID {self.process.pid}")
+            f"the process tree of PID {self.process.pid}", pid)
         return self._result
+
+
+#: The processes a twin session leaves behind if it does not exit.
+TWIN_IMAGES = ("matlab.exe", "libmwros2server.exe")
+
+
+def processes_of(pids: Iterable[int]) -> List[Tuple[int, str]]:
+    """(pid, image name) of the running processes that are ``pids`` or
+    were started by one of them (Windows, via Win32_Process)."""
+    ids = ",".join(str(int(p)) for p in pids)
+    if not ids:
+        return []
+    script = (f"$ids = @({ids}); Get-CimInstance Win32_Process | "
+              "Where-Object { $ids -contains $_.ProcessId -or "
+              "$ids -contains $_.ParentProcessId } | "
+              "ForEach-Object { \"$($_.ProcessId),$($_.Name)\" }")
+    completed = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True, check=False)
+    found = []
+    for line in completed.stdout.splitlines():
+        pid, _, name = line.strip().partition(",")
+        if pid.isdigit() and name:
+            found.append((int(pid), name))
+    return found
+
+
+def session_pids(log_dir: str) -> List[int]:
+    """The PIDs a run recorded for its twin session: the process the
+    runner started (summary.json) and MATLAB's own (matlab_session.json)."""
+    import json
+
+    pids = []
+    for name, key in (("summary.json", "matlab_session_result"),
+                      (MATLAB_SESSION_FILE, None)):
+        try:
+            with open(os.path.join(log_dir, name), encoding="utf-8") as h:
+                data = json.load(h)
+        except (OSError, ValueError):
+            continue
+        pid = (data.get(key) or {}).get("pid") if key else data.get("pid")
+        if isinstance(pid, int):
+            pids.append(pid)
+    return pids
+
+
+def leftover_twin_processes(log_dir: str,
+                            find: Callable[[Iterable[int]],
+                                           List[Tuple[int, str]]]
+                            = processes_of) -> List[Tuple[int, str]]:
+    """Twin processes (TWIN_IMAGES) still running from the run whose logs
+    are ``log_dir``: those PIDs, or processes they started. Anything else
+    that happens to hold one of those PIDs now is left alone."""
+    pids = session_pids(log_dir)
+    if not pids:
+        return []
+    return [(pid, name) for pid, name in find(pids)
+            if name.lower() in TWIN_IMAGES]

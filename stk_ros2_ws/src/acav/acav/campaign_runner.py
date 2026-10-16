@@ -139,13 +139,21 @@ class RunnerOptions:
     allow_dirty: bool = False
     #: Resolves a commit to its git tree; see code_version.same_code.
     tree_of: Optional[Callable[[str], Optional[str]]] = None
+    #: "manual" or "matlab-batch" (deploy_run_cli --twin-launch). With
+    #: matlab-batch, twin processes the previous run left running are
+    #: killed before the next run, and recorded in twin_cleanup.jsonl.
+    twin_launch: str = "manual"
+    #: (pids) -> [(pid, image name)]; twin_launcher.processes_of.
+    find_processes: Optional[Callable] = None
+    #: pid -> None; twin_launcher.kill_process_tree.
+    kill_tree: Optional[Callable[[int], None]] = None
 
 
 def run_campaign(campaign: Campaign, launcher: Launcher,
                  options: RunnerOptions) -> CampaignOutcome:
     """Execute ``campaign``, one run at a time, and collect the records."""
     os.makedirs(options.output_dir, exist_ok=True)
-    write_manifest(campaign, options.output_dir)
+    write_manifest(campaign, options.output_dir, options.twin_launch)
 
     if not options.dry_run:
         _refuse_unclean_code(options)
@@ -155,6 +163,7 @@ def run_campaign(campaign: Campaign, launcher: Launcher,
     outcome = CampaignOutcome(campaign=campaign)
     scenario = None if options.dry_run else scenario_targets(
         campaign.scenario_path)
+    previous = None          # the last run launched by this invocation
     for run in campaign.runs:
         path = os.path.join(options.output_dir, run.output_name)
 
@@ -181,14 +190,60 @@ def run_campaign(campaign: Campaign, launcher: Launcher,
                 detail=f"could not move the previous attempt aside: "
                        f"{error}"))
         else:
+            if options.twin_launch == "matlab-batch" and previous:
+                _clean_up_twin(previous, options)
             outcome.outcomes.append(_execute(run, campaign, launcher, path,
                                              scenario))
+            previous = (run.run_id, os.path.splitext(path)[0] + ".logs")
         if options.stop_on_error and outcome.outcomes[-1].status == "failed":
             LOGGER.error("stopping: %s failed and stop_on_error is set",
                          run.run_id)
             break
 
     return outcome
+
+
+def _clean_up_twin(previous, options: RunnerOptions) -> None:
+    """Kill twin processes the previous run left running, and record it.
+
+    Only processes that run recorded (its launcher's and MATLAB's PIDs)
+    or that those started, and only MATLAB / libmwros2server images:
+    never another MATLAB instance."""
+    import json
+
+    from acav import twin_launcher
+
+    run_id, log_dir = previous
+    leftovers = twin_launcher.leftover_twin_processes(
+        log_dir, options.find_processes or twin_launcher.processes_of)
+    if not leftovers:
+        return
+    kill = options.kill_tree or twin_launcher.kill_process_tree
+    for pid, _name in leftovers:
+        kill(pid)
+    LOGGER.warning("%s left twin processes running; killed %s", run_id,
+                   leftovers)
+    with open(os.path.join(options.output_dir, "twin_cleanup.jsonl"), "a",
+              encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "after_run": run_id,
+            "pids": sorted(twin_launcher.session_pids(log_dir)),
+            "killed": [[pid, name] for pid, name in leftovers]}) + "\n")
+
+
+def _failed_steps(output_path: str) -> List[str]:
+    """Steps the run's summary.json records as failed (none if absent)."""
+    import json
+
+    summary = os.path.splitext(output_path)[0] + ".logs"
+    try:
+        with open(os.path.join(summary, "summary.json"),
+                  encoding="utf-8") as handle:
+            steps = json.load(handle).get("steps") or []
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [str(s.get("step")) for s in steps
+            if isinstance(s, dict) and s.get("ok") is False]
 
 
 def _supersede_previous_attempt(output_path: str) -> None:
@@ -372,6 +427,15 @@ def _load_if_usable(run: RunSpec, path: str,
     except (RecordError, ValueError, KeyError, OSError) as error:
         LOGGER.warning("ignoring unreadable record %s: %s", path, error)
         return None
+    failed = _failed_steps(path)
+    if failed:
+        # A failed run is re-run, whatever failed -- a MATLAB session that
+        # exited early or stopped uncleanly among them; its bundle is
+        # kept as .superseded-*.
+        LOGGER.warning("not resuming over %s: its run recorded failed "
+                       "step(s) %s; it will be re-run", path,
+                       ", ".join(failed))
+        return None
     if check_record(run, record, scenario):
         LOGGER.warning("ignoring %s: it does not match the requested run",
                        path)
@@ -440,7 +504,8 @@ def _code_version() -> str:
     return describe()
 
 
-def write_manifest(campaign: Campaign, output_dir: str) -> str:
+def write_manifest(campaign: Campaign, output_dir: str,
+                   twin_launch: str = "manual") -> str:
     """Write the campaign definition next to its results.
 
     So a directory of records is self-describing months later: what was
@@ -453,6 +518,8 @@ def write_manifest(campaign: Campaign, output_dir: str) -> str:
     path = os.path.join(output_dir, "campaign.json")
     manifest = campaign.to_dict()
     manifest["code_version"] = _code_version()
+    if twin_launch != "manual":
+        manifest["twin_launch"] = twin_launch
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle, indent=2)
         handle.write("\n")
@@ -467,7 +534,9 @@ class CommandLauncher:
     template: ``{run_id}``, ``{experiment}``, ``{scheduler}``,
     ``{execution_mode}``, ``{seed}``, ``{output}``, ``{scenario}``,
     ``{backend}``, ``{attitude_provider}``, ``{run_config}``,
-    ``{gains_json}``, ``{fault_json}``.
+    ``{gains_json}``, ``{fault_json}``, ``{twin_launch}``. With a
+    twin_launch other than "manual", a template without
+    ``{twin_launch}`` gets ``--twin-launch <value>`` appended.
 
     ``{run_config}`` is the file the runner wrote with this run's gain
     and fault overrides; hand it to the twin build, which reads it via
@@ -481,10 +550,12 @@ class CommandLauncher:
     """
 
     def __init__(self, argv: Sequence[str], timeout_s: Optional[float] = None,
-                 cwd: str = "", env: Optional[Dict[str, str]] = None):
+                 cwd: str = "", env: Optional[Dict[str, str]] = None,
+                 twin_launch: str = "manual"):
         if not argv:
             raise ValueError("a launch command is required")
         self._argv = list(argv)
+        self._twin_launch = twin_launch
         self._timeout_s = timeout_s
         self._cwd = cwd or None
         self._env = env
@@ -509,7 +580,13 @@ class CommandLauncher:
                 None if run.fault is None else run.fault.to_dict(),
                 sort_keys=True),
         }
+        substitutions["twin_launch"] = self._twin_launch
         argv = [arg.format(**substitutions) for arg in self._argv]
+        # Automated: every run starts its own twin, unless the template
+        # places the option itself. Manual commands are left as written.
+        if (self._twin_launch != "manual"
+                and not any("{twin_launch}" in arg for arg in self._argv)):
+            argv += ["--twin-launch", self._twin_launch]
 
         LOGGER.debug("launching: %s", argv)
         completed = subprocess.run(argv, cwd=self._cwd, env=self._env,
