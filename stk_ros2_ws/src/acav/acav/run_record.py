@@ -93,6 +93,11 @@ class Provenance:
     #: the same experiment while reading different scenarios is the kind
     #: of error that produces a publishable-looking contradiction.
     scenario_sha256: str = ""
+    #: For a generated scenario (acav.scenario_generator): its seed and
+    #: the generator version, from the file's header; None and "" for the
+    #: reference and in records written before they were recorded.
+    scenario_seed: Optional[int] = None
+    scenario_generator_version: str = ""
     #: Controller gains in force, for E4's sweep.
     gains: Dict[str, float] = field(default_factory=dict)
     #: The injected fault for this run, if any (see acav.fault_injection).
@@ -148,6 +153,8 @@ class Provenance:
             "stk_version": self.stk_version,
             "execution_mode": self.execution_mode,
             "scenario_sha256": self.scenario_sha256,
+            "scenario_seed": self.scenario_seed,
+            "scenario_generator_version": self.scenario_generator_version,
             "gains": dict(self.gains),
             "fault": self.fault,
             "attitude_provider": self.attitude_provider,
@@ -169,6 +176,10 @@ class Provenance:
             stk_version=str(raw.get("stk_version", "")),
             execution_mode=str(raw.get("execution_mode", "unknown")),
             scenario_sha256=str(raw.get("scenario_sha256", "")),
+            scenario_seed=(None if raw.get("scenario_seed") is None
+                           else int(raw["scenario_seed"])),
+            scenario_generator_version=str(
+                raw.get("scenario_generator_version", "") or ""),
             gains={str(k): float(v)
                    for k, v in (raw.get("gains") or {}).items()},
             fault=raw.get("fault"),

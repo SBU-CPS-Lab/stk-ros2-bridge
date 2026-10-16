@@ -820,18 +820,19 @@ class SchedulerNode:
         from acav.run_record import (
             Provenance,
             RunRecord,
-            scenario_digest,
             write_record,
         )
 
-        digest = ""
+        scenario = {"scenario_sha256": ""}
         # The file the spec was actually loaded from: the default one when
         # no path was given -- which is how every campaign so far ran, and
         # why their records carry no scenario fingerprint at all.
         scenario_file = self._options.scenario_path or "(default)"
         try:
+            from acav.scenarios import scenario_provenance
+
             scenario_file = AcavSpec.locate(self._options.scenario_path or None)
-            digest = scenario_digest(scenario_file)
+            scenario = scenario_provenance(scenario_file)
         except (OSError, FileNotFoundError, ValueError) as error:
             LOGGER.warning("could not hash the scenario file %s: %s",
                            scenario_file, error)
@@ -843,7 +844,7 @@ class SchedulerNode:
                 backend_type=self._backend_type,
                 stk_version=self._stk_version,
                 execution_mode=self._execution_mode,
-                scenario_sha256=digest,
+                **scenario,
                 gains=_parse_json_object(self._options.gains_json, "gains"),
                 attitude_provider=self._recorded_attitude_provider(),
                 attitude_readback_provider=self._readback_provider,

@@ -873,6 +873,34 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             return EXIT_STEP_FAILED
         summary["run_config"] = run_config
         summary["run_config_run_id_verified"] = verified
+        if config.scenario:
+            # The twin always reads the reference scenario: a scenario
+            # that differs from it anywhere but its targets would give the
+            # twin other parameters than the scheduler.
+            from acav.run_record import scenario_digest
+            from acav.scenarios import (scenario_origin,
+                                        twin_parameter_differences)
+            try:
+                differences = twin_parameter_differences(config.scenario)
+            except Exception as error:      # noqa: BLE001 - recorded
+                record("scenario", False,
+                       f"cannot load {config.scenario}: {error}")
+                return EXIT_STEP_FAILED
+            if differences:
+                record("scenario", False,
+                       f"{config.scenario} differs from the reference "
+                       f"scenario in {', '.join(differences)}; the twin "
+                       f"reads the reference, so this run would give it "
+                       f"other parameters")
+                return EXIT_STEP_FAILED
+            seed, generator_version = scenario_origin(config.scenario)
+            summary["scenario"] = {
+                "path": config.scenario,
+                "sha256": scenario_digest(config.scenario),
+                "seed": seed, "generator_version": generator_version}
+            record("scenario", True,
+                   f"{config.scenario} (seed {seed}); the twin's sections "
+                   f"match the reference")
         if not verified:
             run_log.warning("run config has no run_id; cannot verify it "
                             "belongs to this run: %s", run_config)

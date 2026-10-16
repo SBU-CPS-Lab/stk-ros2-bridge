@@ -61,7 +61,7 @@ from acav.campaign_runner import (
     RunnerOptions,
     run_campaign,
 )
-from acav.run_record import RunRecord, read_record, scenario_targets, \
+from acav.run_record import RunRecord, read_record, \
     target_coverage_problems, unreportable
 from acav.spec import AcavSpec
 
@@ -539,18 +539,43 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
                       for mode, ids in sorted(launch_modes.items())))
         return 1
 
-    scenario = scenario_targets(args.scenario)
-    uncovered = {r.result.run_id: target_coverage_problems(r, scenario)
-                 for r in records}
-    uncovered = {run_id: p for run_id, p in uncovered.items() if p}
+    # Each record against its own scenario, found by digest among the
+    # reference, the generated scenarios and --scenario.
+    from acav.scenarios import known_scenarios, scenario_of
+
+    known = known_scenarios([args.scenario] if args.scenario else [])
+    uncovered, used = {}, {}
+    for r in records:
+        scenario = scenario_of(r, known)
+        if scenario is None:
+            named = r.provenance.scenario_sha256 or "none"
+            uncovered[r.result.run_id] = [
+                f"names scenario {named[:12]}..., which is not among the "
+                f"known scenario files (the reference, "
+                f"config/scenarios/generated, --scenario)"]
+            continue
+        used.setdefault(scenario.sha256, (scenario, []))[1].append(
+            r.result.run_id)
+        problems = target_coverage_problems(r, scenario)
+        if problems:
+            uncovered[r.result.run_id] = problems
     if uncovered:
         LOGGER.error(
             "refusing to report: these records do not cover exactly the "
-            "targets of the scenario %s, so every count in them is wrong: "
-            "%s. Re-run them.", scenario.path,
+            "targets of their scenario, so every count in them is wrong: "
+            "%s. Re-run them.",
             "; ".join(f"{run_id} ({'; '.join(problems)})"
                       for run_id, problems in sorted(uncovered.items())))
         return 1
+    if len(used) > 1:
+        LOGGER.error(
+            "refusing to report: these records come from %d scenarios; "
+            "report each scenario from its own directory: %s", len(used),
+            "; ".join(f"{scenario.path}: {', '.join(sorted(ids))}"
+                      for scenario, ids in used.values()))
+        return 1
+    if used:
+        total_targets = len(next(iter(used.values()))[0].target_ids)
 
     report = analyse(args.experiment, records, total_targets)
     text = json.dumps(report, indent=2, default=str)
