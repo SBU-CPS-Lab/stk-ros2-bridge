@@ -103,6 +103,42 @@ function test_free_run_twin()
     assert(written.min_stamp_offset_s <= 0 && written.min_stamp_offset_s > -cfg.stepS);
     clear adcs.simulink_step
 
+    % -- the loop counters: every call, ready, fresh; a line per second ---
+    % Free-run only. calls counts not-ready calls too (stamps not yet
+    % matching), so the achieved Simulink step rate and the share of
+    % holds are measured, not inferred.
+    loopRun = writeConfig(root, 'E3-loop', '{"run_id": "E3-loop", "execution_mode": "free_run"}');
+    mkdir(fullfile(root, 'E3-loop.logs'));
+    clear adcs.simulink_step
+    step(loopRun, 0.0, true, pos, vel, target, [0 0 0 0], [0 0 0]);   % not ready
+    o = step(loopRun, 0.0, false, pos, vel, target, [0 0 0 1], [0 0 0]); % fresh
+    o = step(loopRun, 0.05, false, pos, vel, target, o.qCmd, o.omegaCmd);  % hold
+    loopFile = fullfile(root, 'E3-loop.logs', 'twin_loop.csv');
+    assert(~isfile(loopFile), 'nothing written within the first second');
+    pause(1.1);
+    step(loopRun, 0.1, false, pos, vel, target, o.qCmd, o.omegaCmd);      % fresh
+    counts = adcs.simulink_step('loop_statistics');
+    assert(counts.calls == 4 && counts.ready == 3 && counts.fresh == 2);
+    lines = splitlines(strtrim(fileread(loopFile)));
+    assert(strcmp(lines{1}, 'wall_local,calls,ready,fresh,holds,t_s'));
+    assert(numel(lines) == 2);
+    fields = split(lines{2}, ',');
+    assert(~isempty(regexp(fields{1}, '^\d\d:\d\d:\d\d\.\d{3}$', 'once')));
+    assert(isequal(str2double(fields(2:6)).', [4 3 2 1 0.1]));
+    clear adcs.simulink_step
+
+    % Lockstep counts nothing and writes nothing.
+    lockRun = writeConfig(root, 'E6-loop', '{"run_id": "E6-loop", "execution_mode": "lockstep"}');
+    mkdir(fullfile(root, 'E6-loop.logs'));
+    runSequence(lockRun, (0:12) * cfg.stepS, still);
+    o = step(lockRun, 0.0, true, pos, vel, target, [0 0 0 1], [0 0 0]);
+    pause(1.1);
+    step(lockRun, 0.1, false, pos, vel, target, o.qCmd, o.omegaCmd);
+    counts = adcs.simulink_step('loop_statistics');
+    assert(counts.calls == 0 && counts.ready == 0 && counts.fresh == 0);
+    assert(~isfile(fullfile(root, 'E6-loop.logs', 'twin_loop.csv')));
+    clear adcs.simulink_step
+
     fprintf(['PASS: free-run ZOH sub-stepping with causal propagated geometry, ' ...
              'holds, rounding, Earth rate, lockstep unchanged.\n']);
 end

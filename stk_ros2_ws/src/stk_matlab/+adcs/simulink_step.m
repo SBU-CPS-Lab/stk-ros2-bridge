@@ -36,10 +36,24 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
 % is recorded. n > 1 occurrences, the largest n and the most negative
 % stamp offset go to <run>.logs/twin_substeps.json when they change;
 % adcs.simulink_step('substep_statistics') returns them.
+%
+% Free-run also counts every call (calls; not-ready ones too, e.g. while
+% the telemetry stamps do not yet match ScenarioTime), the ready ones and
+% the fresh ones (n > 0), and about once per wall second appends
+% "wall_local,calls,ready,fresh,holds,t_s" (cumulative; t_s the call's
+% telemetry time, NaN when not ready) to <run>.logs/twin_loop.csv, so the
+% achieved Simulink step rate is measured.
+% adcs.simulink_step('loop_statistics') returns the counts. Lockstep
+% counts and writes nothing.
     persistent cfg state lastTime lastOutput identityBytes identityCount
     persistent freeT0 freeSteps freeStats freeStatsPath freeLast identityTic
+    persistent freeLoop loopTic loopPath
     if ischar(qMeas) && strcmp(qMeas, 'substep_statistics')
         torque = freeStats;
+        return
+    end
+    if ischar(qMeas) && strcmp(qMeas, 'loop_statistics')
+        torque = freeLoop;
         return
     end
     if nargin < 10, targetId = ''; end
@@ -57,6 +71,12 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
         freeStats = struct('samples', 0, 'steps', 0, 'events', 0, ...
             'max_n', 0, 'min_stamp_offset_s', 0);
         freeStatsPath = substepStatsPath(runConfigPath);
+        freeLoop = struct('calls', 0, 'ready', 0, 'fresh', 0);
+        loopTic = [];
+        loopPath = '';
+        if ~isempty(freeStatsPath)
+            loopPath = fullfile(fileparts(freeStatsPath), 'twin_loop.csv');
+        end
         if strcmp(cfg.attitudeMismatchPolicy, 'e1_readback_ablation')
             warning('adcs:simulink_step:E1Ablation', ...
                 'E1 treatment: mismatch guard disabled; measured attitude drives feedback. Not a nominal run.');
@@ -74,6 +94,14 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
     end
     fresh = false;
     identityDue = false;
+    freeRun = strcmp(cfg.executionMode, 'free_run');
+    if freeRun
+        freeLoop.calls = freeLoop.calls + 1;
+        freeLoop.ready = freeLoop.ready + double(ready);
+    end
+    if freeRun && ~ready
+        loopTic = loopTick(loopTic, loopPath, freeLoop, NaN);
+    end
     if ~ready
         torque = zeros(1,3); qCmd = zeros(1,4); omegaCmd = zeros(1,3); mode = 1;
         err = 0; momentum = state.wheelMomentum;
@@ -97,6 +125,8 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
         freeStats.samples = freeStats.samples + 1;
         reached = floor((t - freeT0) / cfg.stepS + 1e-6) + 1;
         n = reached - freeSteps;
+        freeLoop.fresh = freeLoop.fresh + double(n > 0);
+        loopTic = loopTick(loopTic, loopPath, freeLoop, t);
         current = struct('t', t, 'position', pos, 'velocity', vel, ...
             'targetEci', targetEci, 'haveTarget', haveTarget, 'targetId', targetId);
         if n <= 0
@@ -227,6 +257,34 @@ function path = substepStatsPath(runConfigPath)
             path = fullfile(logs, 'twin_substeps.json');
         end
     end
+end
+
+function loopTic = loopTick(loopTic, path, counts, t)
+%LOOPTICK Start the per-second clock on the first call; afterwards append
+% one cumulative line to twin_loop.csv once a wall second has passed.
+    if isempty(loopTic)
+        loopTic = tic;
+        return
+    end
+    if toc(loopTic) < 1.0
+        return
+    end
+    loopTic = tic;
+    if isempty(path)
+        return
+    end
+    header = ~isfile(path);
+    fid = fopen(path, 'a');
+    if fid < 0
+        return
+    end
+    if header
+        fprintf(fid, 'wall_local,calls,ready,fresh,holds,t_s\n');
+    end
+    fprintf(fid, '%s,%d,%d,%d,%d,%.6f\n', datestr(now, 'HH:MM:SS.FFF'), ...
+        counts.calls, counts.ready, counts.fresh, ...
+        counts.ready - counts.fresh, t);
+    fclose(fid);
 end
 
 function writeSubstepStats(path, stats)
