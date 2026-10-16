@@ -38,7 +38,10 @@ import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-GENERATOR_VERSION = "1"
+#: 1: 12 targets (>= 6/2/2), ending by about 410 s.
+#: 2: 22 targets (>= 11/4/4, the rest moderate), the last image epoch at
+#:    650 s or later, so the targets fill the window; everything else as 1.
+GENERATOR_VERSION = "2"
 
 COMFORTABLE, MODERATE, MARGINAL, INFEASIBLE = (
     "comfortable", "moderate", "marginal", "infeasible")
@@ -46,16 +49,18 @@ COMFORTABLE, MODERATE, MARGINAL, INFEASIBLE = (
 
 @dataclass(frozen=True)
 class GeneratorConfig:
-    n_targets: int = 12
+    n_targets: int = 22
     earliest_s: int = 40
     latest_s: int = 700
+    #: The last image epoch must be at least this late (window coverage).
+    last_at_least_s: int = 650
     min_spacing_s: int = 4
     cross_track_min_km: int = 20
     cross_track_max_km: int = 260
     #: At least this many transitions of each class; the rest are
     #: MODERATE.
     quota: Tuple[Tuple[str, int], ...] = (
-        (COMFORTABLE, 6), (MARGINAL, 2), (INFEASIBLE, 2))
+        (COMFORTABLE, 11), (MARGINAL, 4), (INFEASIBLE, 4))
     #: Margin drawn for each class, seconds (MARGINAL is set by rounding).
     margins: Tuple[Tuple[str, Tuple[float, float]], ...] = (
         (COMFORTABLE, (25.0, 40.0)), (MODERATE, (5.0, 20.0)),
@@ -117,6 +122,8 @@ def _try_sequence(spec, config: GeneratorConfig,
         last_epoch = t
         if kind != INFEASIBLE:
             previous_cross, previous_t = float(cross), t
+    if targets[-1].t_image_s < config.last_at_least_s:
+        return None
     return targets
 
 

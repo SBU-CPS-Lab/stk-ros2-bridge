@@ -12,9 +12,10 @@ with plan_dynamics_aware:
     marginal     attempted, 0 <= margin < 1 s
     infeasible   declined, margin <= -1.5 s
 
-Defaults: 12 targets, at least 6 / 2 / 2 of those; image epochs on whole
-seconds in [40, 700] s, at least 4 s apart; cross-track offsets 20-260
-km either side.
+Defaults (generator version 2): 22 targets, at least 11 / 4 / 4 of
+those (the rest moderate); image epochs on whole seconds in [40, 700] s,
+at least 4 s apart, the last at 650 s or later so the window is used;
+cross-track offsets 20-260 km either side.
 """
 
 import pytest
@@ -63,11 +64,11 @@ def test_every_constraint(generated, seed):
     spec = AcavSpec.load(generated[seed])          # loads and validates
     reference = AcavSpec.load()
     targets = sorted(spec.targets, key=lambda t: t.t_image_s)
-    assert len(targets) == 12
-    assert [t.id for t in spec.targets] == [f"T{k}" for k in range(1, 13)]
+    assert len(targets) == 22
+    assert [t.id for t in spec.targets] == [f"T{k}" for k in range(1, 23)]
     epochs = [t.t_image_s for t in targets]
     assert all(e == int(e) for e in epochs)
-    assert 40 <= epochs[0] and epochs[-1] <= 700
+    assert 40 <= epochs[0] and 650 <= epochs[-1] <= 700
     assert all(b - a >= 4 for a, b in zip(epochs, epochs[1:]))
     assert all(20 <= abs(t.cross_track_km) <= 260 for t in targets)
     assert spec.ground_station == {}
@@ -84,10 +85,10 @@ def test_the_class_mix_is_guaranteed(generated, seed):
     comfortable = [e for e in plan.attempted if e.margin_s > 25.0]
     marginal = [e for e in plan.attempted if 0.0 <= e.margin_s < 1.0]
     infeasible = [d for d in plan.declined if d.margin_s <= -1.5]
-    assert len(comfortable) >= 6
-    assert len(marginal) >= 2
-    assert len(infeasible) >= 2
-    assert len(plan.attempted) + len(plan.declined) == 12
+    assert len(comfortable) >= 11
+    assert len(marginal) >= 4
+    assert len(infeasible) >= 4
+    assert len(plan.attempted) + len(plan.declined) == 22
     # Every declined target is a designed infeasible one.
     assert len(plan.declined) == len(infeasible)
 
@@ -113,4 +114,4 @@ def test_the_file_is_the_reference_with_targets_replaced(generated):
     assert "ground_station:" not in text
     assert "\r\n" not in text
     data = yaml.safe_load(text)
-    assert len(data["targets"]["list"]) == 12
+    assert len(data["targets"]["list"]) == 22

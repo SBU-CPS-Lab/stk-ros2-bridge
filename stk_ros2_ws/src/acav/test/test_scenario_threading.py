@@ -52,7 +52,7 @@ class TestKnownScenarios:
         reference = known[scenario_digest(AcavSpec.locate())]
         assert reference.path == AcavSpec.locate()
         seed3 = os.path.join(sc.GENERATED_DIR, "acav_seed3.yaml")
-        assert known[scenario_digest(seed3)].target_ids[-1] == "T12"
+        assert known[scenario_digest(seed3)].target_ids[-1] == "T22"
 
     def test_an_extra_file_is_known(self, tmp_path):
         extra = sg.write_scenario(42, str(tmp_path))
