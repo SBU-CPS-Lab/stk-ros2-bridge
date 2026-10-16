@@ -96,6 +96,10 @@ class RunConfig:
     real_time_factor: Optional[float] = None
     #: A one-off measurement that report must never pool (summary.json).
     diagnostic_label: str = ""
+    #: "manual" (a person builds the model and presses Play, as always)
+    #: or "matlab-batch" (the runner starts and stops MATLAB itself, see
+    #: acav/twin_launcher.py).
+    twin_launch: str = "manual"
 
     def resolved_log_dir(self) -> str:
         if self.log_dir:
@@ -129,6 +133,9 @@ class Deps:
                                   Optional[dict]] = None
     prompt: Callable[[str], None] = lambda message: input(message)  # noqa: E731
     sleep: Callable[[float], None] = time.sleep
+    #: (run config path, log dir) -> a twin process with start(), stop()
+    #: and exit_code(), for --twin-launch matlab-batch.
+    launch_twin: Callable[[str, str], object] = None
 
     def __post_init__(self) -> None:
         if self.start_recorder is None:
@@ -144,6 +151,9 @@ class Deps:
             self.confirm_twin_identity = _confirm_twin_identity_ros
         if self.read_graphics_state is None:
             self.read_graphics_state = _read_graphics_state_file
+        if self.launch_twin is None:
+            from acav.twin_launcher import MatlabBatchTwin
+            self.launch_twin = MatlabBatchTwin
 
 
 @dataclass
@@ -751,6 +761,31 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
     bridge_proc = None
     scheduler_proc = None
     scheduler_returncode = EXIT_STEP_FAILED
+    twin_state = {"twin": None, "done": False}
+
+    def finish_twin() -> bool:
+        """matlab-batch only: stop the twin once, record how it ended."""
+        twin = twin_state["twin"]
+        if twin is None or twin_state["done"]:
+            return True
+        twin_state["done"] = True
+        from acav.twin_launcher import MATLAB_SESSION_FILE
+        result = twin.stop()
+        session = _read_json_or_none(
+            os.path.join(log_dir, MATLAB_SESSION_FILE))
+        summary["matlab_session_result"] = result.to_dict()
+        summary["matlab_session"] = session
+        version = str((session or {}).get("matlab_version", "") or "")
+        summary["matlab_version"] = version
+        ok = (result.how == "clean_stop" and session is not None
+              and session.get("exit") == "clean_stop")
+        record("matlab_session", ok,
+               f"{result.how}, exit code {result.exit_code}"
+               + (f": {result.detail}" if result.detail else ""))
+        if version:
+            _label_record(config.output, matlab_version=version)
+        return ok
+
     try:
         # Before anything is launched: the twin cannot start without it.
         try:
@@ -827,23 +862,38 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                     summary, record):
                 return EXIT_STEP_FAILED
 
-            deps.prompt(
-                "\n"
-                "=== Start the MATLAB/Simulink twin now ===\n"
-                f"  matlab -batch \"cd('src/stk_matlab'); "
-                f"setup_stk_ros; "
-                f"build_acav_twin('RunConfigPath', '{run_config}')\"\n"
-                "then open the generated acav_twin.slx and press Play.\n"
-                "Press Enter here once it is running "
-                "(this script will then WAIT for its barrier ack, not "
-                "just trust the keypress): ")
+            ack_timeout_s = config.twin_ack_timeout_s
+            if config.twin_launch == "matlab-batch":
+                from acav.twin_launcher import AUTOMATED_TWIN_ACK_TIMEOUT_S
+                ack_timeout_s = AUTOMATED_TWIN_ACK_TIMEOUT_S
+                summary["twin_launch"] = config.twin_launch
+                summary["twin_ack_timeout_s"] = ack_timeout_s
+                twin_state["twin"] = deps.launch_twin(run_config, log_dir)
+                twin_state["twin"].start()
+                record("twin_launch", True,
+                       " ".join(twin_state["twin"].argv))
+            else:
+                deps.prompt(
+                    "\n"
+                    "=== Start the MATLAB/Simulink twin now ===\n"
+                    f"  matlab -batch \"cd('src/stk_matlab'); "
+                    f"setup_stk_ros; "
+                    f"build_acav_twin('RunConfigPath', '{run_config}')\"\n"
+                    "then open the generated acav_twin.slx and press Play.\n"
+                    "Press Enter here once it is running "
+                    "(this script will then WAIT for its barrier ack, not "
+                    "just trust the keypress): ")
 
-            twin_ok = deps.wait_for_twin_ack(
-                config.prefix, config.twin_ack_timeout_s)
-            record("twin_acking", twin_ok,
-                   "" if twin_ok else "no matlab_twin ack seen before "
-                                      "timeout -- check the Simulink "
-                                      "model's Subscribe/Publish topics")
+            twin_ok = deps.wait_for_twin_ack(config.prefix, ack_timeout_s)
+            detail = "" if twin_ok else ("no matlab_twin ack seen before "
+                                         "timeout -- check the Simulink "
+                                         "model's Subscribe/Publish topics")
+            if not twin_ok and twin_state["twin"] is not None:
+                code = twin_state["twin"].exit_code()
+                if code is not None:
+                    detail = (f"MATLAB exited (code {code}) before the twin "
+                              f"acked; see matlab.log")
+            record("twin_acking", twin_ok, detail)
             if not twin_ok:
                 return EXIT_STEP_FAILED
 
@@ -905,17 +955,23 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             # bridge before waiting for a human, otherwise a successful run
             # can acquire a spurious missing-ack timeout during teardown.
             _stop_process(bridge_proc, "bridge", run_log)
-            deps.prompt(
-                "\n"
-                "=== Scheduler finished. Stop the Simulink twin now "
-                "(the model has no automatic stop) and press Enter to "
-                "continue: ")
+            matlab_ok = True
+            if twin_state["twin"] is None:
+                deps.prompt(
+                    "\n"
+                    "=== Scheduler finished. Stop the Simulink twin now "
+                    "(the model has no automatic stop) and press Enter to "
+                    "continue: ")
+            else:
+                matlab_ok = finish_twin()
 
         return (EXIT_OK if scheduler_returncode == 0 and graphics_ok
-                and gate_ok else EXIT_STEP_FAILED)
+                and gate_ok and matlab_ok else EXIT_STEP_FAILED)
     finally:
         for name, process in (("scheduler", scheduler_proc), ("bridge", bridge_proc)):
             _stop_process(process, name, run_log)
+        # A failed matlab-batch run still stops MATLAB and records how.
+        finish_twin()
         if recorder is not None:
             recorder.close()
             record("topic_capture", not recorder.error, recorder.error or "files saved")
@@ -964,6 +1020,12 @@ def _parser() -> argparse.ArgumentParser:
                         help="STK graphics state this run requires: off (no "
                              "2D/3D Graphics window, STK minimised; the "
                              "default) or on")
+    parser.add_argument("--twin-launch", choices=("manual", "matlab-batch"),
+                        default="manual",
+                        help="manual (the default: build the twin and press "
+                             "Play when asked) or matlab-batch (the runner "
+                             "starts MATLAB with run_twin_session and stops "
+                             "it after the run)")
     parser.add_argument("--diagnostic-label", default="", type=_label,
                         metavar="TEXT",
                         help="mark this run as a one-off diagnostic; "
@@ -1007,6 +1069,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         graphics_mode=args.graphics_mode,
         real_time_factor=args.real_time_factor,
         diagnostic_label=args.diagnostic_label,
+        twin_launch=args.twin_launch,
     )
     return execute_run(config)
 

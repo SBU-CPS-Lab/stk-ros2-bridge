@@ -133,6 +133,10 @@ class Provenance:
     #: run orchestrator; None in records written before it was recorded
     #: (campaign_cli.effective_real_time_factors says how those count).
     real_time_factor: Optional[float] = None
+    #: MATLAB's version() in the session that ran the twin, when the run
+    #: orchestrator started it (--twin-launch matlab-batch); empty for a
+    #: twin started by hand and in records written before it existed.
+    matlab_version: str = ""
     started_utc: str = ""
     finished_utc: str = ""
     #: Free-text, e.g. which machine, which STK licence features.
@@ -152,6 +156,7 @@ class Provenance:
             "twin_identity": self.twin_identity,
             "graphics_mode": self.graphics_mode,
             "real_time_factor": self.real_time_factor,
+            "matlab_version": self.matlab_version,
             "started_utc": self.started_utc,
             "finished_utc": self.finished_utc,
             "notes": self.notes,
@@ -175,6 +180,7 @@ class Provenance:
             graphics_mode=str(raw.get("graphics_mode", "") or ""),
             real_time_factor=(None if raw.get("real_time_factor") is None
                               else float(raw["real_time_factor"])),
+            matlab_version=str(raw.get("matlab_version", "") or ""),
             started_utc=str(raw.get("started_utc", "")),
             finished_utc=str(raw.get("finished_utc", "")),
             notes=str(raw.get("notes", "")),
