@@ -257,6 +257,20 @@ signature. The graphics state is therefore an enforced run condition:
   `unverified` record outright: re-run it.
 - Restore the windows after the session if you need them.
 
+### Timing runs: no CPU sampler, QuickEdit off
+
+- **E6 timing runs are made without any CPU sampler.** A sampler that
+  queries every process through WMI each second ran during the session
+  whose E6 step was 79.1 ms, against 60.7 ms in the previous session
+  with no lockstep code change (suspected, not shown, to be the
+  sampler). CPU sampling is for diagnostic runs only. E6 is reported as
+  mean ± sd over repeated runs in one session.
+- **Turn off QuickEdit** in the PowerShell window that runs the
+  session (title bar → Properties → Options → untick "QuickEdit
+  Mode"). A text selection in that window pauses the runner's console
+  output, and with it the runner; one pilot run waited 6 min 20 s at
+  the start gate, most likely for this reason.
+
 ### Running validation sessions safely
 
 A session that compares commits switches branches between runs. On
@@ -1139,9 +1153,13 @@ from its run config.
   taken every 1000 iterations and at the stop time.
 - **Twin.** Each sample at time t integrates enough fixed 0.1 s steps
   to reach the first step boundary after t, counted from its first
-  sample. Position, velocity and target are held at the sample's values
-  (zero-order hold); when no new step boundary is reached, it holds its
-  outputs. The reached state can be up to one step earlier than the
+  sample. Each step uses the newest sample stamped at or before its
+  time, with position and target propagated forward to it
+  (`adcs.geometry_at`, `72be372`); when no new step boundary is reached,
+  it holds its outputs. The model steps at a requested 100 Hz (Simulink
+  pacing, `4b26de0`), and `<run>.logs\twin_loop.csv` logs its calls,
+  ready, fresh and hold counts about once per wall second
+  (`8345551`). The reached state can be up to one step earlier than the
   command's stamp (t + 0.1 s). That offset, the number of samples that
   needed more than one step, and the largest such count are written to
   `<run>.logs\twin_substeps.json` and copied into `summary.json` as
@@ -1152,14 +1170,22 @@ from its run config.
   `free_run_pacing` (cycles, overruns, period).
 - **Sensing.** The combined attitude/rate read and orbit batching are
   off in free-run, and the record says so (`sensing_mode: separate`,
-  `orbit_batch_samples: 1`).
+  `orbit_batch_samples: 1`). ScenarioTime is published after sensing,
+  so the twin can step as soon as a cycle's messages are out
+  (`1628866`).
+- **Access.** Access for a target is computed only once an attitude
+  sample at or after its image epoch has been written; each target's
+  wait is in the record (`88e60f1`).
 - **Real-time factor.** `--real-time-factor RTF` (default: the bridge
   config's, 1.0) sets how fast free-run time follows the wall clock. It
   is recorded in `summary.json` and the record, and `report` refuses to
   pool different values.
 - **Analysis.** `python src\acav\scripts\analyze_coupling.py <folder>`
   computes the control rate, gaps, sample ages, stamp offsets, write
-  lag, COM stalls and STK read-back deviation from a folder's logs.
+  lag, COM stalls, STK read-back deviation, the twin's ready calls per
+  wall second, its hold share and the share of bridge samples it
+  consumed, from a folder's logs. Results and the E3 protocol:
+  `dev/e3_pilot_analysis.md`.
 - **Lockstep runs are unchanged.** Their bridge config's time section is
   identical to before, and the twin's lockstep path is bit-identical
   with or without the new key (`test_free_run_twin.m`).
