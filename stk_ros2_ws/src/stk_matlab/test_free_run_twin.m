@@ -122,6 +122,19 @@ function test_free_run_twin()
     published = runSequence(hardLock, (0:299) * cfg.stepS, orbit);
     published = [published{:}];
     assert(any([published.saturated]), 'lockstep must saturate too');
+
+    % The Simulink block declares saturationEvents uint32 and the error
+    % double; an extrinsic output of another class stops the simulation
+    % at its first step (d97800c returned a double). Every path: not
+    % ready, lockstep, free-run fresh and hold.
+    clear adcs.simulink_step
+    notReady = step(lock, 0.0, true, pos, vel, target, [0 0 0 0], [0 0 0]);
+    every = [notReady, published, sparseOuts{:}];
+    assert(all(arrayfun(@(o) isa(o.satEvents, 'uint32'), every)), ...
+        'saturationEvents must be uint32 on every path');
+    assert(all(arrayfun(@(o) isa(o.maxErr, 'double'), every)), ...
+        'maxErrSinceLast must be double on every path');
+    clear adcs.simulink_step
     lockFlags = logical([published.saturated]);
     lockEdges = cumsum([lockFlags(1), lockFlags(2:end) & ~lockFlags(1:end-1)]);
     assert(isequal([published.maxErr], [published.err]), ...

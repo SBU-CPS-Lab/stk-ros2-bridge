@@ -94,7 +94,7 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
     end
     identity = identityBytes;
     identityLength = identityCount;
-    saturationEvents = satCount;
+    saturationEvents = uint32(satCount);   % the block's declared class
     maxErrSinceLast = 0;
     % ROS subscribers initially output a zero-filled bus. Do not advance
     % dynamics or acknowledge a step until all required numerics are valid.
@@ -172,7 +172,7 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
                 satCount, satPrevious, out.wheelsSaturated);
             maxErrSinceLast = max(maxErrSinceLast, out.boresightErrorRad);
         end
-        saturationEvents = satCount;
+        saturationEvents = uint32(satCount);   % the block's declared class
         lastExtra = {saturationEvents, maxErrSinceLast};
         freeLast = current;
         freeSteps = reached;
@@ -261,7 +261,7 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
     saturated = logical(out.wheelsSaturated);
     energy = state.wheelEnergyJ;
     [satCount, satPrevious] = countSaturation(satCount, satPrevious, saturated);
-    saturationEvents = satCount;
+    saturationEvents = uint32(satCount);   % the block's declared class
     maxErrSinceLast = err;
     lastExtra = {saturationEvents, maxErrSinceLast};
     lastTime = t;
