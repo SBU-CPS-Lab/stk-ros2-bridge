@@ -49,9 +49,11 @@ def build_parser(description: str) -> argparse.ArgumentParser:
                         help="Connect backend host")
     parser.add_argument("--port", type=int, default=5001,
                         help="Connect backend port")
-    parser.add_argument("--config", default=None,
-                        help="path to acav_scenario.yaml (default: the one "
-                             "shipped with this package)")
+    parser.add_argument("--scenario", "--config", dest="config",
+                        default=None, metavar="PATH",
+                        help="scenario YAML (default: the reference "
+                             "acav_scenario.yaml shipped with this package; "
+                             "--config is the older name)")
     parser.add_argument("--json", default=None, metavar="PATH",
                         help="also write the report as JSON, for C6")
     parser.add_argument("-v", "--verbose", action="store_true",
