@@ -55,6 +55,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence, Tuple
@@ -136,6 +137,9 @@ class Deps:
     #: (run config path, log dir) -> a twin process with start(), stop()
     #: and exit_code(), for --twin-launch matlab-batch.
     launch_twin: Callable[[str, str], object] = None
+    #: () -> (status, restore or None): QuickEdit off for this console
+    #: (acav.console.disable_quickedit).
+    disable_quickedit: Callable[[], Tuple[str, Optional[Callable]]] = None
 
     def __post_init__(self) -> None:
         if self.start_recorder is None:
@@ -154,6 +158,9 @@ class Deps:
         if self.launch_twin is None:
             from acav.twin_launcher import MatlabBatchTwin
             self.launch_twin = MatlabBatchTwin
+        if self.disable_quickedit is None:
+            from acav.console import disable_quickedit
+            self.disable_quickedit = disable_quickedit
 
 
 @dataclass
@@ -716,7 +723,49 @@ def _stop_process(process, name, logger):
             process.wait(timeout=15)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.wait(timeout=15)
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                logger.error("%s did not exit after kill", name)
+
+
+#: Wall-second bounds on the steps after the scheduler exits. A step
+#: that has not finished by then is recorded as failed and the run goes
+#: on (the step's thread is abandoned), so nothing after the scheduler
+#: can hold a campaign. Each bound is well above the step's own timeouts:
+#: the graphics end read waits GRAPHICS_END_TIMEOUT_S, stopping a process
+#: up to 15 s + 15 s, stopping MATLAB twin_launcher.STOP_TIMEOUT_S plus a
+#: kill.
+POST_RUN_TIMEOUT_S = {
+    "stk_graphics_end": 60.0,
+    "bridge_stop": 60.0,
+    "scheduler_stop": 60.0,
+    "matlab_session": 180.0,
+    "topic_capture": 60.0,
+}
+
+
+def _bounded(function, timeout_s: float):
+    """Run ``function`` on a daemon thread for at most ``timeout_s``.
+
+    Returns (finished, value); an exception it raised is raised here."""
+    box: dict = {}
+
+    def target():
+        try:
+            box["value"] = function()
+        except BaseException as error:          # noqa: BLE001 - re-raised
+            box["error"] = error
+
+    thread = threading.Thread(target=target, daemon=True,
+                              name="post-run step")
+    thread.start()
+    thread.join(timeout_s)
+    if thread.is_alive():
+        return False, None
+    if "error" in box:
+        raise box["error"]
+    return True, box.get("value")
 
 
 def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
@@ -757,6 +806,22 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
         summary["steps"].append({"step": step, "ok": ok, "detail": detail})
         (run_log.info if ok else run_log.error)("%s: %s", step, detail or "ok")
 
+    # A QuickEdit selection in this console once held a run for 11.5 min
+    # (E6 seed1, P9b): off while the run lasts, restored afterwards.
+    quickedit, restore_quickedit = deps.disable_quickedit()
+    summary["console_quickedit"] = quickedit
+    post_run_failed = []
+
+    def bounded(step: str, function):
+        """A post-run step under POST_RUN_TIMEOUT_S[step]."""
+        timeout_s = POST_RUN_TIMEOUT_S[step]
+        finished, value = _bounded(function, timeout_s)
+        if not finished:
+            post_run_failed.append(step)
+            record(step, False, f"timed out after {timeout_s:.0f} s; the "
+                                f"run went on without it")
+        return finished, value
+
     recorder = None
     bridge_proc = None
     scheduler_proc = None
@@ -770,7 +835,9 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             return True
         twin_state["done"] = True
         from acav.twin_launcher import MATLAB_SESSION_FILE
-        result = twin.stop()
+        finished, result = bounded("matlab_session", twin.stop)
+        if not finished:
+            return False
         session = _read_json_or_none(
             os.path.join(log_dir, MATLAB_SESSION_FILE))
         summary["matlab_session_result"] = result.to_dict()
@@ -786,6 +853,16 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             _label_record(config.output, matlab_version=version)
         return ok
 
+    stopped = set()          # processes already stopped, or abandoned
+
+    def stop(name, process) -> None:
+        """Stop a launched process once, under its post-run bound."""
+        if name in stopped or process is None:
+            return
+        stopped.add(name)
+        bounded(f"{name}_stop", lambda: _stop_process(process, name, run_log))
+
+    in_flight = None
     try:
         # Before anything is launched: the twin cannot start without it.
         try:
@@ -926,10 +1003,11 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                        f"returncode={scheduler_returncode}")
 
             # Before the bridge is stopped: its terminal sample is the last.
-            graphics_ok = _check_graphics_end(
-                config, deps.read_graphics_state(
-                    graphics_file, "end", GRAPHICS_END_TIMEOUT_S),
-                summary, record)
+            finished, data = bounded("stk_graphics_end", lambda: (
+                deps.read_graphics_state(graphics_file, "end",
+                                         GRAPHICS_END_TIMEOUT_S)))
+            graphics_ok = finished and _check_graphics_end(
+                config, data, summary, record)
             _label_record(config.output,
                           real_time_factor=summary["real_time_factor"])
             gate_ok = True
@@ -954,7 +1032,7 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             # The scheduler no longer participates in the barrier. Stop the
             # bridge before waiting for a human, otherwise a successful run
             # can acquire a spurious missing-ack timeout during teardown.
-            _stop_process(bridge_proc, "bridge", run_log)
+            stop("bridge", bridge_proc)
             matlab_ok = True
             if twin_state["twin"] is None:
                 deps.prompt(
@@ -967,14 +1045,21 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
 
         return (EXIT_OK if scheduler_returncode == 0 and graphics_ok
                 and gate_ok and matlab_ok else EXIT_STEP_FAILED)
+    except BaseException as error:
+        in_flight = error
+        raise
     finally:
         for name, process in (("scheduler", scheduler_proc), ("bridge", bridge_proc)):
-            _stop_process(process, name, run_log)
+            stop(name, process)
         # A failed matlab-batch run still stops MATLAB and records how.
         finish_twin()
         if recorder is not None:
-            recorder.close()
-            record("topic_capture", not recorder.error, recorder.error or "files saved")
+            finished, _ = bounded("topic_capture", recorder.close)
+            if finished:
+                record("topic_capture", not recorder.error,
+                       recorder.error or "files saved")
+        if restore_quickedit is not None:
+            restore_quickedit()
         summary["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         summary["output_exists"] = os.path.exists(config.output)
         with open(os.path.join(log_dir, "summary.json"), "w",
@@ -982,6 +1067,9 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             json.dump(summary, handle, indent=2)
         run_log.removeHandler(handler)
         handler.close()
+        if post_run_failed and in_flight is None:
+            # A post-run step that never finished fails the run.
+            return EXIT_STEP_FAILED  # noqa: B012
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1053,8 +1141,10 @@ def _label(text: str) -> str:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s")
+    # Console output on a background thread: a paused console must not
+    # hold the run (acav/console.py).
+    from acav.console import configure_console_logging
+    configure_console_logging(logging.INFO)
     args = _parser().parse_args(argv)
     config = RunConfig(
         run_id=args.run_id, experiment=args.experiment,

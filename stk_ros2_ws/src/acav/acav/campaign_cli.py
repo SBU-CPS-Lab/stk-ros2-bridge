@@ -342,9 +342,11 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list] = None) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+    # Console output on a background thread: a paused console must not
+    # hold the campaign (acav/console.py).
+    from acav.console import configure_console_logging
+    configure_console_logging(
+        logging.INFO, "%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     # Split on -- by hand rather than with argparse.REMAINDER, which
     # grabs everything after the first positional -- including this
     # command's own options -- and reports them as missing.

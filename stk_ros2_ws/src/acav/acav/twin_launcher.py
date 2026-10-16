@@ -30,6 +30,9 @@ from typing import Callable, Iterable, List, Optional, Tuple
 STOP_FILE = "twin.stop"
 MATLAB_LOG_FILE = "matlab.log"
 MATLAB_SESSION_FILE = "matlab_session.json"
+#: MATLAB's console output: written here, never to the shared console,
+#: where a paused console could hold the twin.
+MATLAB_CONSOLE_FILE = "matlab_console.log"
 
 #: MATLAB start-up plus the twin's build and simulation start, seconds:
 #: the larger of two headless runs of run_twin_session on the deploy
@@ -47,9 +50,12 @@ POLL_S = 0.5
 
 def kill_process_tree(pid: int) -> None:
     """Kill ``pid`` and its children (Windows): only that tree."""
-    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                   check=False)
+    try:
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       check=False, timeout=30)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _default_matlab_dir() -> str:
@@ -98,13 +104,18 @@ class MatlabBatchTwin:
             f"run_twin_session('{quoted[0]}', '{quoted[1]}')",
             "-logfile", self.log_file]
         self.process = None
+        self._console = None
         self._result: Optional[SessionResult] = None
 
     def start(self) -> None:
         os.makedirs(self.log_dir, exist_ok=True)
         if os.path.exists(self.stop_file):
             os.remove(self.stop_file)
-        self.process = self._popen(self.argv, cwd=self.matlab_dir)
+        self._console = open(os.path.join(self.log_dir, MATLAB_CONSOLE_FILE),
+                             "w", encoding="utf-8")
+        self.process = self._popen(self.argv, cwd=self.matlab_dir,
+                                   stdout=self._console,
+                                   stderr=subprocess.STDOUT)
 
     def exit_code(self) -> Optional[int]:
         """The process's exit code if it has exited, else None."""
@@ -115,6 +126,13 @@ class MatlabBatchTwin:
 
         Idempotent: a second call returns the first result.
         """
+        if self._result is None:
+            self._result = self._stop(timeout_s)
+            if self._console is not None:
+                self._console.close()
+        return self._result
+
+    def _stop(self, timeout_s: float) -> SessionResult:
         if self._result is not None:
             return self._result
         if self.process is None:

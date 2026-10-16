@@ -258,9 +258,11 @@ class TestRunnerAutomated:
 
 
 class TestManualIsUnchanged:
-    """Byte for byte what the runner did before --twin-launch existed."""
+    """Byte for byte what the runner did before --twin-launch existed,
+    plus console_quickedit (P9e), which every run now records."""
 
-    KEYS = ['code_version', 'diagnostic_label', 'equivalence_diagnostic',
+    KEYS = ['code_version', 'console_quickedit', 'diagnostic_label',
+            'equivalence_diagnostic',
             'execution_mode', 'experiment', 'finished_at', 'graphics_end',
             'graphics_mode', 'graphics_mode_required', 'graphics_samples',
             'graphics_startup', 'orbit_batch_samples', 'output_exists',
