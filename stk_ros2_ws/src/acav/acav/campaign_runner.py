@@ -340,6 +340,37 @@ def run_config_path(output_path: str) -> str:
     return f"{os.path.splitext(output_path)[0]}.runconfig.json"
 
 
+def e1_guard_ablated(experiment: str, attitude_provider: str,
+                     mismatch_guard: str) -> bool:
+    """The twin's attitude guard is ablated only for an E1 run with a
+    forced read-back provider and no explicit guard-on (+adcs/config.m
+    accepts the ablation only then)."""
+    return (experiment == "E1" and bool(attitude_provider)
+            and mismatch_guard != "on")
+
+
+def run_config_payload_for(run: RunSpec) -> dict:
+    """The run configuration write_run_config writes for ``run``."""
+    return {
+        "run_id": run.run_id,
+        "gains": dict(run.gains),
+        "fault": None if run.fault is None else run.fault.to_dict(),
+        "experiment": run.experiment,
+        "attitude_provider": run.attitude_provider,
+        # E1's mismatch type; read by no one in the twin (+adcs/config.m
+        # reads only the keys it knows), kept so the file says what ran.
+        "e1_mismatch": run.mismatch,
+        "code_version": _code_version(),
+        # Selects the twin's integration (+adcs/config.m).
+        "execution_mode": run.execution_mode,
+        # Explicit guard ablation, never enabled by an ordinary run.
+        "attitude_mismatch_policy": (
+            "e1_readback_ablation" if e1_guard_ablated(
+                run.experiment, run.attitude_provider, run.mismatch_guard)
+            else "strict"),
+    }
+
+
 def write_run_config(run: RunSpec, output_path: str) -> str:
     """Write the per-run gain and fault overrides beside the result.
 
@@ -357,20 +388,7 @@ def write_run_config(run: RunSpec, output_path: str) -> str:
     import json
 
     path = run_config_path(output_path)
-    payload = {
-        "run_id": run.run_id,
-        "gains": dict(run.gains),
-        "fault": None if run.fault is None else run.fault.to_dict(),
-        "experiment": run.experiment,
-        "attitude_provider": run.attitude_provider,
-        "code_version": _code_version(),
-        # Selects the twin's integration (+adcs/config.m).
-        "execution_mode": run.execution_mode,
-        # Explicit guard ablation, never enabled by an ordinary run.
-        "attitude_mismatch_policy": (
-            "e1_readback_ablation" if run.experiment == "E1" and
-            run.attitude_provider else "strict"),
-    }
+    payload = run_config_payload_for(run)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
         handle.write("\n")
@@ -475,6 +493,14 @@ def check_record(run: RunSpec, record: RunRecord,
         problems.append(
             f"attitude_provider {provenance.attitude_provider!r}, expected "
             f"{run.attitude_provider!r}")
+    from acav.campaign import e1_arm
+    recorded_arm = e1_arm(provenance.mismatch, provenance.mismatch_guard,
+                          provenance.attitude_provider)
+    expected_arm = e1_arm(run.mismatch, run.mismatch_guard,
+                          run.attitude_provider)
+    if recorded_arm != expected_arm:
+        problems.append(f"E1 arm {recorded_arm!r}, expected "
+                        f"{expected_arm!r}")
     if run.experiment == "E1" and not provenance.attitude_readback_provider:
         # E1's comparison is meaningless unless the bridge said which
         # provider it read through; a requested one proves nothing.
@@ -533,7 +559,8 @@ class CommandLauncher:
     to the machine with STK on it. Placeholders available in the
     template: ``{run_id}``, ``{experiment}``, ``{scheduler}``,
     ``{execution_mode}``, ``{seed}``, ``{output}``, ``{scenario}``,
-    ``{backend}``, ``{attitude_provider}``, ``{run_config}``,
+    ``{backend}``, ``{attitude_provider}``, ``{mismatch}``,
+    ``{mismatch_guard}``, ``{run_config}``,
     ``{gains_json}``, ``{fault_json}``, ``{twin_launch}``. With a
     twin_launch other than "manual", a template without
     ``{twin_launch}`` gets ``--twin-launch <value>`` appended.
@@ -574,6 +601,8 @@ class CommandLauncher:
             "scenario": campaign.scenario_path,
             "backend": campaign.backend,
             "attitude_provider": run.attitude_provider,
+            "mismatch": run.mismatch,
+            "mismatch_guard": run.mismatch_guard,
             "run_config": run_config_path(output_path),
             "gains_json": json.dumps(run.gains, sort_keys=True),
             "fault_json": json.dumps(

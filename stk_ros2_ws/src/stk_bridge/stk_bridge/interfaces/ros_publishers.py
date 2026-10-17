@@ -57,7 +57,8 @@ class SatellitePublishers:
     """Per-satellite telemetry publishers."""
 
     def __init__(self, node, object_path: str, frames: FrameRegistry,
-                 qos_profiles: Dict[str, object], prefix: str = "stk"):
+                 qos_profiles: Dict[str, object], prefix: str = "stk",
+                 mismatch: str = ""):
         from stk_msgs.msg import (
             AngularRate,
             AttitudeState,
@@ -88,6 +89,16 @@ class SatellitePublishers:
             SatelliteState, f"{base}/state", telemetry)
 
         self._published = 0
+        #: E1 interface mismatch for everything publish_samples sends
+        #: (core/mismatch_injection.py); empty for every nominal run.
+        from stk_bridge.core.mismatch_injection import check
+        self._mismatch = check(mismatch)
+        if self._mismatch:
+            LOGGER.warning(
+                "E1 MISMATCH INJECTED into %s telemetry: %r. The twin will "
+                "read this interface with the wrong convention. This is an "
+                "E1 treatment; if you did not set it deliberately, clear "
+                "sensing.inject_mismatch.", self._path, self._mismatch)
         LOGGER.info("publishers created for %s under %s/", self._path, base)
 
     @property
@@ -256,6 +267,9 @@ class SatellitePublishers:
 
     def publish_samples(self, samples: Dict[str, object]) -> int:
         """Publish every channel present in ``samples``. Returns count."""
+        if self._mismatch:
+            from stk_bridge.core.mismatch_injection import inject
+            samples = inject(self._mismatch, samples)
         count = 0
         if "orbit" in samples:
             self.publish_orbit(samples["orbit"])

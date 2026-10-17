@@ -42,9 +42,6 @@ from stk_bridge.backends.base import (
 )
 from stk_bridge.core.frames import FrameRegistry
 
-PENDING = pytest.mark.xfail(strict=True,
-                            reason="mismatch injection not written yet")
-
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "fixtures", "publisher_messages_d065fa4.json")
 SAT = "*/Satellite/SSS-1"
@@ -155,7 +152,6 @@ def test_with_injection_off_every_message_is_unchanged(monkeypatch):
     assert json.loads(json.dumps(published)) == expected
 
 
-@PENDING
 def test_an_empty_mismatch_is_the_same_as_none(monkeypatch):
     with open(FIXTURE, encoding="utf-8") as handle:
         expected = json.load(handle)
@@ -170,7 +166,6 @@ def _q(message):
     return (o["x"], o["y"], o["z"], o["w"])
 
 
-@PENDING
 def test_quaternion_order(monkeypatch):
     attitude = _by_topic(publish(monkeypatch,
                                  mismatch="quaternion_order"), "/attitude")
@@ -178,7 +173,6 @@ def test_quaternion_order(monkeypatch):
     assert _q(attitude[0]) == (w, x, y, z)
 
 
-@PENDING
 def test_quaternion_conjugate(monkeypatch):
     attitude = _by_topic(publish(monkeypatch,
                                  mismatch="quaternion_conjugate"),
@@ -187,7 +181,6 @@ def test_quaternion_conjugate(monkeypatch):
     assert _q(attitude[0]) == (-x, -y, -z, w)
 
 
-@PENDING
 def test_angle_rate_units(monkeypatch):
     rate = _by_topic(publish(monkeypatch, mismatch="angle_rate_units"),
                      "/angular_rate")
@@ -196,7 +189,6 @@ def test_angle_rate_units(monkeypatch):
         tuple(math.degrees(v) for v in (0.01, -0.02, 0.003)))
 
 
-@PENDING
 def test_distance_units(monkeypatch):
     orbit = _by_topic(publish(monkeypatch, mismatch="distance_units"),
                       "/orbit")
@@ -207,7 +199,6 @@ def test_distance_units(monkeypatch):
         (0.0005, 7.6123, -0.001))
 
 
-@PENDING
 def test_time_offset_shifts_every_telemetry_stamp_by_37_s(monkeypatch):
     off = publish(monkeypatch)
     late = publish(monkeypatch, mismatch="time_offset")
@@ -218,7 +209,6 @@ def test_time_offset_shifts_every_telemetry_stamp_by_37_s(monkeypatch):
             == pytest.approx(37.0, abs=1e-9)
 
 
-@PENDING
 @pytest.mark.parametrize("kind", ["quaternion_order", "quaternion_conjugate",
                                   "angle_rate_units", "distance_units",
                                   "time_offset"])
@@ -242,14 +232,12 @@ def test_each_type_changes_only_its_own_fields(monkeypatch, kind):
             assert got == want, topic
 
 
-@PENDING
 def test_an_unknown_type_is_refused():
     from stk_bridge.core.mismatch_injection import inject
     with pytest.raises(ValueError, match="unknown mismatch"):
         inject("degrees_everywhere", _samples())
 
 
-@PENDING
 def test_the_sensing_config_reads_it_and_defaults_to_off():
     from stk_bridge.core.sensing import SensingConfig
     assert SensingConfig.from_config({}).inject_mismatch == ""
@@ -258,7 +246,6 @@ def test_the_sensing_config_reads_it_and_defaults_to_off():
         "distance_units"
 
 
-@PENDING
 def test_the_types_are_the_documented_five():
     from stk_bridge.core.mismatch_injection import MISMATCH_TYPES
     assert MISMATCH_TYPES == ("quaternion_order", "quaternion_conjugate",

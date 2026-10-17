@@ -102,6 +102,10 @@ class SensingConfig:
     #: why it must be impossible to switch on by accident. See
     #: docs/C1_case_study_spec.md section 9.
     force_attitude_provider: str = ""
+    #: E1 only: an interface mismatch applied to the published telemetry
+    #: (core/mismatch_injection.py). Empty, the default, publishes
+    #: exactly what was read. Never active in a nominal run.
+    inject_mismatch: str = ""
     #: Opt-in, observe-only comparison of the current reads with the
     #: alternatives (B) and (C) would use; see
     #: core/equivalence_diagnostic.py. Off in every shipped config.
@@ -144,6 +148,7 @@ class SensingConfig:
             enable_link_budget=bool(section.get("enable_link_budget", False)),
             force_attitude_provider=str(
                 section.get("force_attitude_provider", "") or ""),
+            inject_mismatch=str(section.get("inject_mismatch", "") or ""),
             equivalence_diagnostic=bool(
                 section.get("equivalence_diagnostic", False)),
             equivalence_diagnostic_dir=str(

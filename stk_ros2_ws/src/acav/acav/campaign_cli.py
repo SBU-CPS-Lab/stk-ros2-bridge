@@ -35,6 +35,7 @@ import argparse
 import glob
 import json
 import logging
+import math
 import os
 import sys
 from typing import List, Optional
@@ -42,7 +43,11 @@ from typing import List, Optional
 from acav.campaign import (
     LOCKSTEP,
     Campaign,
-    build_e1_convention,
+    E1_EXPECTED_NULL,
+    E1_MISMATCH_TYPES,
+    build_e1_matrix,
+    e1_arm,
+    e1_formula_line,
     build_e2_scheduler_comparison,
     build_e6_latency,
     build_e3_determinism,
@@ -53,6 +58,7 @@ from acav.campaign import (
     latency_breakdown,
 )
 from acav import code_version
+from acav.metrics import capture_rate, coverage_rate, outcome_breakdown
 from acav.campaign_runner import (
     CampaignRefused,
     CommandLauncher,
@@ -70,11 +76,19 @@ LOGGER = logging.getLogger(__name__)
 EXPERIMENTS = ("E1", "E2", "E3", "E5", "E6")
 
 
+#: --repeats when it is not given: E1 one per arm, E3 and E6 as before.
+DEFAULT_REPEATS = {"E1": 1, "E3": 20, "E6": 20}
+
+
 def build_campaign(experiment: str, spec: AcavSpec, scenario_path: str,
-                   backend: str, repeats: int, seeds: int) -> Campaign:
+                   backend: str, repeats: Optional[int], seeds: int,
+                   e1_types=E1_MISMATCH_TYPES) -> Campaign:
     """The matrix for ``experiment``, sized from the scenario."""
+    if repeats is None:
+        repeats = DEFAULT_REPEATS.get(experiment, 20)
     if experiment == "E1":
-        return build_e1_convention(scenario_path, backend)
+        return build_e1_matrix(tuple(e1_types), repeats, scenario_path,
+                               backend)
     if experiment == "E2":
         return build_e2_scheduler_comparison(scenario_path, backend)
     if experiment == "E3":
@@ -317,8 +331,14 @@ def _parser() -> argparse.ArgumentParser:
                         help="backend the runs will use. Anything other "
                              "than com/engine/connect produces results "
                              "that may not appear in the paper.")
-    parser.add_argument("--repeats", type=int, default=20,
-                        help="E3: runs per execution mode (default 20)")
+    parser.add_argument("--repeats", type=int, default=None,
+                        help="E1: repeats of every arm (default 1); E3: runs "
+                             "per execution mode (default 20); E6: runs "
+                             "(default 20)")
+    parser.add_argument("--e1-types", default=",".join(E1_MISMATCH_TYPES),
+                        metavar="T1,T2,...",
+                        help="E1: comma-separated mismatch types (default "
+                             "all six: " + ", ".join(E1_MISMATCH_TYPES) + ")")
     parser.add_argument("--seeds", type=int, default=100,
                         help="E5: Monte Carlo seeds (default 100)")
     parser.add_argument("--no-resume", action="store_true",
@@ -378,8 +398,11 @@ def main(argv: Optional[list] = None) -> int:
 
     scenario_path = args.scenario or ""
     try:
+        e1_types = tuple(t.strip() for t in args.e1_types.split(",")
+                         if t.strip())
         campaign = build_campaign(args.experiment, spec, scenario_path,
-                                  args.backend, args.repeats, args.seeds)
+                                  args.backend, args.repeats, args.seeds,
+                                  e1_types)
     except ValueError as error:
         LOGGER.error("%s", error)
         return 2
@@ -395,6 +418,11 @@ def _plan(campaign: Campaign, args) -> int:
     run_campaign(campaign, _refuse, RunnerOptions(
         output_dir=args.output_dir, dry_run=True))
     print(f"{campaign.campaign_id}: {len(campaign)} run(s)")
+    if campaign.experiment == "E1":
+        types = sorted({r.mismatch for r in campaign.runs if r.mismatch},
+                       key=E1_MISMATCH_TYPES.index)
+        repeats = len({r.seed for r in campaign.runs})
+        print(e1_formula_line(types, repeats))
     print(campaign.description)
     for run in campaign.runs:
         print(f"  {run.run_id}")
@@ -626,6 +654,16 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
         total_targets = len(next(iter(used.values()))[0].target_ids)
 
     report = analyse(args.experiment, records, total_targets)
+    fail_stops: List[str] = []
+    if args.experiment == "E1":
+        report["arms"], fail_stops, report["missing_runs"] = _e1_arms(
+            campaign, records, directories, total_targets)
+        report["claim_holds"] = (not report["missing_runs"]
+                                 and report["arms"].get("control", {})
+                                 .get("runs", 0) > 0)
+        report["claim"] = ("every planned E1 arm ran or stopped (fail-stop, "
+                           "counted from its summary.json); compare each "
+                           "arm with the control")
     text = json.dumps(report, indent=2, default=str)
     print(text)
     if args.json:
@@ -654,7 +692,7 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             "from a single committed version before citing the results.",
             sorted(report["code_versions"]["versions"]))
 
-    missing = len(campaign.runs) - len(records)
+    missing = len(campaign.runs) - len(records) - len(fail_stops)
     if missing > 0:
         LOGGER.error("%d of %d run(s) are missing from %s",
                      missing, len(campaign.runs), args.output_dir)
@@ -684,6 +722,78 @@ def _report_pairs(records: List[RunRecord], args) -> int:
             handle.write(text)
             handle.write("\n")
     return 0
+
+
+def _e1_arms(campaign: Campaign, records: List[RunRecord],
+             directories: List[str], total_targets: int):
+    """E1's arms: planned runs, records, fail-stops and missing runs.
+
+    A planned run with no record but a summary.json is a fail-stop (the
+    run stopped: a guard-on attitude mismatch, or the time offset's held
+    twin) and is counted in its arm with the steps that failed. A planned
+    run with neither is missing.
+    """
+    by_id = {r.result.run_id.split("/")[-1]: r for r in records}
+    arms: dict = {}
+    fail_stops: List[str] = []
+    missing: List[str] = []
+    for run in campaign.runs:
+        arm = e1_arm(run.mismatch, run.mismatch_guard, run.attitude_provider)
+        entry = arms.setdefault(arm, {"runs": 0, "records": [],
+                                      "fail_stops": []})
+        if run.mismatch in E1_EXPECTED_NULL:
+            entry["role"] = (
+                "expected-null control: the twin takes STK's body rate only "
+                "to initialise, then integrates its own; no harm is claimed")
+        record = by_id.get(run.run_id)
+        if record is not None:
+            entry["runs"] += 1
+            entry["records"].append(record)
+            continue
+        summary = None
+        for directory in directories:
+            summary = _read_summary(os.path.join(
+                directory, f"{run.run_id}.logs", "summary.json"))
+            if summary is not None:
+                break
+        if summary is None:
+            missing.append(run.run_id)
+            continue
+        fail_stops.append(run.run_id)
+        entry["fail_stops"].append({
+            "run_id": run.run_id,
+            "failed_steps": [s["step"] for s in summary.get("steps", [])
+                             if not s.get("ok")]})
+    for entry in arms.values():
+        group = entry.pop("records")
+        entry["capture_rate"] = _mean_of(capture_rate(r.result)
+                                         for r in group)
+        entry["coverage_rate"] = _mean_of(
+            coverage_rate(r.result, total_targets) for r in group)
+        entry["outcomes"] = _sum_counts(outcome_breakdown(r.result)
+                                        for r in group)
+    return arms, fail_stops, missing
+
+
+def _read_summary(path: str) -> Optional[dict]:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
+def _mean_of(values) -> float:
+    numbers = [v for v in values if not math.isnan(v)]
+    return float("nan") if not numbers else sum(numbers) / len(numbers)
+
+
+def _sum_counts(counts) -> dict:
+    total: dict = {}
+    for count in counts:
+        for key, value in count.items():
+            total[key] = total.get(key, 0) + value
+    return total
 
 
 def _write_figures(experiment: str, report: dict, records: List[RunRecord],

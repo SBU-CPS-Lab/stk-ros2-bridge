@@ -442,7 +442,8 @@ class StkBridgeNode:
 
         for path in self.sensing_config.satellites:
             self.publishers[path] = SatellitePublishers(
-                self.node, path, self.frames, qos_profiles, self._prefix)
+                self.node, path, self.frames, qos_profiles, self._prefix,
+                mismatch=self.sensing_config.inject_mismatch)
 
         if self.bridge_publishers is None:
             self.bridge_publishers = self._make_bridge_publishers(

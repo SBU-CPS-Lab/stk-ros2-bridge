@@ -75,6 +75,14 @@ class RunSpec:
     #: The name is passed to the bridge as
     #: ``sensing.force_attitude_provider``.
     attitude_provider: str = ""
+    #: E1's mismatch type (E1_MISMATCH_TYPES), empty for the control and
+    #: every other experiment. frame_pairing is attitude_provider above;
+    #: the others are injected by the bridge (sensing.inject_mismatch).
+    mismatch: str = ""
+    #: E1: "on" (the twin's attitude guard active) or "ablated" (only
+    #: frame_pairing has that arm); empty means the original E1
+    #: treatment's rule (ablated whenever attitude_provider is forced).
+    mismatch_guard: str = ""
     #: Set on a run that re-executes an earlier one to test replay (E5).
     replay_of: str = ""
     notes: str = ""
@@ -101,6 +109,10 @@ class RunSpec:
                          f"{_tag(self.fault.at_s)}")
         if self.attitude_provider:
             parts.append("readback" + _slug(self.attitude_provider))
+        if self.mismatch and self.mismatch != "frame_pairing":
+            parts.append("mismatch" + _slug(self.mismatch.replace("_", " ")))
+        if self.mismatch == "frame_pairing" and self.mismatch_guard == "on":
+            parts.append("guardon")
         if self.replay_of:
             parts.append("replay")
         return "-".join(parts)
@@ -171,6 +183,8 @@ class Campaign:
                     "gains": dict(run.gains),
                     "fault": None if run.fault is None else run.fault.to_dict(),
                     "attitude_provider": run.attitude_provider,
+                    "mismatch": run.mismatch,
+                    "mismatch_guard": run.mismatch_guard,
                     "replay_of": run.replay_of,
                     "notes": run.notes,
                 }
@@ -226,6 +240,91 @@ def build_e1_convention(scenario_path: str = "", backend: str = "com",
                      "deliberately mis-paired. Expect capture to collapse "
                      "under an explicit mismatch-guard ablation; nominal runs retain fail-fast protection."),
         runs=runs, scenario_path=scenario_path, backend=backend)
+
+
+#: E1's interface-mismatch types. frame_pairing is the original treatment
+#: (a forced read-back provider) and the only one with a guard-ablated
+#: arm; the other five are injected by the bridge on the telemetry it
+#: publishes (stk_bridge/core/mismatch_injection.py) and run guard-on.
+E1_MISMATCH_TYPES = ("frame_pairing", "quaternion_order",
+                     "quaternion_conjugate", "angle_rate_units",
+                     "distance_units", "time_offset")
+#: The expected-null control: the twin takes STK's body rate only to
+#: initialise, then integrates its own (simulink_step.m), so a rate in
+#: the wrong unit should change nothing. Reported without a harm claim.
+E1_EXPECTED_NULL = ("angle_rate_units",)
+
+
+def e1_arm(mismatch: str, mismatch_guard: str,
+           attitude_provider: str) -> str:
+    """The E1 arm a run or record belongs to: "control",
+    "<type>/on" or "frame_pairing/ablated". A record from before the
+    mismatch fields existed with a forced provider is the original
+    treatment, frame_pairing with the guard ablated."""
+    if not mismatch:
+        return "frame_pairing/ablated" if attitude_provider else "control"
+    if mismatch == "frame_pairing":
+        return f"frame_pairing/{mismatch_guard or 'ablated'}"
+    return f"{mismatch}/{mismatch_guard or 'on'}"
+
+
+def e1_run_count(types: Sequence[str], repeats: int) -> int:
+    """repeats x (1 control + 2 if frame_pairing + 1 per other type)."""
+    frame = 2 if "frame_pairing" in types else 0
+    others = len([t for t in types if t != "frame_pairing"])
+    return repeats * (1 + frame + others)
+
+
+def e1_formula_line(types: Sequence[str], repeats: int) -> str:
+    frame = 2 if "frame_pairing" in types else 0
+    others = len([t for t in types if t != "frame_pairing"])
+    per = 1 + frame + others
+    return (f"E1 runs = N_REPEATS x (1 control + {frame} frame_pairing + "
+            f"{others} other types) = {repeats} x {per} = {repeats * per}")
+
+
+def build_e1_matrix(types: Sequence[str] = E1_MISMATCH_TYPES,
+                    repeats: int = 1, scenario_path: str = "",
+                    backend: str = "com",
+                    scheduler: str = "dynamics_aware") -> Campaign:
+    """E1 over several interface mismatches, guard on unless ablated.
+
+    Per repeat: the control; frame_pairing guard-on and guard-ablated;
+    one guard-on run per other type. Lockstep, one scheduler, the same
+    scenario: only the mismatch varies. With one repeat the control and
+    the frame_pairing guard-ablated run keep build_e1_convention's ids.
+    """
+    unknown = [t for t in types if t not in E1_MISMATCH_TYPES]
+    if unknown:
+        raise ValueError(f"unknown E1 mismatch type(s) {unknown}; expected "
+                         f"some of {list(E1_MISMATCH_TYPES)}")
+    if repeats < 1:
+        raise ValueError("E1 needs at least one repeat")
+    ordered = [t for t in E1_MISMATCH_TYPES if t in types]
+    runs = []
+    for index in range(repeats):
+        seed = None if repeats == 1 else index
+        common = dict(experiment="E1", scheduler=scheduler,
+                      execution_mode=LOCKSTEP, seed=seed)
+        runs.append(RunSpec(notes="control: the validated pairing, no "
+                                  "mismatch", **common))
+        for kind in ordered:
+            if kind == "frame_pairing":
+                for guard in ("on", "ablated"):
+                    runs.append(RunSpec(
+                        attitude_provider=MISPAIRED_ATTITUDE_PROVIDER,
+                        mismatch=kind, mismatch_guard=guard,
+                        notes=f"frame_pairing, guard {guard}", **common))
+            else:
+                runs.append(RunSpec(mismatch=kind, mismatch_guard="on",
+                                    notes=f"{kind}, guard on", **common))
+    return Campaign(
+        campaign_id=f"E1_mismatch_{len(ordered)}types_{repeats}x",
+        experiment="E1",
+        description=(f"Control against {len(ordered)} interface "
+                     f"mismatch type(s): " + ", ".join(ordered) + ". "
+                     + e1_formula_line(ordered, repeats) + "."),
+        runs=tuple(runs), scenario_path=scenario_path, backend=backend)
 
 
 def build_e2_scheduler_comparison(scenario_path: str = "",

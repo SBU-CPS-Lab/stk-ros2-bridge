@@ -33,22 +33,17 @@ from acav.run_record import Provenance, RunRecord, read_record, write_record
 from test_campaign import _result, covering  # noqa: I100
 from test_deploy_run_cli import _config  # noqa: I100
 
-PENDING = pytest.mark.xfail(strict=True, reason="E1 mismatch matrix not "
-                                                "written yet")
-
 ALL = ("frame_pairing", "quaternion_order", "quaternion_conjugate",
        "angle_rate_units", "distance_units", "time_offset")
 
 
 # --- the matrix --------------------------------------------------------------
 
-@PENDING
 def test_the_types_are_the_six():
     from acav.campaign import E1_MISMATCH_TYPES
     assert E1_MISMATCH_TYPES == ALL
 
 
-@PENDING
 @pytest.mark.parametrize("types, repeats, expected", [
     (ALL, 1, 1 * (1 + 2 + 5)),
     (ALL, 3, 3 * (1 + 2 + 5)),
@@ -62,7 +57,6 @@ def test_the_run_count_formula(types, repeats, expected):
     assert len({r.run_id for r in campaign.runs}) == expected
 
 
-@PENDING
 def test_the_arms():
     from acav.campaign import build_e1_matrix
     runs = build_e1_matrix(ALL, 1).runs
@@ -81,7 +75,6 @@ def test_the_arms():
     assert len({(r.scheduler, r.execution_mode) for r in runs}) == 1
 
 
-@PENDING
 def test_one_repeat_keeps_the_original_run_ids():
     """Resuming an old E1 folder must skip its two existing runs."""
     from acav.campaign import build_e1_convention, build_e1_matrix
@@ -90,14 +83,12 @@ def test_one_repeat_keeps_the_original_run_ids():
     assert old <= new
 
 
-@PENDING
 def test_repeats_get_seeds_and_distinct_ids():
     from acav.campaign import build_e1_matrix
     runs = build_e1_matrix(("time_offset",), 2).runs
     assert sorted(r.seed for r in runs) == [0, 0, 1, 1]
 
 
-@PENDING
 def test_an_unknown_type_is_refused():
     from acav.campaign import build_e1_matrix
     with pytest.raises(ValueError, match="unknown E1 mismatch"):
@@ -106,7 +97,6 @@ def test_an_unknown_type_is_refused():
 
 # --- CLI -----------------------------------------------------------------------
 
-@PENDING
 def test_plan_prints_the_formula(tmp_path, capsys):
     from acav.campaign_cli import main
     code = main(["plan", "--experiment", "E1", "--repeats", "3",
@@ -118,7 +108,6 @@ def test_plan_prints_the_formula(tmp_path, capsys):
     assert len(json.load(open(tmp_path / "campaign.json"))["runs"]) == 24
 
 
-@PENDING
 def test_plan_with_chosen_types(tmp_path, capsys):
     from acav.campaign_cli import main
     code = main(["plan", "--experiment", "E1", "--e1-types",
@@ -130,7 +119,6 @@ def test_plan_with_chosen_types(tmp_path, capsys):
             "types) = 1 x 3 = 3") in out
 
 
-@PENDING
 def test_the_run_cli_flags():
     from acav.deploy_run_cli import _parser
     base = ["--run-id", "r", "--output", "o.json", "--bridge-config", "b"]
@@ -141,7 +129,6 @@ def test_the_run_cli_flags():
     assert (args.mismatch, args.mismatch_guard) == ("time_offset", "on")
 
 
-@PENDING
 @pytest.mark.parametrize("mismatch, guard, provider, injected, policy", [
     ("", "", "", "", "strict"),
     ("frame_pairing", "ablated", MISPAIRED_ATTITUDE_PROVIDER, "",
@@ -169,7 +156,6 @@ def test_bridge_config_and_run_config(tmp_path, mismatch, guard, provider,
     assert payload["attitude_mismatch_policy"] == policy
 
 
-@PENDING
 def test_the_campaign_run_config_follows_the_same_rule(tmp_path):
     from acav.campaign_runner import run_config_payload_for
     run = RunSpec(experiment="E1", scheduler="dynamics_aware",
@@ -181,7 +167,6 @@ def test_the_campaign_run_config_follows_the_same_rule(tmp_path):
     assert payload["e1_mismatch"] == "frame_pairing"
 
 
-@PENDING
 def test_the_launcher_has_the_placeholders():
     from acav.campaign_runner import CommandLauncher
     import inspect
@@ -192,7 +177,6 @@ def test_the_launcher_has_the_placeholders():
 
 # --- provenance and old records ------------------------------------------------
 
-@PENDING
 def test_provenance_round_trips_and_old_records_load(tmp_path):
     record = RunRecord(result=_result("r"), provenance=Provenance(
         mismatch="distance_units", mismatch_guard="on"))
@@ -239,7 +223,6 @@ def _fail_stop(tmp_path, run, step):
         encoding="utf-8")
 
 
-@PENDING
 def test_report_counts_fail_stops_by_arm(tmp_path, capsys):
     from acav.campaign import build_e1_matrix
     from acav.campaign_cli import main
@@ -271,7 +254,6 @@ def test_report_counts_fail_stops_by_arm(tmp_path, capsys):
     assert code == 0
 
 
-@PENDING
 def test_a_run_with_neither_record_nor_summary_is_missing(tmp_path, capsys):
     from acav.campaign import build_e1_matrix
     from acav.campaign_cli import main
@@ -325,7 +307,6 @@ def _injected(kind, quaternion):
     return inject(kind, {"attitude": sample})["attitude"]
 
 
-@PENDING
 @pytest.mark.parametrize("kind", ["quaternion_order", "quaternion_conjugate"])
 def test_offline_the_guard_sees_the_quaternion_types(kind):
     for q in _attitudes():
@@ -350,7 +331,6 @@ def test_offline_the_guard_sees_the_frame_pairing():
         assert _residual(mul(q, rz), q) > GUARD
 
 
-@PENDING
 @pytest.mark.parametrize("kind", ["angle_rate_units", "distance_units",
                                   "time_offset"])
 def test_offline_the_guard_cannot_see_the_other_types(kind):
@@ -359,7 +339,6 @@ def test_offline_the_guard_cannot_see_the_other_types(kind):
         assert _residual(_injected(kind, q).quaternion_xyzw, q) == 0.0
 
 
-@PENDING
 def test_offline_the_time_offset_holds_the_twin():
     """Every telemetry stamp is 37 s from ScenarioTime, far beyond the
     1000 ns hold: the twin never steps or acks, so the run stops at the
@@ -372,7 +351,6 @@ def test_offline_the_time_offset_holds_the_twin():
     assert abs(offset_ns) > HOLD_NS
 
 
-@PENDING
 def test_offline_degenerate_attitudes_are_named():
     """The quaternion guard is blind at measure-zero attitudes: the
     conjugate of a 180 deg rotation (w = 0) equals its negation."""

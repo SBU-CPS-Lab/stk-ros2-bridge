@@ -111,6 +111,10 @@ class RunConfig:
     #: Run on an STK Desktop started through COM, or one the runner
     #: cannot identify (acav/stk_process.py); refused otherwise.
     allow_com_started_stk: bool = False
+    #: E1's mismatch type (acav.campaign.E1_MISMATCH_TYPES) and guard
+    #: arm ("on" / "ablated"); empty for every other run.
+    mismatch: str = ""
+    mismatch_guard: str = ""
 
     def resolved_log_dir(self) -> str:
         if self.log_dir:
@@ -322,6 +326,14 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
             "%s sets sensing.force_attitude_provider=%r; this run uses %r",
             config.bridge_config, previous, config.attitude_provider)
     sensing["force_attitude_provider"] = config.attitude_provider
+    # E1's publish-side injections, always written: the type for the
+    # five bridge-injected ones, empty otherwise (frame_pairing is the
+    # forced provider above), so a value left in a shared YAML cannot
+    # turn a nominal run into a treatment.
+    from stk_bridge.core.mismatch_injection import MISMATCH_TYPES
+    sensing["inject_mismatch"] = (config.mismatch
+                                  if config.mismatch in MISMATCH_TYPES
+                                  else "")
     # The opt-in equivalence diagnostic writes beside this run's logs.
     if (sensing.get("equivalence_diagnostic")
             and not sensing.get("equivalence_diagnostic_dir")):
@@ -423,6 +435,12 @@ def _json_argument(text: str, flag: str):
         raise RunConfigError(f"{flag} is not valid JSON: {error}") from error
 
 
+def e1_guard_ablated(experiment: str, attitude_provider: str,
+                     mismatch_guard: str) -> bool:
+    from acav.campaign_runner import e1_guard_ablated as rule
+    return rule(experiment, attitude_provider, mismatch_guard)
+
+
 def standalone_run_config(config: RunConfig, version: str) -> dict:
     """The run configuration a campaign would have written for this run.
 
@@ -444,6 +462,7 @@ def standalone_run_config(config: RunConfig, version: str) -> dict:
         "fault": fault,
         "experiment": config.experiment,
         "attitude_provider": config.attitude_provider,
+        "e1_mismatch": config.mismatch,
         "code_version": version,
         # Selects the twin's integration (+adcs/config.m): fixed lockstep
         # steps, or free-run sub-stepping.
@@ -451,8 +470,9 @@ def standalone_run_config(config: RunConfig, version: str) -> dict:
         # The campaign writer's rule, which +adcs/config.m enforces:
         # the ablation only for an E1 run with a forced provider.
         "attitude_mismatch_policy": (
-            "e1_readback_ablation" if config.experiment == "E1" and
-            config.attitude_provider else "strict"),
+            "e1_readback_ablation" if e1_guard_ablated(
+                config.experiment, config.attitude_provider,
+                config.mismatch_guard) else "strict"),
     }
 
 
@@ -1213,9 +1233,14 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                                          GRAPHICS_END_TIMEOUT_S)))
             graphics_ok = finished and _check_graphics_end(
                 config, data, summary, record)
+            if config.experiment == "E1" or config.mismatch:
+                summary["mismatch"] = config.mismatch
+                summary["mismatch_guard"] = config.mismatch_guard
             _label_record(config.output,
                           real_time_factor=summary["real_time_factor"],
-                          stk_process=summary["stk_process"])
+                          stk_process=summary["stk_process"],
+                          mismatch=config.mismatch,
+                          mismatch_guard=config.mismatch_guard)
             gate_ok = True
             if config.execution_mode == "free_run":
                 # The twin's ZOH sub-step statistics (adcs.simulink_step);
@@ -1315,6 +1340,16 @@ def _parser() -> argparse.ArgumentParser:
                         help="STK graphics state this run requires: off (no "
                              "2D/3D Graphics window, STK minimised; the "
                              "default) or on")
+    parser.add_argument("--mismatch", default="",
+                        choices=("", "frame_pairing", "quaternion_order",
+                                 "quaternion_conjugate", "angle_rate_units",
+                                 "distance_units", "time_offset"),
+                        help="E1 only: the interface mismatch of this run "
+                             "(frame_pairing also needs --attitude-provider)")
+    parser.add_argument("--mismatch-guard", default="",
+                        choices=("", "on", "ablated"),
+                        help="E1 only: the twin's attitude guard; ablated "
+                             "only with a forced --attitude-provider")
     parser.add_argument("--allow-com-started-stk", action="store_true",
                         help="run on an STK Desktop started through COM "
                              "(-Embedding) or one the runner cannot "
@@ -1373,6 +1408,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         diagnostic_label=args.diagnostic_label,
         twin_launch=args.twin_launch,
         allow_com_started_stk=args.allow_com_started_stk,
+        mismatch=args.mismatch,
+        mismatch_guard=args.mismatch_guard,
     )
     return execute_run(config)
 

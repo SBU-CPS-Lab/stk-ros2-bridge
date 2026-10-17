@@ -115,6 +115,14 @@ class Provenance:
     #: observation when there is one. No RECORD_VERSION bump: absence
     #: reads as "not observed" and changes nothing else in the record.
     attitude_readback_provider: str = ""
+    #: E1's mismatch type and guard arm (acav.campaign.E1_MISMATCH_TYPES;
+    #: "on" or "ablated"), written by the run orchestrator from the run.
+    #: Empty for every other run and in records written before they
+    #: existed; acav.campaign.e1_arm reads an old forced-provider record
+    #: as frame_pairing, guard ablated. Not part of the determinism
+    #: signature, like attitude_provider. No RECORD_VERSION bump.
+    mismatch: str = ""
+    mismatch_guard: str = ""
     #: The code that produced the run (see acav.code_version): a git
     #: commit, ``<commit>+dirty``, or ``unknown (...)``. Empty in records
     #: written before it was recorded -- added without a RECORD_VERSION
@@ -166,6 +174,8 @@ class Provenance:
             "fault": self.fault,
             "attitude_provider": self.attitude_provider,
             "attitude_readback_provider": self.attitude_readback_provider,
+            "mismatch": self.mismatch,
+            "mismatch_guard": self.mismatch_guard,
             "code_version": self.code_version,
             "twin_identity": self.twin_identity,
             "graphics_mode": self.graphics_mode,
@@ -195,6 +205,8 @@ class Provenance:
             attitude_provider=str(raw.get("attitude_provider", "") or ""),
             attitude_readback_provider=str(
                 raw.get("attitude_readback_provider", "") or ""),
+            mismatch=str(raw.get("mismatch", "") or ""),
+            mismatch_guard=str(raw.get("mismatch_guard", "") or ""),
             code_version=str(raw.get("code_version", "") or ""),
             twin_identity=str(raw.get("twin_identity", "") or ""),
             graphics_mode=str(raw.get("graphics_mode", "") or ""),
