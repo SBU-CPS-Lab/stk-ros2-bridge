@@ -88,7 +88,8 @@ DEFAULT_REPEATS = {"E1": 1, "E3": 20, "E6": 20}
 def build_campaign(experiment: str, spec: AcavSpec, scenario_path: str,
                    backend: str, repeats: Optional[int], seeds: int,
                    e1_types=E1_MISMATCH_TYPES,
-                   fault_seeds: int = 0) -> Campaign:
+                   fault_seeds: int = 0, e3_lockstep_repeats: int = 2,
+                   e3_rtf05_repeats=None) -> Campaign:
     """The matrix for ``experiment``, sized from the scenario."""
     if repeats is None:
         repeats = DEFAULT_REPEATS.get(experiment, 20)
@@ -99,7 +100,9 @@ def build_campaign(experiment: str, spec: AcavSpec, scenario_path: str,
         return build_e2_scheduler_comparison(scenario_path, backend)
     if experiment == "E3":
         return build_e3_matrix(repeats, fault_seeds, spec.window_duration_s,
-                               scenario_path, backend)
+                               scenario_path, backend,
+                               lockstep_repeats=e3_lockstep_repeats,
+                               rtf05_repeats=e3_rtf05_repeats)
     if experiment == "E6":
         return build_e6_latency(repeats, scenario_path, backend)
     if experiment == "E5":
@@ -359,6 +362,11 @@ def _parser() -> argparse.ArgumentParser:
                              "no-fault cell: K means seeds 0..K-1 (default "
                              "0: none); with a comma, the seeds themselves "
                              "(0,1,4; one seed: 4,)")
+    parser.add_argument("--repeats-lockstep", type=int, default=2,
+                        help="E3: lockstep repeats per cell (default 2)")
+    parser.add_argument("--repeats-rtf05", type=int, default=None,
+                        help="E3: free-run rtf 0.5 repeats per cell "
+                             "(default: --repeats)")
     parser.add_argument("--e1-types", default=",".join(E1_MISMATCH_TYPES),
                         metavar="T1,T2,...",
                         help="E1: comma-separated mismatch types (default "
@@ -426,7 +434,8 @@ def main(argv: Optional[list] = None) -> int:
                          if t.strip())
         campaign = build_campaign(args.experiment, spec, scenario_path,
                                   args.backend, args.repeats, args.seeds,
-                                  e1_types, args.fault_seeds)
+                                  e1_types, args.fault_seeds,
+                                  args.repeats_lockstep, args.repeats_rtf05)
     except ValueError as error:
         LOGGER.error("%s", error)
         return 2
@@ -464,7 +473,8 @@ def _plan_e3(campaign: Campaign, args) -> None:
     repeats = (args.repeats if args.repeats is not None
                else DEFAULT_REPEATS["E3"])
     k = len(args.fault_seeds)
-    print(e3_formula_line(repeats, k))
+    rate_args = (args.repeats_lockstep, args.repeats_rtf05)
+    print(e3_formula_line(repeats, k, *rate_args))
     print("fault seeds: " + (", ".join(str(s) for s in args.fault_seeds)
                              or "none"))
     print("measured wall time per automated run (summary.json, started_at "
@@ -472,14 +482,14 @@ def _plan_e3(campaign: Campaign, args) -> None:
     for line in wall_time_lines():
         print(line)
     lines, low, high, unmeasured = estimate_lines(
-        "E3", e3_counts(repeats, k))
+        "E3", e3_counts(repeats, k, *rate_args))
     for line in lines:
         print(line)
     total = f"  E3 measured part: {low / 60:.2f}-{high / 60:.2f} h"
     if unmeasured:
         total += f", plus {unmeasured} runs not measured"
     print(total)
-    for line in combined_plan_lines(repeats, k):
+    for line in combined_plan_lines(repeats, k, 10, *rate_args):
         print(line)
     print("order: lockstep, then free-run rtf 1.0, then free-run rtf 0.5; "
           "the rate is in each run's command, nothing changes between "

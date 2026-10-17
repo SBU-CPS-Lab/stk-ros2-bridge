@@ -6,14 +6,10 @@ author's final configuration is lockstep 3, rtf 1.0 5, rtf 0.5 3, five
 fault seeds: (1 + 5) x (3 + 5 + 3) = 66 runs.
 """
 
-import pytest
-
 from acav.campaign import build_e3_matrix, e3_run_count
 
-PENDING = pytest.mark.xfail(strict=True, reason="per-rate repeats not written")
 
 
-@PENDING
 def test_the_final_configuration_has_66_runs():
     campaign = build_e3_matrix(5, 5, 720.0, lockstep_repeats=3,
                                rtf05_repeats=3)
@@ -29,7 +25,6 @@ def test_the_defaults_are_unchanged():
     assert len(build_e3_matrix(3, 3, 720.0)) == 32 == e3_run_count(3, 3)
 
 
-@PENDING
 def test_the_plan_takes_both_options(tmp_path, capsys):
     from acav.campaign_cli import main
     assert main(["plan", "--experiment", "E3", "--repeats", "5",

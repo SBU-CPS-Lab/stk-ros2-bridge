@@ -398,13 +398,34 @@ E3_FREE_RUN_RATES = (1.0, 0.5)
 E3_LOCKSTEP_REPEATS = 2
 
 
-def e3_run_count(n_repeats: int, n_fault_seeds: int) -> int:
-    """(1 + K) x (2 lockstep + 2 x N free-run)."""
-    return (1 + n_fault_seeds) * (E3_LOCKSTEP_REPEATS
-                                  + len(E3_FREE_RUN_RATES) * n_repeats)
+def _rate_repeats(n_repeats, lockstep_repeats, rtf05_repeats):
+    """[(mode, rate, repeats)] in campaign order."""
+    return [(LOCKSTEP, 1.0, lockstep_repeats)] + [
+        (FREE_RUN, rate,
+         rtf05_repeats if rate == 0.5 and rtf05_repeats is not None
+         else n_repeats) for rate in E3_FREE_RUN_RATES]
 
 
-def e3_formula_line(n_repeats: int, n_fault_seeds: int) -> str:
+def e3_run_count(n_repeats: int, n_fault_seeds: int,
+                 lockstep_repeats: int = E3_LOCKSTEP_REPEATS,
+                 rtf05_repeats=None) -> int:
+    """(1 + K) x (lockstep + rtf 1.0 + rtf 0.5 repeats)."""
+    return (1 + n_fault_seeds) * sum(
+        r for _, _, r in _rate_repeats(n_repeats, lockstep_repeats,
+                                       rtf05_repeats))
+
+
+def e3_formula_line(n_repeats: int, n_fault_seeds: int,
+                    lockstep_repeats: int = E3_LOCKSTEP_REPEATS,
+                    rtf05_repeats=None) -> str:
+    if lockstep_repeats != E3_LOCKSTEP_REPEATS or (
+            rtf05_repeats is not None and rtf05_repeats != n_repeats):
+        r05 = n_repeats if rtf05_repeats is None else rtf05_repeats
+        per = lockstep_repeats + n_repeats + r05
+        return (f"E3 runs = (1 + N_FAULT_SEEDS) x ({lockstep_repeats} "
+                f"lockstep + {n_repeats} rtf 1.0 + {r05} rtf 0.5) = "
+                f"(1 + {n_fault_seeds}) x {per} = "
+                f"{(1 + n_fault_seeds) * per}")
     return (f"E3 runs = (1 + N_FAULT_SEEDS) x ({E3_LOCKSTEP_REPEATS} lockstep "
             f"+ {len(E3_FREE_RUN_RATES)} x N_REPEATS free-run) = "
             f"(1 + {n_fault_seeds}) x ({E3_LOCKSTEP_REPEATS} + "
@@ -427,7 +448,9 @@ def fault_seed_list(fault_seeds) -> Tuple[int, ...]:
 def build_e3_matrix(n_repeats: int, n_fault_seeds,
                     window_duration_s: float, scenario_path: str = "",
                     backend: str = "com",
-                    scheduler: str = "dynamics_aware") -> Campaign:
+                    scheduler: str = "dynamics_aware",
+                    lockstep_repeats: int = E3_LOCKSTEP_REPEATS,
+                    rtf05_repeats=None) -> Campaign:
     """E3: execution mode x fault x repeats, the fault replay included.
 
     Fault cells: none, and one seeded wheel fault per seed 0..K-1
@@ -443,8 +466,7 @@ def build_e3_matrix(n_repeats: int, n_fault_seeds,
     seeds = fault_seed_list(n_fault_seeds)
     faults = plan_campaign_faults(list(seeds), window_duration_s)
     cells = [None] + [faults[seed] for seed in seeds]
-    blocks = [(LOCKSTEP, 1.0, E3_LOCKSTEP_REPEATS)] + [
-        (FREE_RUN, rate, n_repeats) for rate in E3_FREE_RUN_RATES]
+    blocks = _rate_repeats(n_repeats, lockstep_repeats, rtf05_repeats)
     runs = []
     for mode, rate, repeats in blocks:
         for fault in cells:
@@ -466,7 +488,9 @@ def build_e3_matrix(n_repeats: int, n_fault_seeds,
         description=("Lockstep against free-run at rtf "
                      + " and ".join(f"{r:g}" for r in E3_FREE_RUN_RATES)
                      + ", without a fault and with each seeded wheel fault. "
-                     + e3_formula_line(n_repeats, len(seeds)) + "."),
+                     + e3_formula_line(n_repeats, len(seeds),
+                                       lockstep_repeats, rtf05_repeats)
+                     + "."),
         runs=tuple(runs), scenario_path=scenario_path, backend=backend)
 
 
@@ -527,24 +551,26 @@ def estimate_lines(label: str, counts: Dict[Tuple[str, float], int]
     return lines, low, high, unmeasured
 
 
-def e3_counts(n_repeats: int, n_fault_seeds: int
-              ) -> Dict[Tuple[str, float], int]:
+def e3_counts(n_repeats: int, n_fault_seeds: int,
+              lockstep_repeats: int = E3_LOCKSTEP_REPEATS,
+              rtf05_repeats=None) -> Dict[Tuple[str, float], int]:
     cells = 1 + n_fault_seeds
-    counts = {(LOCKSTEP, 1.0): cells * E3_LOCKSTEP_REPEATS}
-    for rate in E3_FREE_RUN_RATES:
-        counts[(FREE_RUN, rate)] = cells * n_repeats
-    return counts
+    return {(mode, rate): cells * repeats for mode, rate, repeats in
+            _rate_repeats(n_repeats, lockstep_repeats, rtf05_repeats)}
 
 
 def combined_plan_lines(n_repeats: int, n_fault_seeds: int,
-                        e2_seeds: int = 10) -> List[str]:
+                        e2_seeds: int = 10,
+                        lockstep_repeats: int = E3_LOCKSTEP_REPEATS,
+                        rtf05_repeats=None) -> List[str]:
     """E1 (all six types) + E2 (seeds x 2 arms) + E3, in hours."""
     parts = [
         (f"E1 ({len(E1_MISMATCH_TYPES)} types, N_REPEATS={n_repeats})",
          {(LOCKSTEP, 1.0): e1_run_count(E1_MISMATCH_TYPES, n_repeats)}),
         (f"E2 ({e2_seeds} seeds x 2 arms)", {(LOCKSTEP, 1.0): 2 * e2_seeds}),
         (f"E3 (N_REPEATS={n_repeats}, N_FAULT_SEEDS={n_fault_seeds})",
-         e3_counts(n_repeats, n_fault_seeds)),
+         e3_counts(n_repeats, n_fault_seeds, lockstep_repeats,
+                   rtf05_repeats)),
     ]
     lines = [f"combined campaign (N_REPEATS={n_repeats}, "
              f"N_FAULT_SEEDS={n_fault_seeds}, E2 seeds={e2_seeds}); every "
