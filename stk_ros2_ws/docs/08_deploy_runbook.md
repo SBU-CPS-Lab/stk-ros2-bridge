@@ -31,8 +31,8 @@ MATLAB, `setup_stk_ros('Rebuild', true)`.
 
 Before the first run of a session, in this order:
 
-- [ ] Close VS Code, Codex and any other editor on the tree; close the
-      GUI MATLAB. `git status` is clean and on the intended commit
+- [ ] Close every editor and any other program that opens the project
+      tree; close the GUI MATLAB. `git status` is clean and on the intended commit
       (campaigns refuse a dirty tree unless `--allow-dirty`).
 - [ ] **Start STK Desktop yourself** (not through a script) and build
       the scenario in it (section 3). Runs refuse an STK started
