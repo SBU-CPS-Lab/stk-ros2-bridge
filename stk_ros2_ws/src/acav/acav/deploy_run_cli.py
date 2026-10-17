@@ -50,6 +50,7 @@ script is expected to carry back for analysis.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -57,6 +58,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence, Tuple
 
@@ -170,25 +172,59 @@ class ConnectResult:
     detail: str = ""
 
 
+@contextlib.contextmanager
+def _private_ros_node(name: str):
+    """A node and executor on an rclpy Context of their own.
+
+    Every ROS wait below runs in one. rclpy's default context is shared
+    by the whole process, and rclpy.init() on it installs SIGINT/SIGTERM
+    handlers that shut it down; each wait then ended in
+    ``rclpy.shutdown()``, which raised "rcl_shutdown already called on
+    the given context" and replaced the wait's own error (P10 live
+    session, the first E6 attempt's idle_check). Here no signal handler
+    is installed, and try_shutdown does nothing to a context that is
+    already shut down or never started, so the wait's own exception is
+    the one that propagates. Cleanup errors are not allowed to hide it.
+    """
+    import rclpy
+    from rclpy.context import Context
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.signals import SignalHandlerOptions
+
+    context = Context()
+    node = executor = None
+    try:
+        rclpy.init(args=None, context=context,
+                   signal_handler_options=SignalHandlerOptions.NO)
+        node = rclpy.create_node(name, context=context)
+        executor = SingleThreadedExecutor(context=context)
+        executor.add_node(node)
+        yield node, executor
+    finally:
+        for close in (executor and executor.shutdown,
+                      node and node.destroy_node):
+            if close:
+                try:
+                    close()
+                except Exception:       # noqa: BLE001 - must not mask
+                    logging.getLogger(__name__).warning(
+                        "%s: cleanup failed", name, exc_info=True)
+        rclpy.try_shutdown(context=context)
+
+
 def _check_graph_idle(prefix: str) -> None:
     """Reject a shared graph before a new run can accept another run's status."""
-    import rclpy
-    rclpy.init()
-    node = rclpy.create_node("acav_run_preflight")
-    try:
+    with _private_ros_node("acav_run_preflight") as (node, executor):
         deadline = time.monotonic() + 3.0
         topics = [f"/{prefix.strip('/')}/status",
                   f"/{prefix.strip('/')}/scenario_time",
                   f"/{prefix.strip('/')}/lockstep/ack", "/clock"]
         while time.monotonic() < deadline:
-            rclpy.spin_once(node, timeout_sec=0.1)
+            executor.spin_once(timeout_sec=0.1)
             active = [topic for topic in topics if node.count_publishers(topic)]
             if active:
                 raise RuntimeError("Another run is active on " + ", ".join(active)
                                    + "; stop its bridge, scheduler and twin first")
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
 
 
 def bridge_launch_argv(config: RunConfig,
@@ -488,22 +524,19 @@ def _wait_for_bridge_connected_ros(prefix: str, timeout_s: float,
     and this function reported "no BridgeStatus received at all" for the
     full timeout regardless.
     """
-    import rclpy
     from stk_bridge.interfaces.qos import status_qos
     from stk_msgs.msg import BridgeStatus
 
     seen: List[BridgeStatus] = []
 
-    rclpy.init(args=None)
-    try:
-        node = rclpy.create_node("deploy_run_wait_for_bridge")
+    with _private_ros_node("deploy_run_wait_for_bridge") as (node, executor):
         qos = status_qos(depth=5)
         node.create_subscription(
             BridgeStatus, f"{prefix}/status", seen.append, qos)
 
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            rclpy.spin_once(node, timeout_sec=0.5)
+            executor.spin_once(timeout_sec=0.5)
             if node.count_publishers(f"{prefix}/status") > 1:
                 return ConnectResult(False, "", "multiple bridge status publishers detected")
             if seen:
@@ -519,9 +552,6 @@ def _wait_for_bridge_connected_ros(prefix: str, timeout_s: float,
                 False, seen[-1].backend_type,
                 f"timed out; last state={seen[-1].state}")
         return ConnectResult(False, "", "no BridgeStatus received at all")
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
 
 
 def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
@@ -540,7 +570,6 @@ def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
     this function has no way to tell that apart from "the twin really
     isn't acking".
     """
-    import rclpy
     from stk_bridge.interfaces.qos import command_qos, clock_qos
     from stk_msgs.msg import ScenarioTime
     from std_msgs.msg import String
@@ -548,9 +577,7 @@ def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
     seen: List[str] = []
     ticks = []
 
-    rclpy.init(args=None)
-    try:
-        node = rclpy.create_node("deploy_run_wait_for_twin")
+    with _private_ros_node("deploy_run_wait_for_twin") as (node, executor):
         node.create_subscription(ScenarioTime, f"{prefix}/scenario_time",
                                  ticks.append, clock_qos())
         node.create_subscription(
@@ -559,13 +586,10 @@ def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
 
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            rclpy.spin_once(node, timeout_sec=0.5)
+            executor.spin_once(timeout_sec=0.5)
             if ticks and f"matlab_twin:{ticks[-1].step_index}" in seen:
                 return True
         return False
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
 
 
 def _read_json_or_none(path: str) -> Optional[dict]:
@@ -688,26 +712,21 @@ def _wait_for_twin_identity_ros(timeout_s: float) -> Optional[str]:
     once per wall second while ready, so the bridge's own command_qos()
     matches it.
     """
-    import rclpy
     from stk_bridge.interfaces.qos import command_qos
     from std_msgs.msg import String
 
     from acav.twin_identity import IDENTITY_TOPIC
 
     seen: List[str] = []
-    rclpy.init(args=None)
-    try:
-        node = rclpy.create_node("deploy_run_wait_for_twin_identity")
+    with _private_ros_node("deploy_run_wait_for_twin_identity") as (
+            node, executor):
         node.create_subscription(
             String, IDENTITY_TOPIC,
             lambda message: seen.append(str(message.data)), command_qos())
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline and not seen:
-            rclpy.spin_once(node, timeout_sec=0.5)
+            executor.spin_once(timeout_sec=0.5)
         return seen[-1] if seen else None
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
 
 
 def _open_log(log_dir: str, name: str):
@@ -800,11 +819,21 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
         "diagnostic_label": config.diagnostic_label,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "steps": [],
+        "errors": [],
     }
 
     def record(step: str, ok: bool, detail: str = "") -> None:
         summary["steps"].append({"step": step, "ok": ok, "detail": detail})
         (run_log.info if ok else run_log.error)("%s: %s", step, detail or "ok")
+
+    def record_error(step: str, error: BaseException) -> None:
+        """The exception itself, kept beside the step it failed."""
+        text = "".join(traceback.format_exception(
+            type(error), error, error.__traceback__))
+        summary["errors"].append({"step": step,
+                                  "type": type(error).__name__,
+                                  "message": str(error), "traceback": text})
+        run_log.error("%s raised %s", step, text.rstrip())
 
     # A QuickEdit selection in this console once held a run for 11.5 min
     # (E6 seed1, P9b): off while the run lasts, restored afterwards.
@@ -927,6 +956,7 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
         try:
             deps.check_idle(config.prefix)
         except Exception as error:      # noqa: BLE001 - recorded, then fail
+            record_error("idle_check", error)
             record("idle_check", False, str(error))
             return EXIT_STEP_FAILED
         record("idle_check", True)
@@ -938,9 +968,14 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             bridge_proc = deps.popen(
                 argv, stdout=bridge_log, stderr=subprocess.STDOUT)
 
-            connect_result = deps.wait_for_bridge_connected(
-                config.prefix, config.bridge_connect_timeout_s,
-                config.ros_domain_id)
+            try:
+                connect_result = deps.wait_for_bridge_connected(
+                    config.prefix, config.bridge_connect_timeout_s,
+                    config.ros_domain_id)
+            except Exception as error:  # noqa: BLE001 - recorded, then fail
+                record_error("bridge_connected", error)
+                record("bridge_connected", False, str(error))
+                return EXIT_STEP_FAILED
             record("bridge_connected", connect_result.connected,
                    connect_result.detail or connect_result.backend_type)
             if not connect_result.connected:
@@ -989,7 +1024,13 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                     "(this script will then WAIT for its barrier ack, not "
                     "just trust the keypress): ")
 
-            twin_ok = deps.wait_for_twin_ack(config.prefix, ack_timeout_s)
+            try:
+                twin_ok = deps.wait_for_twin_ack(config.prefix,
+                                                 ack_timeout_s)
+            except Exception as error:  # noqa: BLE001 - recorded, then fail
+                record_error("twin_acking", error)
+                record("twin_acking", False, str(error))
+                return EXIT_STEP_FAILED
             detail = "" if twin_ok else ("no matlab_twin ack seen before "
                                          "timeout -- check the Simulink "
                                          "model's Subscribe/Publish topics")
@@ -1005,8 +1046,13 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             # The twin must have loaded THIS run's config and run this
             # checkout's code; otherwise the scheduler is never started,
             # and the bridge cannot advance without it.
-            identity, problems = deps.confirm_twin_identity(
-                run_config, TWIN_IDENTITY_TIMEOUT_S)
+            try:
+                identity, problems = deps.confirm_twin_identity(
+                    run_config, TWIN_IDENTITY_TIMEOUT_S)
+            except Exception as error:  # noqa: BLE001 - recorded, then fail
+                record_error("twin_identity", error)
+                record("twin_identity", False, str(error))
+                return EXIT_STEP_FAILED
             summary["twin_identity"] = identity
             summary["twin_identity_problems"] = list(problems)
             record("twin_identity", not problems,
@@ -1075,6 +1121,7 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 and gate_ok and matlab_ok else EXIT_STEP_FAILED)
     except BaseException as error:
         in_flight = error
+        record_error("run", error)
         raise
     finally:
         for name, process in (("scheduler", scheduler_proc), ("bridge", bridge_proc)):
