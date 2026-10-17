@@ -164,3 +164,33 @@ What each quantity means (`acav/coupling_analysis.py`):
 | Run conditions | Execution mode, graphics mode, real-time factor, start-gate wait, free-run pacing (cycles, overruns). |
 
 Percentiles are `sorted[n // 2]` and `sorted[int(0.9 * n)]`.
+
+## 8. E2 across seeded scenarios: paired analysis
+
+Each seeded scenario is its own E2 folder (one kinematic and one
+dynamics-aware run). `report --experiment E2 --output-dir <seed folder>
+--include-dir <seed folder> ...` analyses them together as pairs
+(`acav/paired_analysis.py`, statistics in `acav/paired_stats.py`): one
+pair per scenario seed, difference = dynamics-aware minus kinematic,
+incomplete pairs dropped and listed by name.
+
+- Metrics: the records' own `coverage_rate`, `capture_rate`,
+  `wheel_energy_J`, `wheel_saturation_events` (`over_promise_gap` is
+  1 - `capture_rate` and not tested again).
+- Per metric: the differences, median, Hodges-Lehmann estimate, exact
+  two-sided Wilcoxon signed-rank p (zeros dropped; average ranks with
+  the exact conditional distribution for ties), matched-pairs
+  rank-biserial, a percentile bootstrap CI of the median difference
+  (seed and B = 10000 written into the output), and Holm-adjusted p over
+  the four metrics.
+- The output prints the minimum attainable two-sided exact p for the
+  number of pairs, 2^(1 - n), and flags it when above 0.05 (n <= 5):
+  such a design cannot reach p < 0.05 whatever the data.
+- Refusals (each names the records): different code version, twin
+  identity (fingerprints and polling rate), STK start mode, execution
+  mode or generator version; a record not from a seeded scenario; an
+  unreportable record; two records for one seed and scheduler; plus all
+  the refusals of section 6.
+
+No paired result exists yet; see [09_live_runs_and_results.md](09_live_runs_and_results.md)
+for what has been run.

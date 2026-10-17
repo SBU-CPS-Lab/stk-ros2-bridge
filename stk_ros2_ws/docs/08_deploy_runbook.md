@@ -150,7 +150,9 @@ ros2 run acav run_acav_campaign report --experiment E2 --output-dir results\E2_s
 ```
 
 For the reference scenario leave out `--scenario`. `report` refuses a
-folder that mixes scenarios. Send back one folder per scenario.
+folder that mixes scenarios. Send back one folder per scenario. To
+analyse the seeds as pairs, give one folder with `--output-dir` and the
+others with `--include-dir` ([C6_analysis.md](C6_analysis.md) section 8).
 
 ### 4.3 E3: lockstep against free-run, and fault replay
 
