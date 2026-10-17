@@ -56,6 +56,11 @@ def build_parser(description: str) -> argparse.ArgumentParser:
                              "--config is the older name)")
     parser.add_argument("--json", default=None, metavar="PATH",
                         help="also write the report as JSON, for C6")
+    parser.add_argument("--start-stk", action="store_true",
+                        help="com backend: start STK Desktop if none is "
+                             "running (default: attach to the one you "
+                             "started, or fail). Runs refuse an STK "
+                             "started this way.")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="log every STK command that is attempted")
     return parser
@@ -63,8 +68,15 @@ def build_parser(description: str) -> argparse.ArgumentParser:
 
 def open_backend(args: argparse.Namespace):
     """Construct and connect a backend, or raise SystemExit(2)."""
+    start_stk = bool(getattr(args, "start_stk", False))
     config = {"backend": {"type": args.backend,
+                          "com": {"start_stk": start_stk},
                           "connect": {"host": args.host, "port": args.port}}}
+    if start_stk and args.backend == "com":
+        print("WARNING: --start-stk: if no STK Desktop is running, one is "
+              "started through COM. Runs refuse such an STK unless "
+              "--allow-com-started-stk; start STK Desktop yourself for "
+              "real runs.", file=sys.stderr)
     try:
         backend = create_backend(config)
         backend.connect()

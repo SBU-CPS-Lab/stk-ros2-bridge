@@ -142,6 +142,13 @@ class Provenance:
     #: orchestrator started it (--twin-launch matlab-batch); empty for a
     #: twin started by hand and in records written before it existed.
     matlab_version: str = ""
+    #: The STK Desktop process a COM run used (acav/stk_process.py),
+    #: written by the run orchestrator: pid, started_at, command_line,
+    #: parent, uptime_s and started_by ("operator", "com" or "unknown").
+    #: None for other backends and in records written before it existed.
+    #: An STK started through COM ran E6 slower (P10), so timing is never
+    #: pooled across started_by values. No RECORD_VERSION bump.
+    stk_process: Optional[Dict[str, Any]] = None
     started_utc: str = ""
     finished_utc: str = ""
     #: Free-text, e.g. which machine, which STK licence features.
@@ -164,6 +171,8 @@ class Provenance:
             "graphics_mode": self.graphics_mode,
             "real_time_factor": self.real_time_factor,
             "matlab_version": self.matlab_version,
+            "stk_process": (dict(self.stk_process)
+                            if self.stk_process is not None else None),
             "started_utc": self.started_utc,
             "finished_utc": self.finished_utc,
             "notes": self.notes,
@@ -192,6 +201,9 @@ class Provenance:
             real_time_factor=(None if raw.get("real_time_factor") is None
                               else float(raw["real_time_factor"])),
             matlab_version=str(raw.get("matlab_version", "") or ""),
+            stk_process=(dict(raw["stk_process"])
+                         if isinstance(raw.get("stk_process"), dict)
+                         else None),
             started_utc=str(raw.get("started_utc", "")),
             finished_utc=str(raw.get("finished_utc", "")),
             notes=str(raw.get("notes", "")),

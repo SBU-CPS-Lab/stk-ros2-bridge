@@ -43,6 +43,19 @@ def _accept_twin_identity(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _operator_started_stk(monkeypatch):
+    """Offline tests have no STK: report one the operator started.
+
+    test_stk_process.py injects its own processes through Deps.
+    """
+    import acav.deploy_run_cli as deploy_run_cli
+    monkeypatch.setattr(deploy_run_cli, "_find_stk_processes", lambda: [{
+        "pid": 1, "parent_pid": 0, "parent_name": "explorer.exe",
+        "command_line": "AgUiApplication.exe", "started_at": "",
+        "uptime_s": 0.0, "started_by": "operator"}])
+
+
+@pytest.fixture(autouse=True)
 def _graphics_off(monkeypatch):
     """Offline tests have no bridge to sample STK: report "off" (the
     default every run requires). test_graphics_mode_runner.py injects

@@ -39,6 +39,7 @@ def create_backend(config: Optional[Dict[str, Any]] = None) -> StkBackend:
           type: com          # com | engine | connect | mock | auto
           com:
             attach_to_existing: true
+            start_stk: false   # true: start STK if none is running
             visible: true
             user_control: true
           engine:
@@ -98,6 +99,7 @@ def _build_com(options: Dict[str, Any]) -> StkBackend:
         attach_to_existing=bool(options.get("attach_to_existing", True)),
         visible=bool(options.get("visible", True)),
         user_control=bool(options.get("user_control", True)),
+        start_stk=bool(options.get("start_stk", False)),
     )
 
 

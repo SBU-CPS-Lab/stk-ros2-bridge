@@ -108,6 +108,9 @@ class RunConfig:
     #: or "matlab-batch" (the runner starts and stops MATLAB itself, see
     #: acav/twin_launcher.py).
     twin_launch: str = "manual"
+    #: Run on an STK Desktop started through COM, or one the runner
+    #: cannot identify (acav/stk_process.py); refused otherwise.
+    allow_com_started_stk: bool = False
 
     def resolved_log_dir(self) -> str:
         if self.log_dir:
@@ -150,6 +153,9 @@ class Deps:
     #: () -> (status, restore or None): QuickEdit off for this console
     #: (acav.console.disable_quickedit).
     disable_quickedit: Callable[[], Tuple[str, Optional[Callable]]] = None
+    #: () -> every running STK Desktop process, each with started_by
+    #: (acav.stk_process.stk_processes).
+    find_stk_processes: Callable[[], List[dict]] = None
 
     def __post_init__(self) -> None:
         if self.start_recorder is None:
@@ -171,6 +177,8 @@ class Deps:
         if self.disable_quickedit is None:
             from acav.console import disable_quickedit
             self.disable_quickedit = disable_quickedit
+        if self.find_stk_processes is None:
+            self.find_stk_processes = _find_stk_processes
 
 
 @dataclass
@@ -218,6 +226,15 @@ def _private_ros_node(name: str):
                     logging.getLogger(__name__).warning(
                         "%s: cleanup failed", name, exc_info=True)
         rclpy.try_shutdown(context=context)
+
+
+def _probe_stk_processes() -> List[dict]:
+    from acav.stk_process import stk_processes
+    return stk_processes()
+
+
+#: Deps' default; offline tests replace this hook (conftest.py).
+_find_stk_processes = _probe_stk_processes
 
 
 def _check_graph_idle(prefix: str) -> None:
@@ -1052,6 +1069,22 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 return EXIT_STEP_FAILED
             record("bridge_connected", True,
                    connect_result.detail or connect_result.backend_type)
+            # Which STK the bridge attached to, and who started it: an
+            # STK started through COM is refused (acav/stk_process.py).
+            summary["stk_process"] = None
+            summary["allow_com_started_stk"] = config.allow_com_started_stk
+            if config.backend == "com":
+                from acav.stk_process import assess
+                process, stk_ok, detail = assess(
+                    deps.find_stk_processes(),
+                    config.allow_com_started_stk)
+                summary["stk_process"] = process
+                record("stk_process", stk_ok, detail)
+                if stk_ok and process.get("started_by") != "operator":
+                    run_log.warning("this run's STK is not an operator-"
+                                    "started one: %s", detail)
+                if not stk_ok:
+                    return EXIT_STEP_FAILED
             if (config.backend not in ("mock",)
                     and connect_result.backend_type == "mock"):
                 # Not fatal by itself -- some backends legitimately fall
@@ -1155,7 +1188,8 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
             graphics_ok = finished and _check_graphics_end(
                 config, data, summary, record)
             _label_record(config.output,
-                          real_time_factor=summary["real_time_factor"])
+                          real_time_factor=summary["real_time_factor"],
+                          stk_process=summary["stk_process"])
             gate_ok = True
             if config.execution_mode == "free_run":
                 # The twin's ZOH sub-step statistics (adcs.simulink_step);
@@ -1255,6 +1289,11 @@ def _parser() -> argparse.ArgumentParser:
                         help="STK graphics state this run requires: off (no "
                              "2D/3D Graphics window, STK minimised; the "
                              "default) or on")
+    parser.add_argument("--allow-com-started-stk", action="store_true",
+                        help="run on an STK Desktop started through COM "
+                             "(-Embedding) or one the runner cannot "
+                             "identify; refused by default, since final "
+                             "runs use an STK the operator started")
     parser.add_argument("--twin-launch", choices=("manual", "matlab-batch"),
                         default="manual",
                         help="manual (the default: build the twin and press "
@@ -1307,6 +1346,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         real_time_factor=args.real_time_factor,
         diagnostic_label=args.diagnostic_label,
         twin_launch=args.twin_launch,
+        allow_com_started_stk=args.allow_com_started_stk,
     )
     return execute_run(config)
 

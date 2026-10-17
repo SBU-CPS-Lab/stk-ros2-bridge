@@ -211,7 +211,8 @@ class TestExecuteRunHappyPath:
             summary = json.load(handle)
         steps = {s["step"]: s["ok"] for s in summary["steps"]}
         assert steps == {"idle_check": True,
-                         "bridge_connected": True, "stk_graphics": True,
+                         "bridge_connected": True, "stk_process": True,
+                         "stk_graphics": True,
                          "twin_acking": True, "twin_identity": True,
                          "scheduler_exit": True, "stk_graphics_end": True,
                          "topic_capture": True}

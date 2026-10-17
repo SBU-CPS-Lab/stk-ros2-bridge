@@ -260,9 +260,11 @@ class TestRunnerAutomated:
 class TestManualIsUnchanged:
     """Byte for byte what the runner did before --twin-launch existed,
     plus console_quickedit (P9e), errors (the waits' own exceptions) and
-    the bridge's startup record (bridge_*), which every run now records."""
+    the bridge's startup record (bridge_*) and which STK the run used
+    (stk_process, allow_com_started_stk), which every run now records."""
 
-    KEYS = ['bridge_connect_s', 'bridge_exit_code', 'bridge_last_phase',
+    KEYS = ['allow_com_started_stk',
+            'bridge_connect_s', 'bridge_exit_code', 'bridge_last_phase',
             'bridge_phase_durations', 'bridge_startup',
             'code_version', 'console_quickedit', 'diagnostic_label',
             'equivalence_diagnostic', 'errors',
@@ -270,9 +272,9 @@ class TestManualIsUnchanged:
             'graphics_mode', 'graphics_mode_required', 'graphics_samples',
             'graphics_startup', 'orbit_batch_samples', 'output_exists',
             'real_time_factor', 'run_config', 'run_config_run_id_verified',
-            'run_id', 'sensing_mode', 'started_at', 'steps',
+            'run_id', 'sensing_mode', 'started_at', 'steps', 'stk_process',
             'twin_identity', 'twin_identity_problems']
-    STEPS = ['idle_check', 'bridge_connected', 'stk_graphics',
+    STEPS = ['idle_check', 'bridge_connected', 'stk_process', 'stk_graphics',
              'twin_acking', 'twin_identity', 'scheduler_exit',
              'stk_graphics_end', 'topic_capture']
 

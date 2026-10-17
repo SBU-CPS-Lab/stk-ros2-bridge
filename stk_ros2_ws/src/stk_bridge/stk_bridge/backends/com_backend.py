@@ -67,9 +67,14 @@ class ComBackend(StkBackend):
     """In-process COM access to STK Desktop through ``agi.stk12``."""
 
     def __init__(self, attach_to_existing: bool = True,
-                 visible: bool = True, user_control: bool = True):
+                 visible: bool = True, user_control: bool = True,
+                 start_stk: bool = False):
         super().__init__(BackendType.COM)
         self._attach_to_existing = attach_to_existing
+        #: Start an STK when there is none to attach to. Off by default:
+        #: an STK started through COM ran E6 at 95.7 ms against about
+        #: 60 ms (P10 live session), and runs must use the operator's.
+        self._start_stk = start_stk
         self._visible = visible
         self._user_control = user_control
         self._stk: Any = None
@@ -88,6 +93,46 @@ class ComBackend(StkBackend):
 
     # -- lifecycle ---------------------------------------------------------
 
+    def _obtain_application(self):
+        """The operator's STK Desktop; a new one only when configured.
+
+        Attaching is the only default. Starting STK (start_stk, or
+        attach_to_existing false) is logged as a warning: that STK is a
+        COM server (AgUiApplication.exe -Embedding), which the run
+        orchestrator refuses for reportable runs.
+        """
+        from agi.stk12.stkdesktop import STKDesktop
+
+        if self._attach_to_existing:
+            try:
+                application = STKDesktop.AttachToApplication()
+                LOGGER.info("attached to a running STK Desktop instance")
+                return application
+            except Exception as exc:
+                if not self._start_stk:
+                    raise BackendUnavailableError(
+                        BackendType.COM.value,
+                        "no running STK Desktop to attach to. Start STK "
+                        "Desktop yourself (runs must use an STK the "
+                        "operator started), or set backend.com.start_stk: "
+                        "true (build/verify scripts: --start-stk) to let "
+                        f"this start one. Underlying error: {exc}",
+                    ) from exc
+        try:
+            application = STKDesktop.StartApplication(
+                visible=self._visible, userControl=self._user_control)
+        except Exception as exc:
+            raise BackendUnavailableError(
+                BackendType.COM.value, f"failed to start STK Desktop: {exc}"
+            ) from exc
+        LOGGER.warning(
+            "STARTED A NEW STK Desktop through COM (%s). It is not an "
+            "operator-started STK: the run orchestrator refuses reportable "
+            "runs on it unless --allow-com-started-stk.",
+            "start_stk" if self._attach_to_existing
+            else "attach_to_existing is false")
+        return application
+
     def connect(self) -> None:
         if self._connected:
             return
@@ -101,7 +146,7 @@ class ComBackend(StkBackend):
             )
 
         try:
-            from agi.stk12.stkdesktop import STKDesktop
+            import agi.stk12.stkdesktop  # noqa: F401 - is it installed?
         except ImportError as exc:
             raise BackendUnavailableError(
                 BackendType.COM.value,
@@ -112,20 +157,8 @@ class ComBackend(StkBackend):
                 f"STK 12.8. Underlying error: {exc}",
             ) from exc
 
+        self._stk = self._obtain_application()
         try:
-            if self._attach_to_existing:
-                try:
-                    self._stk = STKDesktop.AttachToApplication()
-                    LOGGER.info("attached to a running STK Desktop instance")
-                except Exception:
-                    LOGGER.info("no running STK found; starting a new one")
-                    self._stk = STKDesktop.StartApplication(
-                        visible=self._visible, userControl=self._user_control
-                    )
-            else:
-                self._stk = STKDesktop.StartApplication(
-                    visible=self._visible, userControl=self._user_control
-                )
             self._root = self._stk.Root
         except Exception as exc:
             raise BackendUnavailableError(

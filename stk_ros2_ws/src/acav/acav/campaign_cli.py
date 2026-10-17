@@ -212,6 +212,18 @@ def twin_launch_modes(output_dir: str) -> dict:
     return {mode: sorted(ids) for mode, ids in modes.items()}
 
 
+def stk_start_modes(records: List[RunRecord]) -> dict:
+    """provenance.stk_process started_by -> run ids ("" for records
+    without one: other backends, and records made before it existed)."""
+    from acav.stk_process import start_mode
+
+    modes: dict = {}
+    for record in records:
+        modes.setdefault(start_mode(record.provenance.stk_process),
+                         []).append(record.result.run_id)
+    return {mode: sorted(ids) for mode, ids in modes.items()}
+
+
 def graphics_modes(records: List[RunRecord]) -> dict:
     """provenance.graphics_mode -> run ids ("" for records without one)."""
     modes: dict = {}
@@ -537,6 +549,20 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             "each mode to its own directory.",
             "; ".join(f"{mode!r}: {', '.join(ids)}"
                       for mode, ids in sorted(launch_modes.items())))
+        return 1
+
+    start_modes = stk_start_modes(records)
+    if len(start_modes) > 1:
+        # E6 on an STK started through COM stepped at 95.7 ms against
+        # about 60 ms (P10 live session); a record that does not say
+        # which STK it had could be either, so it is kept apart too.
+        LOGGER.error(
+            "refusing to report: these records were made on STK Desktop "
+            "instances started differently (operator, through COM, or not "
+            "recorded), which must not be pooled: %s. Move each to its own "
+            "directory.",
+            "; ".join(f"{mode or 'not recorded'!r}: {', '.join(ids)}"
+                      for mode, ids in sorted(start_modes.items())))
         return 1
 
     # Each record against its own scenario, found by digest among the
