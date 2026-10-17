@@ -142,5 +142,6 @@ def test_orbit_batch_uses_the_stop_time_read_at_startup():
 
 def test_the_module_reads_the_stop_time_once_at_startup():
     import inspect
-    source = inspect.getsource(bridge_module.StkBridgeNode.start)
+    # start() runs its steps in _start() (startup phases, P10 report).
+    source = inspect.getsource(bridge_module.StkBridgeNode._start)
     assert source.count("_read_scenario_stop()") == 1

@@ -76,6 +76,7 @@ from stk_bridge.backends.base import (
 )
 from stk_bridge.core import conversions as conv
 from stk_bridge.core import data_providers as dp
+from stk_bridge.core.startup_phases import maybe_phase
 from stk_bridge.exceptions import (
     ConventionValidationError,
     QueryError,
@@ -180,8 +181,12 @@ class ConventionValidator:
                  fatal_checks: Optional[Dict[str, bool]] = None,
                  cleanup: bool = True,
                  use_dedicated_object: bool = True,
-                 prefer_inertial_attitude: bool = False):
+                 prefer_inertial_attitude: bool = False,
+                 phases=None):
         self._backend = backend
+        #: Optional core.startup_phases.StartupPhases: each check is
+        #: timed as "validation/<check>".
+        self._phases = phases
         #: The attitude command form actuation is configured to use. When
         #: both pairings round-trip (they do on STK 12.6), the one that
         #: matches it must win: the sensing side reads through whichever
@@ -265,6 +270,11 @@ class ConventionValidator:
 
     def _run(self, name: str, check: Callable[[], str],
              default_fatal: bool = True) -> None:
+        with maybe_phase(self._phases, f"validation/{name}"):
+            self._run_check(name, check, default_fatal)
+
+    def _run_check(self, name: str, check: Callable[[], str],
+                   default_fatal: bool) -> None:
         try:
             detail = check()
             self._record(name, True, detail, default_fatal)
@@ -278,7 +288,8 @@ class ConventionValidator:
 
     def validate(self) -> ValidationReport:
         try:
-            self._path = self._setup_object()
+            with maybe_phase(self._phases, "validation/setup_object"):
+                self._path = self._setup_object()
         except Exception as exc:
             self._record("setup", False,
                          f"could not create a validation object: {exc}")
@@ -301,7 +312,8 @@ class ConventionValidator:
             self._run("attitude_history_clears", self._check_attitude_clear,
                       default_fatal=False)
         finally:
-            self._teardown_object()
+            with maybe_phase(self._phases, "validation/teardown_object"):
+                self._teardown_object()
 
         LOGGER.info("validation complete:\n%s", self._report.summary())
         return self._report
@@ -756,7 +768,8 @@ class ConventionValidator:
 # ---------------------------------------------------------------------------
 
 def validate_backend(backend: StkBackend, test_object_path: str,
-                     config: Optional[Dict] = None) -> ValidationReport:
+                     config: Optional[Dict] = None,
+                     phases=None) -> ValidationReport:
     """Convenience entry point used by ``nodes/bridge_node.py``.
 
     Config shape::
@@ -783,5 +796,6 @@ def validate_backend(backend: StkBackend, test_object_path: str,
         prefer_inertial_attitude=bool(
             ((config or {}).get("actuation") or {}).get(
                 "default_attitude_inertial", False)),
+        phases=phases,
     )
     return validator.validate()

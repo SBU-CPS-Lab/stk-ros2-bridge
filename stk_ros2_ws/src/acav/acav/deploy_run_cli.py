@@ -71,6 +71,11 @@ EXIT_OK = 0
 EXIT_STEP_FAILED = 1
 EXIT_USAGE = 2
 
+#: Launch to BridgeStatus CONNECTED took 43.7-76.1 s over 40 runs (P10
+#: live session report); 90 s failed a run still inside validation. 180 s
+#: is about 2.4x the slowest, and the wait ends early if the bridge exits.
+BRIDGE_CONNECT_TIMEOUT_S = 180.0
+
 
 @dataclass
 class RunConfig:
@@ -89,7 +94,7 @@ class RunConfig:
     bridge_config: str
     prefix: str = "stk"
     log_dir: str = ""
-    bridge_connect_timeout_s: float = 90.0
+    bridge_connect_timeout_s: float = BRIDGE_CONNECT_TIMEOUT_S
     twin_ack_timeout_s: float = 60.0
     ros_domain_id: str = ""
     #: STK graphics state the run requires: "off" (no 2D/3D Graphics
@@ -123,7 +128,10 @@ class Deps:
     start_recorder: Callable = None
     check_idle: Callable[[str], None] = None
     popen: Callable[..., "subprocess.Popen"] = subprocess.Popen
-    wait_for_bridge_connected: Callable[[str, float, str], "ConnectResult"] = None
+    #: (prefix, timeout_s, ros_domain_id, bridge exit code or None)
+    wait_for_bridge_connected: Callable[
+        [str, float, str, Callable[[], Optional[int]]],
+        "ConnectResult"] = None
     wait_for_twin_ack: Callable[[str, float], bool] = None
     #: (run config path, timeout) -> (identity text, problems); empty
     #: problems means the twin loaded this run's config and runs this
@@ -248,6 +256,12 @@ TWIN_SUBSTEPS_FILE = "twin_substeps.json"
 FREE_RUN_PACING_FILE = "free_run_pacing.json"
 #: When a free-run bridge's start gate opened, and the wall time it held.
 STARTUP_GATE_FILE = "startup_gate.json"
+#: Each bridge startup phase's duration, written by the bridge as it goes
+#: (stk_bridge core/startup_phases.py).
+STARTUP_PHASES_FILE = "bridge_startup_phases.json"
+#: BridgeStatus.state names, for failure details.
+BRIDGE_STATES = {0: "STARTING", 1: "CONNECTED", 2: "DEGRADED",
+                 3: "DISCONNECTED", 4: "ERROR"}
 #: The startup sample is written before the bridge reports CONNECTED;
 #: the terminal one at the last step, before the scheduler can finish.
 GRAPHICS_STARTUP_TIMEOUT_S = 10.0
@@ -329,6 +343,9 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
             os.path.abspath(log_dir), STARTUP_GATE_FILE)
         settings["free_run_pacing_file"] = os.path.join(
             os.path.abspath(log_dir), FREE_RUN_PACING_FILE)
+    # Where the bridge times its startup phases, as they happen.
+    settings["startup_phases_file"] = os.path.join(
+        os.path.abspath(log_dir), STARTUP_PHASES_FILE)
     path = os.path.join(log_dir, RUN_BRIDGE_CONFIG)
     with open(path, "w", encoding="utf-8") as handle:
         yaml.safe_dump(settings, handle, sort_keys=False)
@@ -504,9 +521,15 @@ def scheduler_argv(config: RunConfig, twin_identity: str = "") -> List[str]:
     return argv
 
 
-def _wait_for_bridge_connected_ros(prefix: str, timeout_s: float,
-                                   ros_domain_id: str) -> ConnectResult:
+def _wait_for_bridge_connected_ros(
+        prefix: str, timeout_s: float, ros_domain_id: str,
+        bridge_exit_code: Optional[Callable[[], Optional[int]]] = None,
+) -> ConnectResult:
     """Poll ``{prefix}/status`` for ``state == CONNECTED``.
+
+    Ends at once if ``bridge_exit_code()`` says the bridge process has
+    exited: waiting out the bound for a dead bridge only delays the
+    failure.
 
     Imported lazily -- this module must stay importable (for the offline
     unit tests) on a machine with no ROS 2 sourced.
@@ -537,6 +560,11 @@ def _wait_for_bridge_connected_ros(prefix: str, timeout_s: float,
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             executor.spin_once(timeout_sec=0.5)
+            code = bridge_exit_code() if bridge_exit_code else None
+            if code is not None:
+                return ConnectResult(
+                    False, "", f"the bridge exited (code {code}) before "
+                               f"it reported CONNECTED")
             if node.count_publishers(f"{prefix}/status") > 1:
                 return ConnectResult(False, "", "multiple bridge status publishers detected")
             if seen:
@@ -550,7 +578,8 @@ def _wait_for_bridge_connected_ros(prefix: str, timeout_s: float,
         if seen:
             return ConnectResult(
                 False, seen[-1].backend_type,
-                f"timed out; last state={seen[-1].state}")
+                f"timed out; last state={seen[-1].state} "
+                f"({BRIDGE_STATES.get(seen[-1].state, 'unknown')})")
         return ConnectResult(False, "", "no BridgeStatus received at all")
 
 
@@ -598,6 +627,33 @@ def _read_json_or_none(path: str) -> Optional[dict]:
             return json.load(handle)
     except (OSError, ValueError):
         return None
+
+
+def _bridge_startup_fields(phases: Optional[dict]) -> dict:
+    """summary.json's view of bridge_startup_phases.json (None: no file)."""
+    phases = phases or {}
+    return {
+        "bridge_startup": phases or None,
+        "bridge_last_phase": (phases.get("current")
+                              or phases.get("last_phase") or None),
+        "bridge_phase_durations": {
+            entry["phase"]: entry["s"]
+            for entry in phases.get("phases") or []},
+    }
+
+
+def _startup_phase_note(phases: Optional[dict]) -> str:
+    """Where the bridge's startup had got to, for a step's detail."""
+    if not phases:
+        return (f"no {STARTUP_PHASES_FILE} (the bridge never began timing "
+                f"its startup)")
+    if phases.get("current"):
+        return (f"bridge startup phase: {phases['current']} since "
+                f"{phases.get('current_since', '?')}")
+    if phases.get("finished"):
+        return (f"bridge startup {phases.get('outcome', '')}"
+                + (f": {phases['error']}" if phases.get("error") else ""))
+    return f"bridge startup: last phase {phases.get('last_phase') or '-'}"
 
 
 def _read_graphics_state_file(path: str, phase: str,
@@ -965,21 +1021,37 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
         with _open_log(log_dir, "bridge.log") as bridge_log:
             argv = bridge_launch_argv(config, bridge_config)
             run_log.info("launching bridge: %s", " ".join(argv))
+            launched = time.monotonic()
             bridge_proc = deps.popen(
                 argv, stdout=bridge_log, stderr=subprocess.STDOUT)
+
+            def record_startup(connected: bool) -> str:
+                """The bridge's startup record; the phase it was in."""
+                phases = _read_json_or_none(
+                    os.path.join(log_dir, STARTUP_PHASES_FILE))
+                summary.update(_bridge_startup_fields(phases))
+                summary["bridge_connect_s"] = (
+                    round(time.monotonic() - launched, 1) if connected
+                    else None)
+                summary["bridge_exit_code"] = bridge_proc.poll()
+                return _startup_phase_note(phases)
 
             try:
                 connect_result = deps.wait_for_bridge_connected(
                     config.prefix, config.bridge_connect_timeout_s,
-                    config.ros_domain_id)
+                    config.ros_domain_id, bridge_proc.poll)
             except Exception as error:  # noqa: BLE001 - recorded, then fail
                 record_error("bridge_connected", error)
-                record("bridge_connected", False, str(error))
+                note = record_startup(False)
+                record("bridge_connected", False, f"{error}; {note}")
                 return EXIT_STEP_FAILED
-            record("bridge_connected", connect_result.connected,
-                   connect_result.detail or connect_result.backend_type)
+            note = record_startup(connect_result.connected)
             if not connect_result.connected:
+                record("bridge_connected", False,
+                       f"{connect_result.detail}; {note}")
                 return EXIT_STEP_FAILED
+            record("bridge_connected", True,
+                   connect_result.detail or connect_result.backend_type)
             if (config.backend not in ("mock",)
                     and connect_result.backend_type == "mock"):
                 # Not fatal by itself -- some backends legitimately fall
@@ -1171,7 +1243,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--prefix", default="stk")
     parser.add_argument("--log-dir", default="")
     parser.add_argument("--bridge-connect-timeout-s", type=float,
-                        default=90.0)
+                        default=BRIDGE_CONNECT_TIMEOUT_S)
     parser.add_argument("--twin-ack-timeout-s", type=float, default=60.0)
     parser.add_argument("--real-time-factor", type=_positive_finite,
                         default=None, metavar="RTF",

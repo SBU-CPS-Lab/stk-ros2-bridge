@@ -307,8 +307,9 @@ def test_an_error_in_a_later_wait_is_a_recorded_failed_step(
     summary = _summary(tmp_path)
     assert summary["steps"][-1]["step"] in (step, "topic_capture")
     failed = [entry for entry in summary["steps"] if entry["step"] == step]
-    assert failed == [{"step": step, "ok": False,
-                       "detail": f"{step} broke"}]
+    assert len(failed) == 1 and failed[0]["ok"] is False
+    # bridge_connected adds where the bridge's startup had got to.
+    assert failed[0]["detail"].startswith(f"{step} broke")
     error, = summary["errors"]
     assert (error["step"], error["type"]) == (step, "RuntimeError")
 

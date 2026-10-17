@@ -52,6 +52,7 @@ import yaml
 from stk_bridge.core import conversions as conv
 from stk_bridge.core.clock_timing import ClockAdvanceTiming
 from stk_bridge.core.graphics_state import GraphicsLog, describe
+from stk_bridge.core.startup_phases import StartupPhases
 from stk_bridge.exceptions import (
     ConventionValidationError,
     LockstepBarrierTimeoutError,
@@ -198,23 +199,49 @@ class StkBridgeNode:
         self._commanded_paths: Set[str] = set()
         self._commands_missing = 0
         self._attitude_mismatches = 0
+        #: Each startup phase's duration, written to startup_phases_file
+        #: as it happens (core/startup_phases.py); every change publishes
+        #: BridgeStatus STARTING.
+        self.startup = StartupPhases(
+            str(config.get("startup_phases_file") or ""),
+            on_change=self._publish_starting)
 
     # -- startup -----------------------------------------------------------
 
     def start(self) -> None:
-        """Connect, validate, then wire up ROS. Order is load-bearing."""
-        from stk_bridge.core.sensing import SensingPipeline
+        """Connect, validate, then wire up ROS. Order is load-bearing.
+
+        Only the status publisher exists before validation, so the
+        runner sees STARTING while the bridge connects and validates;
+        commands, services and telemetry still wait for validation.
+        """
         from stk_bridge.interfaces import qos as qos_module
-        from stk_bridge.interfaces.ros_subscribers import CommandInbox
 
         LOGGER.info("starting STK bridge")
-        self.worker.start(timeout_s=float(
-            (self.config.get("worker") or {}).get("start_timeout_s", 120.0)))
+        qos_profiles = qos_module.from_config(self.config)
+        self.bridge_publishers = self._make_bridge_publishers(qos_profiles)
+        try:
+            self._start(qos_profiles)
+        except BaseException as exc:
+            self.startup.finish("failed", f"{type(exc).__name__}: {exc}")
+            raise
+        self.startup.finish("connected")
+
+    def _start(self, qos_profiles) -> None:
+        from stk_bridge.core.sensing import SensingPipeline
+        from stk_bridge.interfaces.ros_subscribers import CommandInbox
+
+        self._publish_starting("")
+        with self.startup.phase("connect"):
+            self.worker.start(timeout_s=float(
+                (self.config.get("worker") or {}).get(
+                    "start_timeout_s", 120.0)))
 
         report = self.worker.call(
             lambda backend: self.scenario.setup(
                 run_validation=True,
                 validation_config=self.config,
+                phases=self.startup,
             ),
             "scenario setup + validation", timeout_s=300.0,
         )
@@ -223,27 +250,29 @@ class StkBridgeNode:
             report.attitude_provider, report.angular_rate_provider,
             report.angle_rate_scale.source,
         )
-        check_attitude_pairing(report, self.config)
+        with self.startup.phase("sensing"):
+            check_attitude_pairing(report, self.config)
+            self.sensing = SensingPipeline(
+                self.worker.backend, self.frames, self.sensing_config,
+                report)
+            self.sensing.set_attitude_write_probe(
+                self._inertial_sample_written)
+            self._apply_free_run_sensing_policy()
+            self._scenario_stop = self._read_scenario_stop()
+            # Before the interfaces exist, so before CONNECTED is
+            # published: the runner checks this sample right after
+            # bridge_connected.
+            self._sample_graphics("startup")
+            if self.sensing_config.orbit_batch_samples > 1:
+                self._attach_orbit_batch()
+            if self.sensing_config.equivalence_diagnostic:
+                self._attach_equivalence_diagnostic()
+            self.inbox = CommandInbox(coalesce=bool(
+                (self.config.get("actuation") or {}).get("coalesce", True)))
 
-        self.sensing = SensingPipeline(
-            self.worker.backend, self.frames, self.sensing_config, report)
-        self.sensing.set_attitude_write_probe(self._inertial_sample_written)
-        self._apply_free_run_sensing_policy()
-        self._scenario_stop = self._read_scenario_stop()
-        # Before the interfaces exist, so before CONNECTED is published:
-        # the runner checks this sample right after bridge_connected.
-        self._sample_graphics("startup")
-        if self.sensing_config.orbit_batch_samples > 1:
-            self._attach_orbit_batch()
-        if self.sensing_config.equivalence_diagnostic:
-            self._attach_equivalence_diagnostic()
-        self.inbox = CommandInbox(coalesce=bool(
-            (self.config.get("actuation") or {}).get("coalesce", True)))
-
-        qos_profiles = qos_module.from_config(self.config)
-        self._build_interfaces(qos_profiles)
-
-        self._arm_startup_gate(self.scenario.epoch)
+        with self.startup.phase("interfaces"):
+            self._build_interfaces(qos_profiles)
+            self._arm_startup_gate(self.scenario.epoch)
         self.health.record_success()
 
         self._running.set()
@@ -398,10 +427,7 @@ class StkBridgeNode:
             ReentrantCallbackGroup,
         )
         from stk_bridge.interfaces.ros_actions import ActionServers
-        from stk_bridge.interfaces.ros_publishers import (
-            BridgePublishers,
-            SatellitePublishers,
-        )
+        from stk_bridge.interfaces.ros_publishers import SatellitePublishers
         from stk_bridge.interfaces.ros_services import ServiceServers
         from stk_bridge.interfaces.ros_subscribers import CommandSubscribers
         from stk_bridge.interfaces.tf_broadcaster import TfBroadcaster
@@ -415,9 +441,9 @@ class StkBridgeNode:
             self.publishers[path] = SatellitePublishers(
                 self.node, path, self.frames, qos_profiles, self._prefix)
 
-        self.bridge_publishers = BridgePublishers(
-            self.node, qos_profiles, self._prefix,
-            publish_clock=self.time_sync.config.publish_clock)
+        if self.bridge_publishers is None:
+            self.bridge_publishers = self._make_bridge_publishers(
+                qos_profiles)
 
         self._subscribers = CommandSubscribers(
             self.node, self.inbox, qos_profiles, self._prefix,
@@ -435,6 +461,31 @@ class StkBridgeNode:
         self._actions = ActionServers(
             self.node, self.worker, self._context, self._prefix,
             callback_group=service_group)
+
+    def _make_bridge_publishers(self, qos_profiles):
+        from stk_bridge.interfaces.ros_publishers import BridgePublishers
+
+        return BridgePublishers(
+            self.node, qos_profiles, self._prefix,
+            publish_clock=self.time_sync.config.publish_clock)
+
+    def _publish_starting(self, phase: str) -> None:
+        """BridgeStatus STARTING, while startup is still running.
+
+        The message has no field for the phase; it is in
+        startup_phases_file, which the runner reads.
+        """
+        from stk_bridge.core.health import BridgeState
+
+        if (self.bridge_publishers is None or self.startup.finished
+                or self.health.state != BridgeState.STARTING):
+            return
+        self.bridge_publishers.publish_status(
+            state=int(BridgeState.STARTING),
+            backend_type=self.worker.backend.backend_type.value,
+            stk_version="", dropped={}, queue_depth=0,
+            queue_capacity=self.worker.queue_capacity, latency_ms=0.0,
+            last_error="")
 
     # -- shutdown ----------------------------------------------------------
 

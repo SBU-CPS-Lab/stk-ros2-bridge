@@ -31,6 +31,7 @@ from stk_bridge.backends.base import (
 from stk_bridge.core import conversions as conv
 from stk_bridge.core import data_providers as dp
 from stk_bridge.core.frames import FrameRegistry, validate_against_backend
+from stk_bridge.core.startup_phases import maybe_phase
 from stk_bridge.core.validation import ValidationReport, validate_backend
 from stk_bridge.exceptions import (
     LicenseError,
@@ -119,29 +120,40 @@ class ScenarioManager:
     # -- setup -------------------------------------------------------------
 
     def setup(self, run_validation: bool = True,
-              validation_config: Optional[Dict] = None) -> ValidationReport:
+              validation_config: Optional[Dict] = None,
+              phases=None) -> ValidationReport:
         """Full startup sequence. Returns the validation report.
 
         Order matters: capabilities are checked before anything is
         created, so an unlicensed install fails in two seconds with a
         clear message rather than part-way through building a scenario.
+        ``phases`` (core.startup_phases.StartupPhases), if given, times
+        each step and each validation check.
         """
-        self._check_capabilities()
-        self._open_scenario()
-        self._epoch = self._backend.get_scenario_epoch()
-        self._refresh_objects()
-        self._ensure_objects()
-        self._check_frames()
+        with maybe_phase(phases, "capabilities"):
+            self._check_capabilities()
+        with maybe_phase(phases, "open_scenario"):
+            self._open_scenario()
+        with maybe_phase(phases, "epoch"):
+            self._epoch = self._backend.get_scenario_epoch()
+        with maybe_phase(phases, "objects"):
+            self._refresh_objects()
+            self._ensure_objects()
+        with maybe_phase(phases, "frames"):
+            self._check_frames()
 
         if run_validation:
-            self._report = validate_backend(
-                self._backend, "", validation_config or {}
-            )
-            self._report.raise_if_failed()
+            with maybe_phase(phases, "validation"):
+                self._report = validate_backend(
+                    self._backend, "", validation_config or {},
+                    phases=phases,
+                )
+                self._report.raise_if_failed()
             LOGGER.info("convention validation passed:\n%s",
                         self._report.summary())
 
-        self._prepare_realtime_objects()
+        with maybe_phase(phases, "realtime_objects"):
+            self._prepare_realtime_objects()
         return self._report
 
     def _check_capabilities(self) -> None:
