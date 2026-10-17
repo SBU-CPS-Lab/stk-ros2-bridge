@@ -102,28 +102,37 @@ about 38 min (one manual run).
 
 ### 4.1 E1: convention mismatch
 
-Purpose: what the convention validation prevents. Matrix: 2 lockstep
-runs (validated pairing; mis-paired read-back with the twin's guard
-ablated), reference scenario. Duration: about 25 min.
+Purpose: what each interface-mismatch type does to the loop, and whether
+the twin's guard sees it ([C1_case_study_spec.md](C1_case_study_spec.md)
+section 9). Matrix per repeat: the control; frame_pairing guard on and
+guard ablated; one guard-on run per other type (`--e1-types`, default all
+six). Lockstep, reference scenario. `plan` prints
+`E1 runs = N_REPEATS x (1 control + 2 frame_pairing + 5 other types)`.
+Duration: at most `<N_REPEATS>` x 8 x about 10.5 min; guard-on attitude
+arms and the time offset are expected to stop early (not timed yet).
 
 ```powershell
-ros2 run acav run_acav_campaign plan --experiment E1 --output-dir results\E1_<commit>
+ros2 run acav run_acav_campaign plan --experiment E1 --output-dir results\E1_<commit> --repeats <N_REPEATS>
 
-ros2 run acav run_acav_campaign run --experiment E1 --output-dir results\E1_<commit> --twin-launch matlab-batch -- `
+ros2 run acav run_acav_campaign run --experiment E1 --output-dir results\E1_<commit> --repeats <N_REPEATS> --twin-launch matlab-batch -- `
     python src\acav\scripts\run_acav_run.py `
         --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
         --execution-mode '{execution_mode}' --seed '{seed}' `
         --output '{output}' --scenario '{scenario}' --backend '{backend}' `
         --attitude-provider '{attitude_provider}' --run-config '{run_config}' `
         --gains-json '{gains_json}' --fault-json '{fault_json}' `
+        --mismatch '{mismatch}' --mismatch-guard '{mismatch_guard}' `
         --bridge-config src\acav\config\bridge_params_acav.yaml
 
-ros2 run acav run_acav_campaign report --experiment E1 --output-dir results\E1_<commit>
+ros2 run acav run_acav_campaign report --experiment E1 --output-dir results\E1_<commit> --repeats <N_REPEATS>
 ```
 
-Check: the treatment's `summary.json` shows the forced provider, and
-its record's `provenance.attitude_readback_provider` is
-`ECF Attitude Quaternions`. Send back the folder.
+Check: each record's `provenance.mismatch` / `mismatch_guard` names its
+arm, and the frame_pairing records read back through
+`ECF Attitude Quaternions`. A run expected to stop (guard on with an
+attitude mismatch, or the time offset) leaves no record but a
+`summary.json`; `report` counts it as a fail-stop in its arm. Send back
+the folder, fail-stops included.
 
 ### 4.2 E2: scheduler comparison
 

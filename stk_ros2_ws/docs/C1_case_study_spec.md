@@ -150,10 +150,26 @@ backend (`RunRecord.unreportable_reasons`).
 
 | ID | Question | Design |
 |---|---|---|
-| **E1** | Does convention validation matter? | Two lockstep runs: the validated attitude pairing against a deliberately mis-paired read-back (`ECF Attitude Quaternions` against the inertial command) with the twin's mismatch guard explicitly ablated. Expected: error inflated by the Earth-rotation angle, capture collapsing, nothing erroring. |
+| **E1** | What does an interface-convention mismatch do, and is it caught? | Lockstep, per repeat: a control and six mismatch types (below), each guard-on; frame_pairing also guard-ablated. Run count: `<N_REPEATS>` x (1 + 2 + 5). |
 | **E2** | Does kinematic planning over-promise? | Kinematic against dynamics-aware scheduling on the same targets, lockstep, on the reference scenario and on seeded scenarios. Capture rate, coverage rate, over-promise gap, outcome breakdown. **Headline.** |
 | **E3** | What does lockstep buy, and what does free-run cost? | Repeated lockstep and free-run runs with identical configuration, free-run at rtf 1.0 and 0.5; compare determinism signatures, outcomes and coupling metrics. Includes **deterministic fault replay**: a seeded wheel fault, SAFE on the momentum guard, and bit-identical reproduction in lockstep (formerly E5). |
 | **E6** | What does it cost? | Repeated identical lockstep runs: per-step sense, actuate and barrier-wait times, achieved step rate. Graphics off, no CPU sampler, operator-started STK. |
+
+**E1 mismatch types** (`acav/campaign.py` `E1_MISMATCH_TYPES`; the five
+new ones injected only on the telemetry the bridge publishes,
+`stk_bridge/core/mismatch_injection.py`, no twin or message change):
+
+| Type | Injected at | Expected observable | Guard |
+|---|---|---|---|
+| frame_pairing | bridge read-back provider (`sensing.force_attitude_provider`) | read-back off by the Earth-rotation angle; ablated: capture collapses | on and ablated |
+| quaternion_order | published attitude, (w, x, y, z) | twin guard residual above 5e-5: run stops (fail-stop) | on |
+| quaternion_conjugate | published attitude, conjugate | same; blind only at w = 0 or a zero vector part | on |
+| angle_rate_units | published body rate, deg/s | **expected-null control**: the twin takes STK's rate only to initialise | on |
+| distance_units | published position/velocity, km | wrong line of sight; guard blind | on |
+| time_offset | published telemetry stamps, +37 s | twin holds (stamps != ScenarioTime), never acks: fail-stop | on |
+
+The table states expectations from offline reference checks
+(`test_e1_mismatch.py`), not results.
 
 **Dropped and merged.** E4 (controller gain sweep) is dropped and its
 code removed; records labelled E4 still load. E5 (fault replay) is

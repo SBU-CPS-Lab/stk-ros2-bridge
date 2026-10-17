@@ -78,6 +78,14 @@ hand. Any architecture or pipeline diagram in this project's docs (see
 | E5 (E3 fault replay) | Replay reproduction | A status-colored dot per replayed seed. No axis to sum or compare in magnitude, only per-seed pass/fail. |
 | E6 | Latency breakdown | One stacked horizontal bar: sense + actuate + barrier-wait. Three parts of one step, so a stack — a grouped bar would wrongly suggest the phases are alternatives rather than components of one total. |
 
+E1's report (`campaign_cli._e1_arms`) gives one entry per arm
+(`control`, `frame_pairing/on`, `frame_pairing/ablated`, `<type>/on`):
+runs with a record, capture and coverage rate, outcomes, and fail-stops
+(planned runs that stopped, with their failed steps). The
+`angle_rate_units/on` arm carries the label "expected-null control" and
+no harm claim. The figure still shows the control against the
+frame_pairing treatment.
+
 E1's comparison is **not** grouped by scheduler the way E2's is:
 `acav.campaign.convention_comparison` splits by whether the attitude
 read-back provider was forced (`Provenance.attitude_provider`), because

@@ -159,7 +159,7 @@ the fault made no difference rather than that the run was reproduced.
 
 | Builder (`acav/campaign.py`) | `--experiment` | Runs | Shape |
 |---|---|---:|---|
-| `build_e1_convention` | E1 | 2 | validated read-back against the deliberately mis-paired one, lockstep |
+| `build_e1_matrix` | E1 | `--repeats` x (1 + 2 + 5) | control, frame_pairing guard on and ablated, five more guard-on mismatch types (`--e1-types`), lockstep |
 | `build_e2_scheduler_comparison` | E2 | 2 | kinematic and dynamics-aware, lockstep, on `--scenario` (reference by default) |
 | `build_e3_determinism` | E3 | 2 x `--repeats` | `--repeats` lockstep and `--repeats` free-run runs, identical config, seeds 0..repeats-1 on both sides |
 | `build_e5_fault_campaign` | E5 | `--seeds` | one seeded wheel fault per seed, lockstep |
@@ -180,7 +180,14 @@ E3 sets the same seeds on both sides so that an identical free-run batch
 would mean a deterministic loop, not an unvaried one, and groups results
 by the mode the bridge *reported*.
 
-E1's treatment sets `sensing.force_attitude_provider` on the bridge,
+E1's mismatch type and guard travel like the forced provider: the run
+id, `{mismatch}` / `{mismatch_guard}`, `--mismatch` / `--mismatch-guard`,
+`sensing.inject_mismatch` in the bridge YAML copy, `e1_mismatch` in the
+run config, `Provenance.mismatch` / `mismatch_guard`; never the
+determinism signature. `report` groups E1 by arm and counts a planned
+run with a `summary.json` but no record as a fail-stop in its arm. The
+original two-run treatment (`build_e1_convention`) stays for old folders.
+E1's frame_pairing treatment sets `sensing.force_attitude_provider` on the bridge,
 pairing `ECF Attitude Quaternions` against the inertial command, and
 disables the twin's mismatch guard (`attitude_mismatch_policy:
 e1_readback_ablation` in the run config): E1 measures what the guard
