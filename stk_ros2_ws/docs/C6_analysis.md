@@ -75,7 +75,6 @@ hand. Any architecture or pipeline diagram in this project's docs (see
 | E2 | Capture rate vs coverage rate | Grouped bar, same 0-1 scale. **Never** a dual-axis chart — the two metrics have different denominators (`acav/metrics.py`), so two y-scales would let unrelated ranges appear to correlate. |
 | E2 | Outcome breakdown | Stacked horizontal bar, status colors. `CaptureOutcome` *is* a status (captured / still slewing / no access / SAFE), so status color, not a generic categorical cycle. |
 | E3 | Determinism | Two panels: distinct-signature count (a status fact — deterministic or not) and pointing-error spread (a magnitude, degrees) — different scales, so two panels rather than one dual-axis chart. |
-| E4 | Gain surface | Heatmap. **E4 is dropped from the study**; the figure function remains. |
 | E5 (E3 fault replay) | Replay reproduction | A status-colored dot per replayed seed. No axis to sum or compare in magnitude, only per-seed pass/fail. |
 | E6 | Latency breakdown | One stacked horizontal bar: sense + actuate + barrier-wait. Three parts of one step, so a stack — a grouped bar would wrongly suggest the phases are alternatives rather than components of one total. |
 

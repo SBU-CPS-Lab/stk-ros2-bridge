@@ -98,7 +98,7 @@ class Provenance:
     #: reference and in records written before they were recorded.
     scenario_seed: Optional[int] = None
     scenario_generator_version: str = ""
-    #: Controller gains in force, for E4's sweep.
+    #: Controller gains in force (per-run overrides; empty for nominal).
     gains: Dict[str, float] = field(default_factory=dict)
     #: The injected fault for this run, if any (see acav.fault_injection).
     fault: Optional[Dict[str, Any]] = None

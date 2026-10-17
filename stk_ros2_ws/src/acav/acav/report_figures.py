@@ -1,7 +1,7 @@
 """C6's figures -- one function per experiment's question.
 
 Each function takes the aggregation :mod:`acav.campaign` already
-computes (``compare_schedulers``, ``gain_surface``,
+computes (``compare_schedulers``,
 ``determinism_comparison``, ``latency_breakdown``) and returns a
 ``matplotlib.figure.Figure``. Nothing here re-derives a metric -- that
 would risk the exact failure C1 warns about for the slew model, two
@@ -27,10 +27,6 @@ Chart-type rationale, briefly (see ``docs/C6_analysis.md`` for the rest)
   the drop, so the two bars sit directly adjacent with the gap
   annotated -- not spread across a category axis that invites reading
   it as a trend.
-* **E4 -- gain surface**: a heatmap, sequential blue, one hue. This is
-  the textbook "magnitude over two continuous axes" case a heatmap is
-  for; a 3-D surface plot would look impressive and read worse -- axis
-  occlusion on a print page, no way to eyeball the actual chosen point.
 * **E3 -- determinism spread**: distinct signature counts are a status
   fact (deterministic or not), so status color; the pointing-error
   spread that is the *magnitude* of any non-determinism is a
@@ -48,13 +44,11 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from acav.report_style import (
     CATEGORICAL,
-    GRIDLINE,
     INK_MUTED,
     INK_PRIMARY,
     INK_SECONDARY,
     MODE_COLOR,
     SCHEDULER_COLOR,
-    SEQUENTIAL_BLUE,
     STATUS_COLOR,
     apply_style,
     scheduler_label,
@@ -290,72 +284,6 @@ def e3_determinism_figure(determinism: Dict[str, Any]):
 
     fig.suptitle("E3 -- Lockstep vs free-run determinism", y=1.03,
                 fontweight="bold", color=INK_PRIMARY)
-    return fig
-
-
-# ---------------------------------------------------------------------------
-# E4 -- can the loop tune the controller?
-# ---------------------------------------------------------------------------
-
-def e4_gain_surface_figure(surface: List[Dict[str, Any]]):
-    """Capture rate over (bandwidth, profile authority) -- a heatmap.
-
-    ``surface`` is ``acav.campaign.gain_surface``'s output: one point per
-    combination actually run. Missing combinations are left blank (NaN)
-    rather than interpolated -- an interpolated cell would show a value
-    for a gain pair the vehicle was never actually flown at.
-    """
-    import numpy as np
-
-    if not surface:
-        return _no_data_figure("E4 -- Gain sweep", "No sweep points yet.")
-
-    frequencies = sorted({p["gains"].get("natural_frequency_rad_s")
-                          for p in surface
-                          if "natural_frequency_rad_s" in p["gains"]})
-    authorities = sorted({p["gains"].get("profile_authority")
-                          for p in surface
-                          if "profile_authority" in p["gains"]})
-    if not frequencies or not authorities:
-        return _no_data_figure(
-            "E4 -- Gain sweep",
-            "Points do not vary natural_frequency_rad_s and "
-            "profile_authority together.")
-
-    grid = np.full((len(authorities), len(frequencies)), np.nan)
-    for point in surface:
-        gains = point["gains"]
-        if ("natural_frequency_rad_s" not in gains
-                or "profile_authority" not in gains):
-            continue
-        row = authorities.index(gains["profile_authority"])
-        col = frequencies.index(gains["natural_frequency_rad_s"])
-        value = point["capture_rate"]
-        grid[row, col] = value if value == value else np.nan  # keep NaN
-
-    from matplotlib.colors import LinearSegmentedColormap
-
-    cmap = LinearSegmentedColormap.from_list("acav_sequential_blue",
-                                             SEQUENTIAL_BLUE)
-    cmap.set_bad(color=GRIDLINE)
-
-    fig, ax = _figure(width=6.2, height=4.6)
-    ax.grid(False)
-    image = ax.imshow(grid, cmap=cmap, vmin=0.0, vmax=1.0, aspect="auto",
-                      origin="lower")
-    ax.set_xticks(range(len(frequencies)))
-    ax.set_xticklabels([f"{f:.1f}" for f in frequencies])
-    ax.set_yticks(range(len(authorities)))
-    ax.set_yticklabels([f"{a:.1f}" for a in authorities])
-    ax.set_xlabel(r"Natural frequency $\omega_n$ (rad/s)")
-    ax.set_ylabel("Profile authority")
-    ax.set_title("E4 -- Capture rate over the gain sweep")
-
-    colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
-    colorbar.set_label("Capture rate")
-    colorbar.outline.set_visible(False)
-
-    fig.tight_layout()
     return fig
 
 

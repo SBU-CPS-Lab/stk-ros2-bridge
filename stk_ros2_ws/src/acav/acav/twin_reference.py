@@ -104,7 +104,7 @@ class TwinConfig:
     #: against the 8 s the scheduler budgets. At 0.7 rad/s the largest
     #: slew needed +9.8 s and would have missed every tight target for
     #: a reason that has nothing to do with the effect under study.
-    #: E4 sweeps these, which is why they are here and not in the model.
+    #: Per-run overrides can set these, which is why they are here and not in the model.
     #:
     #: Honest caveat for the paper: this bandwidth is optimistic for a
     #: 6U CubeSat because the twin models no sensor noise, no attitude

@@ -132,7 +132,7 @@ travels as a small JSON the runner writes beside each result:
 
 `adcs.config(scenario, runConfig)` merges it, and `build_acav_twin`
 takes a `RunConfigPath` that bakes it into the generated model. The same
-file carries the gains (used by the dropped E4 sweep), which had the
+file carries per-run gains (nominal runs set none), which had the
 same problem: neither is a property of the scenario, so neither belongs
 in the YAML. It also carries the run id and the execution mode.
 
@@ -164,7 +164,6 @@ the fault made no difference rather than that the run was reproduced.
 | `build_e3_determinism` | E3 | 2 x `--repeats` | `--repeats` lockstep and `--repeats` free-run runs, identical config, seeds 0..repeats-1 on both sides |
 | `build_e5_fault_campaign` | E5 | `--seeds` | one seeded wheel fault per seed, lockstep |
 | `build_e6_latency` | E6 | `--repeats` | identical lockstep runs |
-| `build_e4_gain_sweep` | E4 | 49 | dropped from the study; kept in code |
 
 The real-time factor is not part of a matrix: it is passed to every run
 through the launch command (`--real-time-factor 0.5` after `--`), and

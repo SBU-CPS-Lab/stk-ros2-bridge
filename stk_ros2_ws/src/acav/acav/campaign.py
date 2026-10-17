@@ -1,4 +1,4 @@
-"""Run matrices and aggregation for the E2-E5 campaigns.
+"""Run matrices and aggregation for the E1, E2, E3, E5 and E6 campaigns.
 
 The pure half of C5. This module decides *what runs to do* and *what the
 results mean*; it never launches anything, opens a socket or imports
@@ -6,9 +6,9 @@ ROS. :mod:`acav.campaign_runner` is the thin layer that executes a
 matrix built here, in the same division C4 already uses between
 ``scheduling.py`` and ``scheduler_node.py``.
 
-Keeping it pure is not tidiness. A campaign is 40 runs for E3, 49 for
-E4 and 100+ for E5, each needing STK and MATLAB, so a campaign is a
-thing you run overnight on the Windows machine and cannot iterate on.
+Keeping it pure is not tidiness. A campaign is tens of runs, each needing
+STK and MATLAB for 10-16 minutes, so a campaign is a thing you run
+overnight on the Windows machine and cannot iterate on.
 Everything about it that can be wrong *before* it starts -- which runs,
 which seeds, which gains, which fault, and whether the results support
 the claim afterwards -- is decided by code that runs in milliseconds on
@@ -49,8 +49,8 @@ LOCKSTEP = "lockstep"
 FREE_RUN = "free_run"
 
 #: Gain keys, matching ``TwinConfig`` field names exactly. Spelling them
-#: the same on both sides means E4's sweep can be applied to the twin
-#: without a translation table that could drift.
+#: the same on both sides means per-run gains reach the twin without a
+#: translation table that could drift.
 GAIN_KEYS = ("natural_frequency_rad_s", "damping_ratio", "profile_authority")
 
 
@@ -286,43 +286,6 @@ def build_e3_determinism(repeats: int = 20, scenario_path: str = "",
         runs=tuple(runs), scenario_path=scenario_path, backend=backend)
 
 
-def build_e4_gain_sweep(frequencies: Sequence[float] = (),
-                        authorities: Sequence[float] = (),
-                        scenario_path: str = "", backend: str = "com",
-                        scheduler: str = "dynamics_aware") -> Campaign:
-    """E4: capture metric over a grid of controller gains.
-
-    Defaults to the 7x7 grid C1's compute budget sizes (49 runs), spanning
-    the bandwidth and profile-authority axes C3 actually measured when it
-    chose w_n = 1.0 and authority = 0.8. Damping is not swept: C3 fixed
-    zeta = 0.707 for the standard reason, and adding a third axis would
-    take the campaign from an overnight run to a weekend one for a
-    parameter the design does not treat as free.
-
-    E4 is only interpretable because E3 established that a single run is
-    noise-free -- otherwise each grid point would need repeats and the
-    surface would be measuring variance rather than gain.
-    """
-    frequencies = tuple(frequencies) or (0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6)
-    authorities = tuple(authorities) or (0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
-
-    runs = []
-    for frequency in frequencies:
-        for authority in authorities:
-            runs.append(RunSpec(
-                experiment="E4", scheduler=scheduler,
-                execution_mode=LOCKSTEP,
-                gains={"natural_frequency_rad_s": frequency,
-                       "profile_authority": authority}))
-    return Campaign(
-        campaign_id="E4_gain_sweep",
-        experiment="E4",
-        description=(f"{len(frequencies)}x{len(authorities)} sweep of "
-                     f"closed-loop bandwidth against profile authority, "
-                     f"scored by E2's capture metric."),
-        runs=tuple(runs), scenario_path=scenario_path, backend=backend)
-
-
 def build_e5_fault_campaign(seeds: Sequence[int], window_duration_s: float,
                             scenario_path: str = "", backend: str = "com",
                             scheduler: str = "dynamics_aware",
@@ -438,23 +401,6 @@ def determinism_comparison(records: Sequence[RunRecord]) -> Dict[str, Any]:
         summary["signatures"] = sorted({r.signature for r in group})
         report[mode] = summary
     return report
-
-
-def gain_surface(records: Sequence[RunRecord],
-                 total_targets: int) -> List[Dict[str, Any]]:
-    """E4's surface: one point per gain combination, sorted for plotting."""
-    points = []
-    for record in records:
-        points.append({
-            "gains": dict(record.provenance.gains),
-            "run_id": record.result.run_id,
-            "capture_rate": capture_rate(record.result),
-            "coverage_rate": coverage_rate(record.result, total_targets),
-            "attempted": record.result.attempted_count,
-            "captured": record.result.captured_count,
-        })
-    return sorted(points, key=lambda p: tuple(
-        p["gains"].get(key, 0.0) for key in GAIN_KEYS))
 
 
 @dataclass(frozen=True)

@@ -46,12 +46,10 @@ from acav.campaign import (
     build_e2_scheduler_comparison,
     build_e6_latency,
     build_e3_determinism,
-    build_e4_gain_sweep,
     build_e5_fault_campaign,
     compare_schedulers,
     convention_comparison,
     determinism_comparison,
-    gain_surface,
     latency_breakdown,
 )
 from acav import code_version
@@ -67,7 +65,9 @@ from acav.spec import AcavSpec
 
 LOGGER = logging.getLogger(__name__)
 
-EXPERIMENTS = ("E1", "E2", "E3", "E4", "E5", "E6")
+#: E4 (gain sweep) was dropped from the study and removed; records
+#: labelled E4 still load (load_results never checks the label).
+EXPERIMENTS = ("E1", "E2", "E3", "E5", "E6")
 
 
 def build_campaign(experiment: str, spec: AcavSpec, scenario_path: str,
@@ -79,9 +79,6 @@ def build_campaign(experiment: str, spec: AcavSpec, scenario_path: str,
         return build_e2_scheduler_comparison(scenario_path, backend)
     if experiment == "E3":
         return build_e3_determinism(repeats, scenario_path, backend)
-    if experiment == "E4":
-        return build_e4_gain_sweep(scenario_path=scenario_path,
-                                   backend=backend)
     if experiment == "E6":
         return build_e6_latency(repeats, scenario_path, backend)
     if experiment == "E5":
@@ -102,7 +99,7 @@ def load_results(output_dir: str) -> List[RunRecord]:
     records = []
     for path in sorted(glob.glob(os.path.join(output_dir, "*.json"))):
         name = os.path.basename(path)
-        # campaign.json is the manifest; *.runconfig.json is the E4/E5
+        # campaign.json is the manifest; *.runconfig.json is the run's
         # gain-and-fault input CommandLauncher writes BESIDE each
         # result (see campaign_runner.write_run_config) -- both live in
         # the same directory as the records and match *.json, but
@@ -271,10 +268,6 @@ def analyse(experiment: str, records: List[RunRecord],
         lockstep = report["determinism"].get(LOCKSTEP, {})
         report["claim_holds"] = bool(lockstep.get("deterministic"))
         report["claim"] = ("lockstep runs share one determinism signature")
-    elif experiment == "E4":
-        report["surface"] = gain_surface(records, total_targets)
-        report["claim_holds"] = len(records) > 0
-        report["claim"] = "every gain combination produced a result"
     elif experiment == "E2":
         report["schedulers"] = compare_schedulers(records, total_targets)
         report["claim_holds"] = {"kinematic", "dynamics_aware"} <= set(
@@ -458,8 +451,6 @@ def make_figure(experiment: str, report: dict, records: List[RunRecord],
                "outcomes": rf.e2_outcome_breakdown_figure(schedulers)}
     if experiment == "E3":
         return rf.e3_determinism_figure(report.get("determinism", {}))
-    if experiment == "E4":
-        return rf.e4_gain_surface_figure(report.get("surface", []))
     if experiment == "E5":
         from acav.campaign import replay_matches
 

@@ -344,7 +344,7 @@ def write_run_config(run: RunSpec, output_path: str) -> str:
     """Write the per-run gain and fault overrides beside the result.
 
     These are the two things a campaign varies about the *twin* rather
-    than about the scenario -- E4's gains and E5's fault -- and the twin
+    than about the scenario -- per-run gains and E5's fault -- and the twin
     is MATLAB, so they have to cross a process boundary. A file beats
     stuffing JSON through a shell argument: it survives quoting, it is
     inspectable afterwards next to the record it produced, and the
@@ -450,7 +450,7 @@ def check_record(run: RunSpec, record: RunRecord,
     Empty means the record describes the run asked for. Every check here
     is one that would otherwise corrupt an experiment silently: a wrong
     seed or fault breaks E5's replay claim, a wrong scheduler breaks
-    E2's comparison, and wrong gains break E4's surface. A record whose
+    E2's comparison, and wrong gains break any run that sets them. A record whose
     targets are not exactly its scenario's (``scenario``, by default the
     installed one) has every count short or padded.
 

@@ -155,9 +155,9 @@ backend (`RunRecord.unreportable_reasons`).
 | **E3** | What does lockstep buy, and what does free-run cost? | Repeated lockstep and free-run runs with identical configuration, free-run at rtf 1.0 and 0.5; compare determinism signatures, outcomes and coupling metrics. Includes **deterministic fault replay**: a seeded wheel fault, SAFE on the momentum guard, and bit-identical reproduction in lockstep (formerly E5). |
 | **E6** | What does it cost? | Repeated identical lockstep runs: per-step sense, actuate and barrier-wait times, achieved step rate. Graphics off, no CPU sampler, operator-started STK. |
 
-**Dropped and merged.** E4 (controller gain sweep) is dropped; its
-campaign builder remains in `acav/campaign.py` but no experiment uses
-it. E5 (fault replay) is merged into E3; the E5 campaign builder still
+**Dropped and merged.** E4 (controller gain sweep) is dropped and its
+code removed; records labelled E4 still load. E5 (fault replay) is
+merged into E3; the E5 campaign builder still
 plans the seeded lockstep fault runs (`run_acav_campaign --experiment
 E5`). Candidate studies not yet decided (a communication-step study, an
 offline file-exchange baseline) are in

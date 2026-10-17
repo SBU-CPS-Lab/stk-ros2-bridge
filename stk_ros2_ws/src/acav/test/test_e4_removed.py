@@ -22,14 +22,9 @@ from acav.run_record import Provenance, RunRecord, read_record, write_record
 
 from test_campaign import _result, covering  # noqa: I100
 
-#: Committed before the removal; the removal commit drops it. strict: a
-#: test that passes before the removal fails the suite.
-PENDING = pytest.mark.xfail(strict=True, reason="E4 not removed yet")
-
 BASE = ["--output-dir", "out"]
 
 
-@PENDING
 def test_e4_is_not_an_experiment_choice():
     with pytest.raises(SystemExit):
         _parser().parse_args(["plan", "--experiment", "E4"] + BASE)
@@ -40,7 +35,6 @@ def test_the_remaining_experiments_are_choices():
         _parser().parse_args(["plan", "--experiment", experiment] + BASE)
 
 
-@PENDING
 def test_the_e4_code_is_gone():
     assert not hasattr(campaign, "build_e4_gain_sweep")
     assert not hasattr(campaign, "gain_surface")
