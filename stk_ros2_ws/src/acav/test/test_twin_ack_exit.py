@@ -13,8 +13,6 @@ import json
 import os
 import types
 
-import pytest
-
 from acav import twin_launcher as tl
 from acav.deploy_run_cli import ConnectResult, Deps, execute_run
 from acav.metrics import RunResult
@@ -24,15 +22,8 @@ import acav.deploy_run_cli as deploy_run_cli
 from test_deploy_run_cli import FakeProcess, _config  # noqa: I100
 from test_ros_wait_contexts import FakeRos  # noqa: I100
 
-#: Committed before the fix; the fix commit removes it. strict: a test
-#: that passes before the fix fails the suite.
-PENDING = pytest.mark.xfail(strict=True,
-                            reason="twin-ack wait does not stop on exit yet")
-
-
 # --- the ROS wait ------------------------------------------------------------
 
-@PENDING
 def test_the_ros_wait_ends_as_soon_as_matlab_exits(monkeypatch):
     fake = FakeRos(monkeypatch)
     codes = iter([None, None, 1])
@@ -41,7 +32,6 @@ def test_the_ros_wait_ends_as_soon_as_matlab_exits(monkeypatch):
     assert fake.now < 5.0
 
 
-@PENDING
 def test_the_ros_wait_still_sees_an_ack_while_matlab_runs(monkeypatch):
     def ack(fake):
         fake.deliver("/stk/scenario_time", types.SimpleNamespace(step_index=3))
@@ -119,7 +109,6 @@ def _step(summary, name):
     return [s for s in summary["steps"] if s["step"] == name][0]
 
 
-@PENDING
 def test_matlab_exiting_ends_the_wait_and_is_recorded(tmp_path):
     code, summary, seen = _run(tmp_path, early=1, acks=True)
     assert code == 1
@@ -139,7 +128,6 @@ def test_matlab_exiting_ends_the_wait_and_is_recorded(tmp_path):
     assert "exited (code 1)" in error["message"]
 
 
-@PENDING
 def test_a_running_twin_that_acks_is_unchanged(tmp_path):
     code, summary, seen = _run(tmp_path, early=None, acks=True)
     assert code == 0
@@ -148,7 +136,6 @@ def test_a_running_twin_that_acks_is_unchanged(tmp_path):
     assert summary["errors"] == []
 
 
-@PENDING
 def test_a_running_twin_that_never_acks_times_out_as_before(tmp_path):
     code, summary, seen = _run(tmp_path, early=None, acks=False)
     assert code == 1
@@ -156,7 +143,6 @@ def test_a_running_twin_that_never_acks_times_out_as_before(tmp_path):
     assert summary["errors"] == []
 
 
-@PENDING
 def test_a_manual_twin_has_no_exit_check(tmp_path):
     code, summary, seen = _run(tmp_path, early=None, acks=True,
                                twin_launch="manual")

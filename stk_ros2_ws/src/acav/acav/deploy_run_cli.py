@@ -135,7 +135,9 @@ class Deps:
     wait_for_bridge_connected: Callable[
         [str, float, str, Callable[[], Optional[int]]],
         "ConnectResult"] = None
-    wait_for_twin_ack: Callable[[str, float], bool] = None
+    #: (prefix, timeout_s, automated twin's exit code or None) -> acked
+    wait_for_twin_ack: Callable[
+        [str, float, Optional[Callable[[], Optional[int]]]], bool] = None
     #: (run config path, timeout) -> (identity text, problems); empty
     #: problems means the twin loaded this run's config and runs this
     #: checkout's code (see acav/twin_identity.py).
@@ -600,8 +602,14 @@ def _wait_for_bridge_connected_ros(
         return ConnectResult(False, "", "no BridgeStatus received at all")
 
 
-def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
+def _wait_for_twin_ack_ros(
+        prefix: str, timeout_s: float,
+        twin_exit_code: Optional[Callable[[], Optional[int]]] = None,
+) -> bool:
     """Poll ``{prefix}/lockstep/ack`` for a message from ``matlab_twin``.
+
+    Returns False at once if ``twin_exit_code()`` says the automated
+    twin's MATLAB process has exited.
 
     Confirms the twin is not merely running but actually participating
     in the barrier -- the specific thing that matters, since a Simulink
@@ -635,6 +643,8 @@ def _wait_for_twin_ack_ros(prefix: str, timeout_s: float) -> bool:
             executor.spin_once(timeout_sec=0.5)
             if ticks and f"matlab_twin:{ticks[-1].step_index}" in seen:
                 return True
+            if twin_exit_code is not None and twin_exit_code() is not None:
+                return False
         return False
 
 
@@ -1129,21 +1139,37 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                     "(this script will then WAIT for its barrier ack, not "
                     "just trust the keypress): ")
 
+            # An automated twin's exit ends the wait at once; waiting out
+            # the timeout for a dead MATLAB only delays the failure (the
+            # d97800c incident waited 252.6 s after MATLAB had exited).
+            twin = twin_state["twin"]
+            exit_check = twin.exit_code if twin is not None else None
+            ack_started = time.monotonic()
             try:
                 twin_ok = deps.wait_for_twin_ack(config.prefix,
-                                                 ack_timeout_s)
+                                                 ack_timeout_s, exit_check)
             except Exception as error:  # noqa: BLE001 - recorded, then fail
                 record_error("twin_acking", error)
                 record("twin_acking", False, str(error))
                 return EXIT_STEP_FAILED
+            exit_code = exit_check() if exit_check is not None else None
+            ack_end = ("acked" if twin_ok else
+                       "matlab_exited" if exit_code is not None
+                       else "timeout")
+            summary["twin_ack_wait"] = {
+                "stopped": ack_end, "exit_code": exit_code,
+                "waited_s": round(time.monotonic() - ack_started, 1),
+                "timeout_s": ack_timeout_s}
             detail = "" if twin_ok else ("no matlab_twin ack seen before "
                                          "timeout -- check the Simulink "
                                          "model's Subscribe/Publish topics")
-            if not twin_ok and twin_state["twin"] is not None:
-                code = twin_state["twin"].exit_code()
-                if code is not None:
-                    detail = (f"MATLAB exited (code {code}) before the twin "
-                              f"acked; see matlab.log")
+            if ack_end == "matlab_exited":
+                detail = (f"MATLAB exited (code {exit_code}) before the twin "
+                          f"acked; see matlab.log")
+                summary["errors"].append({
+                    "step": "twin_acking", "type": "MatlabExited",
+                    "message": detail, "exit_code": exit_code,
+                    "traceback": ""})
             record("twin_acking", twin_ok, detail)
             if not twin_ok:
                 return EXIT_STEP_FAILED

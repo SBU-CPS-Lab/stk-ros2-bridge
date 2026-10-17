@@ -273,6 +273,7 @@ class TestManualIsUnchanged:
             'graphics_startup', 'orbit_batch_samples', 'output_exists',
             'real_time_factor', 'run_config', 'run_config_run_id_verified',
             'run_id', 'sensing_mode', 'started_at', 'steps', 'stk_process',
+            'twin_ack_wait',
             'twin_identity', 'twin_identity_problems']
     STEPS = ['idle_check', 'bridge_connected', 'stk_process', 'stk_graphics',
              'twin_acking', 'twin_identity', 'scheduler_exit',
