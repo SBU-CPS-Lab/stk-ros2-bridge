@@ -1,0 +1,509 @@
+[
+ [
+  "stk/sss_1/orbit",
+  {
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 123456000,
+     "sec": 1717237800
+    }
+   },
+   "is_extrapolated": false,
+   "object_path": "*/Satellite/SSS-1",
+   "position": {
+    "x": 6878137.0,
+    "y": 1.5,
+    "z": -2.25
+   },
+   "velocity": {
+    "x": 0.5,
+    "y": 7612.3,
+    "z": -1.0
+   }
+  }
+ ],
+ [
+  "stk/sss_1/attitude",
+  {
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 123456000,
+     "sec": 1717237800
+    }
+   },
+   "is_extrapolated": false,
+   "object_path": "*/Satellite/SSS-1",
+   "orientation": {
+    "w": 0.9273618495495703,
+    "x": 0.1,
+    "y": -0.2,
+    "z": 0.3
+   }
+  }
+ ],
+ [
+  "stk/sss_1/angular_rate",
+  {
+   "angular_velocity": {
+    "x": 0.01,
+    "y": -0.02,
+    "z": 0.003
+   },
+   "header": {
+    "frame_id": "SSS_1/body",
+    "stamp": {
+     "nanosec": 123456000,
+     "sec": 1717237800
+    }
+   },
+   "object_path": "*/Satellite/SSS-1"
+  }
+ ],
+ [
+  "stk/sss_1/lla",
+  {
+   "altitude_m": 500000.0,
+   "header": {
+    "frame_id": "fixed",
+    "stamp": {
+     "nanosec": 123456000,
+     "sec": 1717237800
+    }
+   },
+   "latitude": 0.5,
+   "longitude": -1.2,
+   "object_path": "*/Satellite/SSS-1"
+  }
+ ],
+ [
+  "stk/sss_1/eclipse",
+  {
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 123456000,
+     "sec": 1717237800
+    }
+   },
+   "object_path": "*/Satellite/SSS-1",
+   "state": 0
+  }
+ ],
+ [
+  "stk/sss_1/state",
+  {
+   "angular_rate": {
+    "angular_velocity": {
+     "x": 0.01,
+     "y": -0.02,
+     "z": 0.003
+    },
+    "header": {
+     "frame_id": "SSS_1/body",
+     "stamp": {
+      "nanosec": 123456000,
+      "sec": 1717237800
+     }
+    },
+    "object_path": "*/Satellite/SSS-1"
+   },
+   "attitude": {
+    "header": {
+     "frame_id": "icrf",
+     "stamp": {
+      "nanosec": 123456000,
+      "sec": 1717237800
+     }
+    },
+    "is_extrapolated": false,
+    "object_path": "*/Satellite/SSS-1",
+    "orientation": {
+     "w": 0.9273618495495703,
+     "x": 0.1,
+     "y": -0.2,
+     "z": 0.3
+    }
+   },
+   "eclipse": {
+    "header": {
+     "frame_id": "icrf",
+     "stamp": {
+      "nanosec": 123456000,
+      "sec": 1717237800
+     }
+    },
+    "object_path": "*/Satellite/SSS-1",
+    "state": 0
+   },
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 123456000,
+     "sec": 1717237800
+    }
+   },
+   "object_path": "*/Satellite/SSS-1",
+   "orbit": {
+    "header": {
+     "frame_id": "icrf",
+     "stamp": {
+      "nanosec": 123456000,
+      "sec": 1717237800
+     }
+    },
+    "is_extrapolated": false,
+    "object_path": "*/Satellite/SSS-1",
+    "position": {
+     "x": 6878137.0,
+     "y": 1.5,
+     "z": -2.25
+    },
+    "velocity": {
+     "x": 0.5,
+     "y": 7612.3,
+     "z": -1.0
+    }
+   }
+  }
+ ],
+ [
+  "stk/sss_1/orbit",
+  {
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 223456000,
+     "sec": 1717237800
+    }
+   },
+   "is_extrapolated": false,
+   "object_path": "*/Satellite/SSS-1",
+   "position": {
+    "x": 6878138.0,
+    "y": 1.5,
+    "z": -2.25
+   },
+   "velocity": {
+    "x": 0.5,
+    "y": 7612.3,
+    "z": -1.0
+   }
+  }
+ ],
+ [
+  "stk/sss_1/attitude",
+  {
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 223456000,
+     "sec": 1717237800
+    }
+   },
+   "is_extrapolated": false,
+   "object_path": "*/Satellite/SSS-1",
+   "orientation": {
+    "w": 0.9273618495495703,
+    "x": 0.1,
+    "y": -0.2,
+    "z": 0.3
+   }
+  }
+ ],
+ [
+  "stk/sss_1/angular_rate",
+  {
+   "angular_velocity": {
+    "x": 0.01,
+    "y": -0.02,
+    "z": 0.003
+   },
+   "header": {
+    "frame_id": "SSS_1/body",
+    "stamp": {
+     "nanosec": 223456000,
+     "sec": 1717237800
+    }
+   },
+   "object_path": "*/Satellite/SSS-1"
+  }
+ ],
+ [
+  "stk/sss_1/lla",
+  {
+   "altitude_m": 500000.0,
+   "header": {
+    "frame_id": "fixed",
+    "stamp": {
+     "nanosec": 223456000,
+     "sec": 1717237800
+    }
+   },
+   "latitude": 0.5,
+   "longitude": -1.2,
+   "object_path": "*/Satellite/SSS-1"
+  }
+ ],
+ [
+  "stk/sss_1/eclipse",
+  {
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 223456000,
+     "sec": 1717237800
+    }
+   },
+   "object_path": "*/Satellite/SSS-1",
+   "state": 0
+  }
+ ],
+ [
+  "stk/sss_1/state",
+  {
+   "angular_rate": {
+    "angular_velocity": {
+     "x": 0.01,
+     "y": -0.02,
+     "z": 0.003
+    },
+    "header": {
+     "frame_id": "SSS_1/body",
+     "stamp": {
+      "nanosec": 223456000,
+      "sec": 1717237800
+     }
+    },
+    "object_path": "*/Satellite/SSS-1"
+   },
+   "attitude": {
+    "header": {
+     "frame_id": "icrf",
+     "stamp": {
+      "nanosec": 223456000,
+      "sec": 1717237800
+     }
+    },
+    "is_extrapolated": false,
+    "object_path": "*/Satellite/SSS-1",
+    "orientation": {
+     "w": 0.9273618495495703,
+     "x": 0.1,
+     "y": -0.2,
+     "z": 0.3
+    }
+   },
+   "eclipse": {
+    "header": {
+     "frame_id": "icrf",
+     "stamp": {
+      "nanosec": 223456000,
+      "sec": 1717237800
+     }
+    },
+    "object_path": "*/Satellite/SSS-1",
+    "state": 0
+   },
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 223456000,
+     "sec": 1717237800
+    }
+   },
+   "object_path": "*/Satellite/SSS-1",
+   "orbit": {
+    "header": {
+     "frame_id": "icrf",
+     "stamp": {
+      "nanosec": 223456000,
+      "sec": 1717237800
+     }
+    },
+    "is_extrapolated": false,
+    "object_path": "*/Satellite/SSS-1",
+    "position": {
+     "x": 6878138.0,
+     "y": 1.5,
+     "z": -2.25
+    },
+    "velocity": {
+     "x": 0.5,
+     "y": 7612.3,
+     "z": -1.0
+    }
+   }
+  }
+ ],
+ [
+  "stk/sss_1/orbit",
+  {
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 323456000,
+     "sec": 1717237800
+    }
+   },
+   "is_extrapolated": false,
+   "object_path": "*/Satellite/SSS-1",
+   "position": {
+    "x": 6878139.0,
+    "y": 1.5,
+    "z": -2.25
+   },
+   "velocity": {
+    "x": 0.5,
+    "y": 7612.3,
+    "z": -1.0
+   }
+  }
+ ],
+ [
+  "stk/sss_1/attitude",
+  {
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 323456000,
+     "sec": 1717237800
+    }
+   },
+   "is_extrapolated": false,
+   "object_path": "*/Satellite/SSS-1",
+   "orientation": {
+    "w": 0.9273618495495703,
+    "x": 0.1,
+    "y": -0.2,
+    "z": 0.3
+   }
+  }
+ ],
+ [
+  "stk/sss_1/angular_rate",
+  {
+   "angular_velocity": {
+    "x": 0.01,
+    "y": -0.02,
+    "z": 0.003
+   },
+   "header": {
+    "frame_id": "SSS_1/body",
+    "stamp": {
+     "nanosec": 323456000,
+     "sec": 1717237800
+    }
+   },
+   "object_path": "*/Satellite/SSS-1"
+  }
+ ],
+ [
+  "stk/sss_1/lla",
+  {
+   "altitude_m": 500000.0,
+   "header": {
+    "frame_id": "fixed",
+    "stamp": {
+     "nanosec": 323456000,
+     "sec": 1717237800
+    }
+   },
+   "latitude": 0.5,
+   "longitude": -1.2,
+   "object_path": "*/Satellite/SSS-1"
+  }
+ ],
+ [
+  "stk/sss_1/eclipse",
+  {
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 323456000,
+     "sec": 1717237800
+    }
+   },
+   "object_path": "*/Satellite/SSS-1",
+   "state": 0
+  }
+ ],
+ [
+  "stk/sss_1/state",
+  {
+   "angular_rate": {
+    "angular_velocity": {
+     "x": 0.01,
+     "y": -0.02,
+     "z": 0.003
+    },
+    "header": {
+     "frame_id": "SSS_1/body",
+     "stamp": {
+      "nanosec": 323456000,
+      "sec": 1717237800
+     }
+    },
+    "object_path": "*/Satellite/SSS-1"
+   },
+   "attitude": {
+    "header": {
+     "frame_id": "icrf",
+     "stamp": {
+      "nanosec": 323456000,
+      "sec": 1717237800
+     }
+    },
+    "is_extrapolated": false,
+    "object_path": "*/Satellite/SSS-1",
+    "orientation": {
+     "w": 0.9273618495495703,
+     "x": 0.1,
+     "y": -0.2,
+     "z": 0.3
+    }
+   },
+   "eclipse": {
+    "header": {
+     "frame_id": "icrf",
+     "stamp": {
+      "nanosec": 323456000,
+      "sec": 1717237800
+     }
+    },
+    "object_path": "*/Satellite/SSS-1",
+    "state": 0
+   },
+   "header": {
+    "frame_id": "icrf",
+    "stamp": {
+     "nanosec": 323456000,
+     "sec": 1717237800
+    }
+   },
+   "object_path": "*/Satellite/SSS-1",
+   "orbit": {
+    "header": {
+     "frame_id": "icrf",
+     "stamp": {
+      "nanosec": 323456000,
+      "sec": 1717237800
+     }
+    },
+    "is_extrapolated": false,
+    "object_path": "*/Satellite/SSS-1",
+    "position": {
+     "x": 6878139.0,
+     "y": 1.5,
+     "z": -2.25
+    },
+    "velocity": {
+     "x": 0.5,
+     "y": 7612.3,
+     "z": -1.0
+    }
+   }
+  }
+ ]
+]
