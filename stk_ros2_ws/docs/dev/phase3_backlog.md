@@ -365,3 +365,23 @@ outside the code: process priority or CPU affinity, also recorded.
   103.4-113.2 s in 11 automated runs and 152.2 s in one (E5_P10_free2:
   every MATLAB phase slower; cause not determined). The ack timeout
   (252.6 s) still has 100 s of margin over the slowest.
+
+## Left after the live verification session (recorded 2026-10-17)
+
+Code for E1 (six mismatch types), E2 (paired analysis across seeds) and
+E3 (mode x fault matrix) is in place; the live verification session
+(docs/08_deploy_runbook.md section 7) checks it end to end. Still open:
+
+- **Repeat counts**: `<N_REPEATS>`, `<N_SEEDS>` (up to the ten generated
+  scenarios; n <= 5 cannot reach p < 0.05), `<N_FAULT_SEEDS>` and the
+  fault-seed list.
+- **Free-run rtf 0.5 wall time** with an automated twin: measured for the
+  first time in the verification session; the campaign estimate needs it.
+- **MissionMode chart**: wire it into the executed loop, or keep it as
+  the specification of `adcs.mission_mode` and say so in the paper
+  (twin change: fingerprint, `test_twin_model_runs`).
+- **Final runs** on one final commit, operator-started STK, by protocol.
+- **Paper text** from the final records only.
+- **The E4 comments** in the reference scenario YAML, the generated
+  scenarios, `+adcs/config.m` and `build_acav_twin.m`: clean them at the
+  next planned scenario or twin fingerprint change.
