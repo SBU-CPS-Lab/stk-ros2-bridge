@@ -501,6 +501,13 @@ def check_record(run: RunSpec, record: RunRecord,
     if recorded_arm != expected_arm:
         problems.append(f"E1 arm {recorded_arm!r}, expected "
                         f"{expected_arm!r}")
+    if run.real_time_factor is not None and (
+            provenance.real_time_factor is None
+            or abs(provenance.real_time_factor - run.real_time_factor)
+            > 1e-9):
+        problems.append(
+            f"real_time_factor {provenance.real_time_factor!r}, expected "
+            f"{run.real_time_factor!r}")
     if run.experiment == "E1" and not provenance.attitude_readback_provider:
         # E1's comparison is meaningless unless the bridge said which
         # provider it read through; a requested one proves nothing.
@@ -552,6 +559,34 @@ def write_manifest(campaign: Campaign, output_dir: str,
     return path
 
 
+#: The run command every campaign in docs/08_deploy_runbook.md uses, as
+#: an argument list (the campaign substitutes the placeholders in Python;
+#: no shell, so a JSON value or a path with spaces arrives intact).
+STANDARD_RUN_TEMPLATE = (
+    "python", "src\\acav\\scripts\\run_acav_run.py",
+    "--run-id", "{run_id}", "--experiment", "{experiment}",
+    "--scheduler", "{scheduler}", "--execution-mode", "{execution_mode}",
+    "--seed", "{seed}", "--output", "{output}", "--scenario", "{scenario}",
+    "--backend", "{backend}", "--attitude-provider", "{attitude_provider}",
+    "--run-config", "{run_config}", "--gains-json", "{gains_json}",
+    "--fault-json", "{fault_json}", "--mismatch", "{mismatch}",
+    "--mismatch-guard", "{mismatch_guard}",
+    "--real-time-factor", "{real_time_factor}",
+    "--bridge-config", "src\\acav\\config\\bridge_params_acav.yaml")
+
+
+def planned_commands(campaign: Campaign, output_dir: str,
+                     twin_launch: str = "matlab-batch") -> List[List[str]]:
+    """Every run's argv, as CommandLauncher with STANDARD_RUN_TEMPLATE
+    would run it; nothing is executed."""
+    commands: List[List[str]] = []
+    launcher = CommandLauncher(STANDARD_RUN_TEMPLATE, twin_launch=twin_launch,
+                               record_only=commands)
+    for run in campaign.runs:
+        launcher(run, campaign, os.path.join(output_dir, run.output_name))
+    return commands
+
+
 class CommandLauncher:
     """Run an external command per run, with the run's config substituted.
 
@@ -560,7 +595,7 @@ class CommandLauncher:
     template: ``{run_id}``, ``{experiment}``, ``{scheduler}``,
     ``{execution_mode}``, ``{seed}``, ``{output}``, ``{scenario}``,
     ``{backend}``, ``{attitude_provider}``, ``{mismatch}``,
-    ``{mismatch_guard}``, ``{run_config}``,
+    ``{mismatch_guard}``, ``{real_time_factor}``, ``{run_config}``,
     ``{gains_json}``, ``{fault_json}``, ``{twin_launch}``. With a
     twin_launch other than "manual", a template without
     ``{twin_launch}`` gets ``--twin-launch <value>`` appended.
@@ -578,9 +613,13 @@ class CommandLauncher:
 
     def __init__(self, argv: Sequence[str], timeout_s: Optional[float] = None,
                  cwd: str = "", env: Optional[Dict[str, str]] = None,
-                 twin_launch: str = "manual"):
+                 twin_launch: str = "manual",
+                 record_only: Optional[List[List[str]]] = None):
         if not argv:
             raise ValueError("a launch command is required")
+        #: When a list: each run's argv is appended to it instead of run
+        #: (planned_commands), so a plan shows exactly what would run.
+        self._record_only = record_only
         self._argv = list(argv)
         self._twin_launch = twin_launch
         self._timeout_s = timeout_s
@@ -603,6 +642,9 @@ class CommandLauncher:
             "attitude_provider": run.attitude_provider,
             "mismatch": run.mismatch,
             "mismatch_guard": run.mismatch_guard,
+            # Lockstep ignores it; 1.0 when the run sets none.
+            "real_time_factor": ("1.0" if run.real_time_factor is None
+                                 else repr(float(run.real_time_factor))),
             "run_config": run_config_path(output_path),
             "gains_json": json.dumps(run.gains, sort_keys=True),
             "fault_json": json.dumps(
@@ -617,6 +659,9 @@ class CommandLauncher:
                 and not any("{twin_launch}" in arg for arg in self._argv)):
             argv += ["--twin-launch", self._twin_launch]
 
+        if self._record_only is not None:
+            self._record_only.append(argv)
+            return
         LOGGER.debug("launching: %s", argv)
         completed = subprocess.run(argv, cwd=self._cwd, env=self._env,
                                    timeout=self._timeout_s, check=False)

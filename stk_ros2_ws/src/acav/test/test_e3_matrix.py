@@ -33,11 +33,9 @@ from acav.run_record import Provenance, RunRecord, write_record
 
 from test_campaign import _result, covering  # noqa: I100
 
-PENDING = pytest.mark.xfail(strict=True, reason="E3 matrix not written yet")
 WINDOW = 720.0
 
 
-@PENDING
 @pytest.mark.parametrize("n, k, expected", [(1, 0, 4), (3, 3, 32),
                                             (5, 5, 72), (2, 1, 12)])
 def test_the_run_count_formula(n, k, expected):
@@ -47,7 +45,6 @@ def test_the_run_count_formula(n, k, expected):
     assert len({r.run_id for r in campaign.runs}) == expected
 
 
-@PENDING
 def test_cells_and_order():
     from acav.campaign import build_e3_matrix
     runs = build_e3_matrix(3, 2, WINDOW).runs
@@ -62,7 +59,6 @@ def test_cells_and_order():
     assert all(r.experiment == "E3" for r in runs)
 
 
-@PENDING
 def test_one_fault_per_seed_the_same_in_every_mode():
     from acav.campaign import build_e3_matrix
     runs = build_e3_matrix(2, 3, WINDOW).runs
@@ -76,7 +72,6 @@ def test_one_fault_per_seed_the_same_in_every_mode():
                          ("free_run", 0.5)}
 
 
-@PENDING
 def test_no_fault_rtf1_runs_keep_build_e3_determinism_ids():
     from acav.campaign import build_e3_determinism, build_e3_matrix
     old = {r.run_id for r in build_e3_determinism(2).runs}
@@ -84,14 +79,12 @@ def test_no_fault_rtf1_runs_keep_build_e3_determinism_ids():
     assert old <= new
 
 
-@PENDING
 def test_the_run_id_names_the_half_rate():
     run = RunSpec(experiment="E3", execution_mode="free_run", seed=0,
                   real_time_factor=0.5)
     assert run.run_id == "E3-dynamics_aware-free_run-seed0-rtf0p5"
 
 
-@PENDING
 def test_every_emitted_command_parses_and_says_what_the_run_is(tmp_path):
     from acav.campaign import build_e3_matrix
     from acav.campaign_runner import planned_commands
@@ -112,7 +105,6 @@ def test_every_emitted_command_parses_and_says_what_the_run_is(tmp_path):
         assert args.run_config.endswith(f"{run.run_id}.runconfig.json")
 
 
-@PENDING
 def test_the_launcher_substitutes_the_real_time_factor():
     import inspect
 
@@ -120,7 +112,6 @@ def test_the_launcher_substitutes_the_real_time_factor():
     assert '"real_time_factor"' in inspect.getsource(CommandLauncher.__call__)
 
 
-@PENDING
 def test_plan_prints_formula_times_and_combined_campaign(tmp_path, capsys):
     from acav.campaign_cli import main
     code = main(["plan", "--experiment", "E3", "--repeats", "3",
@@ -150,7 +141,6 @@ def _record(tmp_path, run, signature_tweak=0.0, saturations=1,
     write_record(str(tmp_path / f"{run.run_id}.json"), record)
 
 
-@PENDING
 def test_report_checks_lockstep_replay_and_free_run_spread(tmp_path,
                                                             capsys):
     from acav.campaign import build_e3_matrix
@@ -176,7 +166,6 @@ def test_report_checks_lockstep_replay_and_free_run_spread(tmp_path,
     assert code == 0
 
 
-@PENDING
 def test_a_lockstep_replay_that_differs_is_named(tmp_path, capsys):
     from acav.campaign import build_e3_matrix
     from acav.campaign_cli import main
@@ -193,7 +182,6 @@ def test_a_lockstep_replay_that_differs_is_named(tmp_path, capsys):
     assert code == 1
 
 
-@PENDING
 def test_e3_refuses_a_record_outside_the_planned_cells(tmp_path, capsys,
                                                         caplog):
     from acav.campaign import build_e3_matrix
@@ -210,7 +198,6 @@ def test_e3_refuses_a_record_outside_the_planned_cells(tmp_path, capsys,
     assert stray.run_id in caplog.text
 
 
-@PENDING
 def test_other_experiments_refuse_mixed_execution_modes(tmp_path, capsys,
                                                          caplog):
     from acav.campaign_cli import main
@@ -226,7 +213,6 @@ def test_other_experiments_refuse_mixed_execution_modes(tmp_path, capsys,
     assert free.run_id in caplog.text
 
 
-@PENDING
 def test_check_record_compares_the_real_time_factor():
     from acav.campaign_runner import check_record
     run = RunSpec(experiment="E3", execution_mode="free_run", seed=0,

@@ -46,11 +46,16 @@ from acav.campaign import (
     E1_EXPECTED_NULL,
     E1_MISMATCH_TYPES,
     build_e1_matrix,
+    build_e3_matrix,
+    combined_plan_lines,
+    e3_counts,
+    e3_formula_line,
+    estimate_lines,
+    wall_time_lines,
     e1_arm,
     e1_formula_line,
     build_e2_scheduler_comparison,
     build_e6_latency,
-    build_e3_determinism,
     build_e5_fault_campaign,
     compare_schedulers,
     convention_comparison,
@@ -82,7 +87,8 @@ DEFAULT_REPEATS = {"E1": 1, "E3": 20, "E6": 20}
 
 def build_campaign(experiment: str, spec: AcavSpec, scenario_path: str,
                    backend: str, repeats: Optional[int], seeds: int,
-                   e1_types=E1_MISMATCH_TYPES) -> Campaign:
+                   e1_types=E1_MISMATCH_TYPES,
+                   fault_seeds: int = 0) -> Campaign:
     """The matrix for ``experiment``, sized from the scenario."""
     if repeats is None:
         repeats = DEFAULT_REPEATS.get(experiment, 20)
@@ -92,7 +98,8 @@ def build_campaign(experiment: str, spec: AcavSpec, scenario_path: str,
     if experiment == "E2":
         return build_e2_scheduler_comparison(scenario_path, backend)
     if experiment == "E3":
-        return build_e3_determinism(repeats, scenario_path, backend)
+        return build_e3_matrix(repeats, fault_seeds, spec.window_duration_s,
+                               scenario_path, backend)
     if experiment == "E6":
         return build_e6_latency(repeats, scenario_path, backend)
     if experiment == "E5":
@@ -335,6 +342,10 @@ def _parser() -> argparse.ArgumentParser:
                         help="E1: repeats of every arm (default 1); E3: runs "
                              "per execution mode (default 20); E6: runs "
                              "(default 20)")
+    parser.add_argument("--fault-seeds", type=int, default=0,
+                        metavar="K",
+                        help="E3: seeded wheel-fault cells beside the "
+                             "no-fault cell (seeds 0..K-1; default 0)")
     parser.add_argument("--e1-types", default=",".join(E1_MISMATCH_TYPES),
                         metavar="T1,T2,...",
                         help="E1: comma-separated mismatch types (default "
@@ -402,7 +413,7 @@ def main(argv: Optional[list] = None) -> int:
                          if t.strip())
         campaign = build_campaign(args.experiment, spec, scenario_path,
                                   args.backend, args.repeats, args.seeds,
-                                  e1_types)
+                                  e1_types, args.fault_seeds)
     except ValueError as error:
         LOGGER.error("%s", error)
         return 2
@@ -423,12 +434,49 @@ def _plan(campaign: Campaign, args) -> int:
                        key=E1_MISMATCH_TYPES.index)
         repeats = len({r.seed for r in campaign.runs})
         print(e1_formula_line(types, repeats))
+    if campaign.experiment == "E3":
+        _plan_e3(campaign, args)
     print(campaign.description)
     for run in campaign.runs:
         print(f"  {run.run_id}")
     print(f"\nmanifest written to "
           f"{os.path.join(args.output_dir, 'campaign.json')}")
     return 0
+
+
+def _plan_e3(campaign: Campaign, args) -> None:
+    """E3's plan: formula, measured times, totals, commands, resume."""
+    from acav.campaign_runner import planned_commands
+
+    repeats = (args.repeats if args.repeats is not None
+               else DEFAULT_REPEATS["E3"])
+    print(e3_formula_line(repeats, args.fault_seeds))
+    print("measured wall time per automated run (summary.json, started_at "
+          "to finished_at):")
+    for line in wall_time_lines():
+        print(line)
+    lines, low, high, unmeasured = estimate_lines(
+        "E3", e3_counts(repeats, args.fault_seeds))
+    for line in lines:
+        print(line)
+    total = f"  E3 measured part: {low / 60:.2f}-{high / 60:.2f} h"
+    if unmeasured:
+        total += f", plus {unmeasured} runs not measured"
+    print(total)
+    for line in combined_plan_lines(repeats, args.fault_seeds):
+        print(line)
+    print("order: lockstep, then free-run rtf 1.0, then free-run rtf 0.5; "
+          "the rate is in each run's command, nothing changes between "
+          "blocks")
+    print("resume: re-issue the same run command; a run whose record "
+          "matches it and whose summary.json has no failed step is "
+          "skipped, any other is run again and its old files renamed "
+          "*.superseded-<time>")
+    print("run commands (the campaign passes each as an argument list; "
+          "run the campaign, not these lines, from PowerShell):")
+    for run, argv in zip(campaign.runs, planned_commands(
+            campaign, args.output_dir, "matlab-batch")):
+        print(f"  {run.run_id}: {' '.join(argv)}")
 
 
 def _run(campaign: Campaign, args) -> int:
@@ -554,7 +602,10 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
 
     factors = _merged([effective_real_time_factors(directory)
                        for directory in directories])
-    if len(factors) > 1 or "unknown" in factors:
+    # E3's matrix holds two real-time factors on purpose; its cell check
+    # below refuses anything it did not plan.
+    if "unknown" in factors or (len(factors) > 1
+                                and args.experiment != "E3"):
         LOGGER.error(
             "refusing to report: these records do not share one real-time "
             "factor, which sets how fast free-run time follows the wall "
@@ -562,6 +613,32 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             "; ".join(f"{value!r}: {', '.join(ids)}"
                       for value, ids in factors.items()))
         return 1
+
+    execution = {}
+    for record in records:
+        execution.setdefault(record.provenance.execution_mode, []).append(
+            record.result.run_id)
+    if len(execution) > 1 and args.experiment != "E3":
+        LOGGER.error(
+            "refusing to report: these records mix execution modes, which "
+            "only E3 compares: %s. Move each mode to its own directory.",
+            "; ".join(f"{mode!r}: {', '.join(sorted(ids))}"
+                      for mode, ids in sorted(execution.items())))
+        return 1
+    if args.experiment == "E3":
+        planned = {_e3_cell(run.execution_mode, run.real_time_factor,
+                            None if run.fault is None
+                            else run.fault.to_dict())
+                   for run in campaign.runs}
+        stray = sorted(r.result.run_id for r in records if _e3_cell(
+            r.provenance.execution_mode, r.provenance.real_time_factor,
+            r.provenance.fault) not in planned)
+        if stray:
+            LOGGER.error(
+                "refusing to report: records outside the planned E3 cells "
+                "(execution mode, real-time factor, fault): %s",
+                ", ".join(stray))
+            return 1
 
     modes = graphics_modes(records)
     labelled_modes = {mode: ids for mode, ids in modes.items()
@@ -655,6 +732,13 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
 
     report = analyse(args.experiment, records, total_targets)
     fail_stops: List[str] = []
+    if args.experiment == "E3":
+        report["lockstep_replay"] = _lockstep_replay(records)
+        report["free_run_spread"] = _free_run_spread(records)
+        report["claim_holds"] = bool(report["lockstep_replay"]) and all(
+            cell["reproduced"] for cell in report["lockstep_replay"].values())
+        report["claim"] = ("each lockstep cell's repeats share one "
+                           "determinism signature (fault replay included)")
     if args.experiment == "E1":
         report["arms"], fail_stops, report["missing_runs"] = _e1_arms(
             campaign, records, directories, total_targets)
@@ -722,6 +806,58 @@ def _report_pairs(records: List[RunRecord], args) -> int:
             handle.write(text)
             handle.write("\n")
     return 0
+
+
+def _e3_cell(mode: str, rate: Optional[float], fault: Optional[dict]):
+    rate = 1.0 if rate is None and mode == "lockstep" else rate
+    return (mode, rate, json.dumps(fault, sort_keys=True))
+
+
+def _fault_label(fault: Optional[dict]) -> str:
+    return "none" if not fault else f"fault seed {fault.get('seed')}"
+
+
+def _lockstep_replay(records: List[RunRecord]) -> dict:
+    """Per lockstep fault cell: do the repeats share one signature?"""
+    cells: dict = {}
+    for record in records:
+        if record.provenance.execution_mode != "lockstep":
+            continue
+        cells.setdefault(_fault_label(record.provenance.fault), []).append(
+            record)
+    out = {}
+    for label, group in sorted(cells.items()):
+        signatures = {r.signature for r in group}
+        out[label] = {"runs": sorted(r.result.run_id for r in group),
+                      "distinct_signatures": len(signatures),
+                      "reproduced": len(group) >= 2 and len(signatures) == 1}
+    return out
+
+
+def _free_run_spread(records: List[RunRecord]) -> dict:
+    """Per (rate, fault) free-run cell: spread of existing fields."""
+    cells: dict = {}
+    for record in records:
+        if record.provenance.execution_mode != "free_run":
+            continue
+        rate = record.provenance.real_time_factor
+        label = (f"rtf {rate:.1f}, " if rate is not None else "rtf ?, ") \
+            + _fault_label(record.provenance.fault)
+        cells.setdefault(label, []).append(record)
+    out = {}
+    for label, group in sorted(cells.items()):
+        saturations = [r.result.wheel_saturation_events for r in group]
+        captured = [r.result.captured_count for r in group]
+        out[label] = {
+            "runs": len(group),
+            "saturation_events": {"min": min(saturations),
+                                  "max": max(saturations)},
+            "captured": {"min": min(captured), "max": max(captured)},
+            "entered_safe_mode": sum(1 for r in group
+                                     if r.result.entered_safe_mode),
+            "distinct_signatures": len({r.signature for r in group}),
+        }
+    return out
 
 
 def _e1_arms(campaign: Campaign, records: List[RunRecord],

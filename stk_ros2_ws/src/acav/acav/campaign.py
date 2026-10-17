@@ -83,6 +83,9 @@ class RunSpec:
     #: frame_pairing has that arm); empty means the original E1
     #: treatment's rule (ablated whenever attitude_provider is forced).
     mismatch_guard: str = ""
+    #: The bridge's time.real_time_factor for this run (E3's matrix);
+    #: None leaves the bridge config's. In the run id only when not 1.0.
+    real_time_factor: Optional[float] = None
     #: Set on a run that re-executes an earlier one to test replay (E5).
     replay_of: str = ""
     notes: str = ""
@@ -104,6 +107,8 @@ class RunSpec:
                 parts.append(f"{_abbreviate(key)}{_tag(self.gains[key])}")
         if self.seed is not None:
             parts.append(f"seed{self.seed}")
+        if self.real_time_factor is not None and self.real_time_factor != 1.0:
+            parts.append(f"rtf{_tag(self.real_time_factor)}")
         if self.fault is not None:
             parts.append(f"fault{self.fault.axis_name}"
                          f"{_tag(self.fault.at_s)}")
@@ -185,6 +190,7 @@ class Campaign:
                     "attitude_provider": run.attitude_provider,
                     "mismatch": run.mismatch,
                     "mismatch_guard": run.mismatch_guard,
+                    "real_time_factor": run.real_time_factor,
                     "replay_of": run.replay_of,
                     "notes": run.notes,
                 }
@@ -383,6 +389,165 @@ def build_e3_determinism(repeats: int = 20, scenario_path: str = "",
                      f"determinism signature in lockstep and many in "
                      f"free-run."),
         runs=tuple(runs), scenario_path=scenario_path, backend=backend)
+
+
+#: E3's free-run real-time factors, in campaign order.
+E3_FREE_RUN_RATES = (1.0, 0.5)
+#: Lockstep repeats per E3 cell: two are enough to show bit-identical
+#: signatures, and lockstep needs no more (it is deterministic).
+E3_LOCKSTEP_REPEATS = 2
+
+
+def e3_run_count(n_repeats: int, n_fault_seeds: int) -> int:
+    """(1 + K) x (2 lockstep + 2 x N free-run)."""
+    return (1 + n_fault_seeds) * (E3_LOCKSTEP_REPEATS
+                                  + len(E3_FREE_RUN_RATES) * n_repeats)
+
+
+def e3_formula_line(n_repeats: int, n_fault_seeds: int) -> str:
+    return (f"E3 runs = (1 + N_FAULT_SEEDS) x ({E3_LOCKSTEP_REPEATS} lockstep "
+            f"+ {len(E3_FREE_RUN_RATES)} x N_REPEATS free-run) = "
+            f"(1 + {n_fault_seeds}) x ({E3_LOCKSTEP_REPEATS} + "
+            f"{len(E3_FREE_RUN_RATES)} x {n_repeats}) = "
+            f"{e3_run_count(n_repeats, n_fault_seeds)}")
+
+
+def build_e3_matrix(n_repeats: int, n_fault_seeds: int,
+                    window_duration_s: float, scenario_path: str = "",
+                    backend: str = "com",
+                    scheduler: str = "dynamics_aware") -> Campaign:
+    """E3: execution mode x fault x repeats, the fault replay included.
+
+    Fault cells: none, and one seeded wheel fault per seed 0..K-1
+    (plan_campaign_faults, the same fault in every mode). Per cell:
+    lockstep x E3_LOCKSTEP_REPEATS, then free-run at each rate in
+    E3_FREE_RUN_RATES x n_repeats. Ordered lockstep, rtf 1.0, rtf 0.5,
+    so one block runs after another without any change by the operator.
+    The scenario is the campaign's (the reference unless --scenario),
+    as for build_e3_determinism.
+    """
+    if n_repeats < 1:
+        raise ValueError("E3 needs at least one free-run repeat per cell")
+    if n_fault_seeds < 0:
+        raise ValueError("the number of fault seeds cannot be negative")
+    faults = plan_campaign_faults(list(range(n_fault_seeds)),
+                                  window_duration_s)
+    cells = [None] + [faults[seed] for seed in range(n_fault_seeds)]
+    blocks = [(LOCKSTEP, 1.0, E3_LOCKSTEP_REPEATS)] + [
+        (FREE_RUN, rate, n_repeats) for rate in E3_FREE_RUN_RATES]
+    runs = []
+    for mode, rate, repeats in blocks:
+        for fault in cells:
+            for index in range(repeats):
+                runs.append(RunSpec(
+                    experiment="E3", scheduler=scheduler,
+                    execution_mode=mode, seed=index, fault=fault,
+                    real_time_factor=rate,
+                    notes=f"{mode} rtf {rate:g}, "
+                          + ("no fault" if fault is None
+                             else f"fault seed {fault.seed}")))
+    ids = [r.run_id for r in runs]
+    if len(set(ids)) != len(ids):
+        raise ValueError("two E3 runs share a run id (two fault seeds "
+                         "planned the same fault)")
+    return Campaign(
+        campaign_id=f"E3_matrix_{n_repeats}x_{n_fault_seeds}faults",
+        experiment="E3",
+        description=("Lockstep against free-run at rtf "
+                     + " and ".join(f"{r:g}" for r in E3_FREE_RUN_RATES)
+                     + ", without a fault and with each seeded wheel fault. "
+                     + e3_formula_line(n_repeats, n_fault_seeds) + "."),
+        runs=tuple(runs), scenario_path=scenario_path, backend=backend)
+
+
+#: Measured wall time per automated run, minutes: summary.json
+#: started_at to finished_at, MATLAB start and build included. Excluded:
+#: E6_P9 seed1 (22.0 min, an 11.5 min console stall) and E6_P10 (14.8
+#: min, an STK started through COM). None: not measured.
+MEASURED_WALL_MIN = {
+    (LOCKSTEP, 1.0): (9.5, 11.4,
+                      "E5_P9d_lock2 9.5, E5_P9d_lock1 9.9, E6_P9 seed0 10.3, "
+                      "E6_P9 seed2 10.4, E2_P10_seed1 11.4"),
+    (FREE_RUN, 1.0): (15.3, 16.2,
+                      "E3_P9_rtf1 15.3, E5_P9d_free1 15.3, E5_P10_free2 "
+                      "16.2"),
+    (FREE_RUN, 0.5): None,
+}
+#: Said beside the missing rtf 0.5 time: measured, but with a manual twin.
+UNMEASURED_NOTE = {(FREE_RUN, 0.5): "the one run at rtf 0.5, "
+                                    "E3_P6_rtf05_8345551, had a manual "
+                                    "twin (37.6 min)"}
+
+
+def wall_time_lines() -> List[str]:
+    lines = []
+    for (mode, rate), measured in MEASURED_WALL_MIN.items():
+        name = "lockstep" if mode == LOCKSTEP else f"free-run rtf {rate:.1f}"
+        if measured is None:
+            lines.append(f"  {name}: not measured with an automated twin "
+                         f"({UNMEASURED_NOTE[(mode, rate)]})")
+        else:
+            low, high, source = measured
+            lines.append(f"  {name}: {low:.1f}-{high:.1f} min ({source})")
+    return lines
+
+
+def estimate_lines(label: str, counts: Dict[Tuple[str, float], int]
+                   ) -> Tuple[List[str], float, float, int]:
+    """One line per (mode, rate) with runs and minutes; totals of the
+    measured part and the number of runs not measured."""
+    lines, low, high, unmeasured = [], 0.0, 0.0, 0
+    for (mode, rate), runs in counts.items():
+        if not runs:
+            continue
+        name = "lockstep" if mode == LOCKSTEP else f"free-run rtf {rate:.1f}"
+        measured = MEASURED_WALL_MIN[(mode, rate)]
+        if measured is None:
+            unmeasured += runs
+            lines.append(f"  {label}: {runs} {name} runs: not measured")
+        else:
+            lines.append(f"  {label}: {runs} {name} runs: "
+                         f"{runs * measured[0]:.1f}-{runs * measured[1]:.1f}"
+                         f" min")
+            low += runs * measured[0]
+            high += runs * measured[1]
+    return lines, low, high, unmeasured
+
+
+def e3_counts(n_repeats: int, n_fault_seeds: int
+              ) -> Dict[Tuple[str, float], int]:
+    cells = 1 + n_fault_seeds
+    counts = {(LOCKSTEP, 1.0): cells * E3_LOCKSTEP_REPEATS}
+    for rate in E3_FREE_RUN_RATES:
+        counts[(FREE_RUN, rate)] = cells * n_repeats
+    return counts
+
+
+def combined_plan_lines(n_repeats: int, n_fault_seeds: int,
+                        e2_seeds: int = 10) -> List[str]:
+    """E1 (all six types) + E2 (seeds x 2 arms) + E3, in hours."""
+    parts = [
+        (f"E1 ({len(E1_MISMATCH_TYPES)} types, N_REPEATS={n_repeats})",
+         {(LOCKSTEP, 1.0): e1_run_count(E1_MISMATCH_TYPES, n_repeats)}),
+        (f"E2 ({e2_seeds} seeds x 2 arms)", {(LOCKSTEP, 1.0): 2 * e2_seeds}),
+        (f"E3 (N_REPEATS={n_repeats}, N_FAULT_SEEDS={n_fault_seeds})",
+         e3_counts(n_repeats, n_fault_seeds)),
+    ]
+    lines = [f"combined campaign (N_REPEATS={n_repeats}, "
+             f"N_FAULT_SEEDS={n_fault_seeds}, E2 seeds={e2_seeds}); every "
+             f"lockstep run counted at full length, so fail-stop E1 arms "
+             f"make this an upper bound:"]
+    low = high = 0.0
+    unmeasured = 0
+    for label, counts in parts:
+        more, a, b, c = estimate_lines(label, counts)
+        lines += more
+        low, high, unmeasured = low + a, high + b, unmeasured + c
+    total = (f"  total measured part: {low / 60:.2f}-{high / 60:.2f} h")
+    if unmeasured:
+        total += f", plus {unmeasured} runs not measured"
+    lines.append(total)
+    return lines
 
 
 def build_e5_fault_campaign(seeds: Sequence[int], window_duration_s: float,
