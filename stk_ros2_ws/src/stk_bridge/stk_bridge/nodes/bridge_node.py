@@ -31,10 +31,13 @@ actions are busy.
 Startup ordering
 ----------------
 Connect, validate, then publish -- never overlapping. The node does not
-create publishers until convention validation has passed, because a
-subscriber that receives one message with unverified units or an
-unverified quaternion pairing has already been given bad data, and no
-later correction reaches it.
+create telemetry publishers, command subscribers or services until
+convention validation has passed, because a subscriber that receives one
+message with unverified units or an unverified quaternion pairing has
+already been given bad data, and no later correction reaches it. The one
+exception is the status publisher: it exists from the start and
+publishes BridgeStatus STARTING at every startup phase
+(core/startup_phases.py), which carries no telemetry.
 """
 
 from __future__ import annotations
