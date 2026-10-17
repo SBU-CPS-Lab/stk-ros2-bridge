@@ -16,6 +16,7 @@ generated scenarios (their target lists), not measurements.
 """
 
 import dataclasses
+import hashlib
 import json
 import os
 
@@ -50,7 +51,8 @@ def _record(seed, scheduler, captured, **provenance):
                   scenario_sha256=scenario.sha256, scenario_seed=seed,
                   scenario_generator_version="2",
                   code_version="0123456789abcdef0123456789abcdef01234567",
-                  twin_identity=IDENTITY.format(cfg=f"{seed}{scheduler}"),
+                  twin_identity=IDENTITY.format(cfg=hashlib.sha256(
+                      f"{seed}{scheduler}".encode()).hexdigest()),
                   graphics_mode="off", real_time_factor=1.0,
                   stk_process={"pid": 1, "started_by": "operator"})
     fields.update(provenance)
