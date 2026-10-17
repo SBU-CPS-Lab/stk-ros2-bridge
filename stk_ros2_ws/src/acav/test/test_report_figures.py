@@ -19,7 +19,6 @@ from acav.campaign import (
     compare_schedulers,
     convention_comparison,
     determinism_comparison,
-    gain_surface,
     latency_breakdown,
     ReplayCheck,
 )
@@ -29,7 +28,6 @@ from acav.report_figures import (
     e2_capture_vs_coverage_figure,
     e2_outcome_breakdown_figure,
     e3_determinism_figure,
-    e4_gain_surface_figure,
     e5_replay_figure,
     e6_latency_figure,
     save_all,
@@ -79,9 +77,6 @@ class TestEveryFigureRendersOnEmptyInput:
 
     def test_e3(self):
         assert e3_determinism_figure({}) is not None
-
-    def test_e4(self):
-        assert e4_gain_surface_figure([]) is not None
 
     def test_e5(self):
         assert e5_replay_figure([]) is not None
@@ -142,27 +137,6 @@ class TestE6Latency:
         assert len(widths) == 3
         assert all(w > 0 for w in widths)
         assert widths == pytest.approx([1.1, 2.3, 6.8], abs=1e-6)
-
-
-class TestE4GainSurface:
-    def test_missing_combinations_are_blank_not_interpolated(self):
-        """A combination the vehicle was never flown at must show as a
-        gap, not as a value inferred from its neighbours."""
-        surface = gain_surface([
-            _record("a", gains={"natural_frequency_rad_s": 1.0,
-                                "profile_authority": 0.8}),
-        ], total_targets=1)
-        fig = e4_gain_surface_figure(surface)
-        image = fig.axes[0].images[0]
-        import numpy as np
-        assert np.isnan(image.get_array()).sum() == 0  # the one cell present
-
-    def test_a_sweep_that_does_not_vary_both_axes_is_reported_as_no_data(self):
-        surface = gain_surface([
-            _record("a", gains={"natural_frequency_rad_s": 1.0}),
-        ], total_targets=1)
-        fig = e4_gain_surface_figure(surface)
-        assert fig.axes[0].texts  # the "no data" message, not a heatmap
 
 
 class TestE5Replay:

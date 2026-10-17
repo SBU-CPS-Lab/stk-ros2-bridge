@@ -20,13 +20,11 @@ from acav.campaign import (
     build_e1_convention,
     build_e2_scheduler_comparison,
     build_e3_determinism,
-    build_e4_gain_sweep,
     build_e5_fault_campaign,
     build_e5_replay,
     build_e6_latency,
     compare_schedulers,
     determinism_comparison,
-    gain_surface,
     latency_breakdown,
     replay_matches,
 )
@@ -84,12 +82,12 @@ def _record(run_id, *, backend="com", mode=LOCKSTEP, seed=None,
 
 class TestRunIdentity:
     def test_the_id_is_derived_from_the_configuration(self):
-        run = RunSpec(experiment="E4", gains={
+        run = RunSpec(experiment="E2", gains={
             "natural_frequency_rad_s": 1.0, "profile_authority": 0.8})
-        assert run.run_id == "E4-dynamics_aware-lockstep-wn1-auth0p8"
+        assert run.run_id == "E2-dynamics_aware-lockstep-wn1-auth0p8"
 
     def test_gain_tags_stay_filename_safe_and_distinct(self):
-        ids = {RunSpec(experiment="E4",
+        ids = {RunSpec(experiment="E2",
                        gains={"natural_frequency_rad_s": value}).run_id
                for value in (0.4, 0.75, 1.0, 1.25, 1.6)}
         assert len(ids) == 5
@@ -113,7 +111,7 @@ class TestRunIdentity:
         """A gain the twin does not have would be swept over with no
         effect, producing a flat surface that looks like a finding."""
         with pytest.raises(ValueError, match="unknown gain"):
-            RunSpec(experiment="E4", gains={"stiffness": 1.0})
+            RunSpec(experiment="E2", gains={"stiffness": 1.0})
 
 
 class TestMatrices:
@@ -141,11 +139,6 @@ class TestMatrices:
     def test_e3_refuses_a_single_repeat(self):
         with pytest.raises(ValueError, match="spread"):
             build_e3_determinism(repeats=1)
-
-    def test_e4_defaults_to_the_forty_nine_run_grid(self):
-        campaign = build_e4_gain_sweep()
-        assert len(campaign) == 49
-        assert len({r.run_id for r in campaign.runs}) == 49
 
     def test_e5_resolves_every_fault_before_anything_runs(self):
         campaign = build_e5_fault_campaign([1, 2, 3], WINDOW)
@@ -244,15 +237,6 @@ class TestAggregation:
         assert report[LOCKSTEP]["distinct_signatures"] == 1
         assert report[FREE_RUN]["deterministic"] is False
         assert report[FREE_RUN]["distinct_signatures"] == 2
-
-    def test_the_gain_surface_is_sorted_for_plotting(self):
-        records = [
-            _record("hi", gains={"natural_frequency_rad_s": 1.4}),
-            _record("lo", gains={"natural_frequency_rad_s": 0.4}),
-        ]
-        surface = gain_surface(records, total_targets=7)
-        assert [p["run_id"] for p in surface] == ["lo", "hi"]
-        assert surface[0]["capture_rate"] == pytest.approx(1.0)
 
     def test_scheduler_comparison_reports_both_rates(self):
         """Capture rate alone flatters a scheduler that attempts one
@@ -398,7 +382,7 @@ class TestRecordValidation:
         assert relaunched            # re-run rather than trusted
 
     def test_a_matching_record_reports_no_mismatches(self):
-        run = RunSpec(experiment="E4", seed=1,
+        run = RunSpec(experiment="E2", seed=1,
                       gains={"natural_frequency_rad_s": 1.0})
         record = covering(_record(run.run_id, seed=1,
                                   gains={"natural_frequency_rad_s": 1.0}))
@@ -432,7 +416,7 @@ class TestRecordValidation:
         assert check_record(run, observed) == []
 
     def test_wrong_gains_are_caught(self):
-        run = RunSpec(experiment="E4", gains={"profile_authority": 0.8})
+        run = RunSpec(experiment="E2", gains={"profile_authority": 0.8})
         record = _record(run.run_id, gains={"profile_authority": 0.6})
         assert any("profile_authority" in m for m in check_record(run, record))
 
@@ -471,7 +455,7 @@ class TestCommandLauncher:
 
 
 class TestRunConfigDelivery:
-    """E4's gains and E5's fault have to cross into MATLAB.
+    """Per-run gains and E5's fault have to cross into MATLAB.
 
     They are not scenario properties -- the scenario is identical in
     every run of both -- so they travel as a per-run file the twin reads
@@ -497,8 +481,8 @@ class TestRunConfigDelivery:
         """One spelling from the campaign through the twin and back into
         the record. Two spellings for one quantity is how a sweep ends
         up flat."""
-        campaign = Campaign("c", "E4", "", runs=(
-            RunSpec(experiment="E4",
+        campaign = Campaign("c", "E2", "", runs=(
+            RunSpec(experiment="E2",
                     gains={"natural_frequency_rad_s": 1.2}),))
         run_campaign(campaign, _writing_launcher(),
                      RunnerOptions(output_dir=str(tmp_path)))
@@ -625,7 +609,7 @@ class TestReportCliFigures:
         part."""
         from acav.campaign_cli import _write_figures
 
-        _write_figures("E4", {"surface": "not a list"}, [], 1, str(tmp_path))
+        _write_figures("E6", {"latency": "not a dict"}, [], 1, str(tmp_path))
 
 
 class TestDiagnosticRunsAreNotReported:
