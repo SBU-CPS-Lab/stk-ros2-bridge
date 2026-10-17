@@ -27,9 +27,6 @@ from acav.metrics import CaptureOutcome, RunResult, TargetResult
 from acav.run_record import (Provenance, RunRecord, scenario_targets,
                               write_record)
 
-PENDING = pytest.mark.xfail(strict=True,
-                            reason="paired E2 report not written yet")
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 GENERATED = os.path.join(HERE, "..", "config", "scenarios", "generated")
 IDENTITY = "v3 {cfg} 1111222233334444 1111222233334444 100Hz"
@@ -96,7 +93,6 @@ def _report(folders, capsys):
 SIX = {seed: (10, 14 + seed % 3) for seed in range(1, 7)}
 
 
-@PENDING
 def test_six_seeds_are_analysed_as_pairs(tmp_path, capsys):
     code, out = _report(_folders(tmp_path, SIX), capsys)
     assert code == 0
@@ -117,7 +113,6 @@ def test_six_seeds_are_analysed_as_pairs(tmp_path, capsys):
             "0.03125") in out
 
 
-@PENDING
 def test_an_incomplete_pair_is_dropped_and_named(tmp_path, capsys):
     captures = dict(SIX)
     captures[7] = (10, None)
@@ -129,7 +124,6 @@ def test_an_incomplete_pair_is_dropped_and_named(tmp_path, capsys):
         "seed 7: kinematic only (E2_seed7/E2-kinematic-lockstep)"]
 
 
-@PENDING
 def test_three_seeds_print_the_underpowered_flag(tmp_path, capsys):
     three = {seed: SIX[seed] for seed in (1, 2, 3)}
     code, out = _report(_folders(tmp_path, three), capsys)
@@ -138,7 +132,6 @@ def test_three_seeds_print_the_underpowered_flag(tmp_path, capsys):
             "-- ABOVE 0.05: underpowered") in out
 
 
-@PENDING
 @pytest.mark.parametrize("override, words", [
     ({"code_version": "fedcba9876543210fedcba9876543210fedcba98"},
      "code version"),
@@ -159,7 +152,6 @@ def test_differences_are_refused_naming_the_records(tmp_path, capsys,
     assert '"paired"' not in out
 
 
-@PENDING
 def test_a_record_not_from_a_seeded_scenario_is_refused(tmp_path, capsys,
                                                          caplog):
     folders = _folders(tmp_path, SIX)

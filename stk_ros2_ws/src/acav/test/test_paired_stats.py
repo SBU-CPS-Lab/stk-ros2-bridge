@@ -28,10 +28,6 @@ import math
 
 import pytest
 
-PENDING = pytest.mark.xfail(strict=True,
-                            reason="acav.paired_stats not written yet")
-
-
 def _brute_p(diffs):
     """Independent check: enumerate every sign assignment."""
     nonzero = [d for d in diffs if d != 0]
@@ -57,7 +53,6 @@ def _brute_p(diffs):
     return min(1.0, 2 * min(low, high))
 
 
-@PENDING
 def test_six_positive_differences_give_p_0_03125():
     from acav.paired_stats import wilcoxon_signed_rank
     result = wilcoxon_signed_rank([1, 2, 3, 4, 5, 6])
@@ -66,7 +61,6 @@ def test_six_positive_differences_give_p_0_03125():
     assert result["p_exact"] == pytest.approx(0.03125, abs=1e-12)
 
 
-@PENDING
 def test_all_zero_differences():
     from acav.paired_stats import (hodges_lehmann, rank_biserial,
                                    wilcoxon_signed_rank)
@@ -78,7 +72,6 @@ def test_all_zero_differences():
     assert hodges_lehmann([0, 0, 0, 0]) == 0.0
 
 
-@PENDING
 def test_a_tie_case_computed_by_hand():
     """|d| = 1, 1, 2, 3 -> ranks 1.5, 1.5, 3, 4; W+ = 6, W- = 4.
     Of the 16 sign assignments, 6 have W+ >= 6 and 11 have W+ <= 6,
@@ -95,7 +88,6 @@ def test_a_tie_case_computed_by_hand():
     assert hodges_lehmann(diffs) == pytest.approx(1.0)
 
 
-@PENDING
 def test_a_zero_is_dropped_before_ranking():
     from acav.paired_stats import wilcoxon_signed_rank
     with_zero = wilcoxon_signed_rank([0, 1, 2, 3, 4, 5, 6])
@@ -103,7 +95,6 @@ def test_a_zero_is_dropped_before_ranking():
     assert with_zero["p_exact"] == pytest.approx(0.03125, abs=1e-12)
 
 
-@PENDING
 @pytest.mark.parametrize("diffs", [
     [1, -2, 3, 4, -5, 6, 7],
     [0.5, 0.5, -0.5, 1.0, 2.0, -2.0, 3.0, 0.0],
@@ -117,7 +108,6 @@ def test_the_exact_p_matches_enumeration(diffs):
         _brute_p(diffs), abs=1e-12)
 
 
-@PENDING
 def test_six_positive_differences_effect_and_location():
     from acav.paired_stats import hodges_lehmann, rank_biserial
     diffs = [1, 2, 3, 4, 5, 6]
@@ -125,7 +115,6 @@ def test_six_positive_differences_effect_and_location():
     assert hodges_lehmann(diffs) == pytest.approx(3.5)
 
 
-@PENDING
 @pytest.mark.parametrize("n, expected", [(3, 0.25), (5, 0.0625),
                                          (6, 0.03125), (10, 2 ** -9)])
 def test_minimum_attainable_p(n, expected):
@@ -133,7 +122,6 @@ def test_minimum_attainable_p(n, expected):
     assert min_attainable_p(n) == pytest.approx(expected)
 
 
-@PENDING
 def test_minimum_p_lines_flag_underpowered_designs():
     from acav.paired_stats import min_p_line
     assert min_p_line(3) == (
@@ -150,7 +138,6 @@ def test_minimum_p_lines_flag_underpowered_designs():
         "minimum attainable two-sided exact p for n = 0 pairs: 1 -- ABOVE")
 
 
-@PENDING
 def test_holm_adjustment():
     from acav.paired_stats import holm
     adjusted = holm({"a": 0.01, "b": 0.04, "c": 0.03, "d": 0.2})
@@ -158,14 +145,12 @@ def test_holm_adjustment():
                                       "d": 0.2})
 
 
-@PENDING
 def test_holm_never_exceeds_one():
     from acav.paired_stats import holm
     # 0.6 * 2 = 1.2 -> capped at 1; 0.7 * 1, raised to the running max.
     assert holm({"a": 0.6, "b": 0.7}) == {"a": 1.0, "b": 1.0}
 
 
-@PENDING
 def test_bootstrap_is_seeded_and_recorded():
     from acav.paired_stats import bootstrap_median_ci
     first = bootstrap_median_ci([1, 2, 3, 4, 5, 6], seed=7, resamples=10000)
@@ -178,7 +163,6 @@ def test_bootstrap_is_seeded_and_recorded():
     assert (constant["lower"], constant["upper"]) == (2, 2)
 
 
-@PENDING
 def test_describe_collects_everything_for_one_metric():
     from acav.paired_stats import describe
     out = describe([1, 2, 3, 4, 5, 6], seed=3, resamples=1000)

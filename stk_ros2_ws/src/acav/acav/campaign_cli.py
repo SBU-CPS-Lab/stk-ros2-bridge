@@ -340,6 +340,12 @@ def _parser() -> argparse.ArgumentParser:
                         help="write the report as JSON as well as printing it")
     parser.add_argument("--no-figures", action="store_true",
                         help="report verb only: skip rendering a figure")
+    parser.add_argument("--include-dir", action="append", default=[],
+                        metavar="DIR",
+                        help="report verb, E2: also read the records in DIR "
+                             "(repeatable). Seeded scenarios are then "
+                             "analysed as pairs by seed "
+                             "(acav/paired_analysis.py)")
     parser.epilog = ("Everything after -- is the command that executes one "
                      "run; see acav.campaign_runner.CommandLauncher for the "
                      "placeholders it may contain.")
@@ -474,13 +480,33 @@ def make_figure(experiment: str, report: dict, records: List[RunRecord],
     return None
 
 
+def _merged(per_directory: List) -> dict:
+    """Several directories' {value: [run ids]} as one."""
+    merged: dict = {}
+    for found in per_directory:
+        for key, ids in found.items():
+            merged.setdefault(key, []).extend(ids)
+    return {key: sorted(ids) for key, ids in merged.items()}
+
+
 def _report(campaign: Campaign, args, total_targets: int) -> int:
-    records = load_results(args.output_dir)
+    directories = [args.output_dir] + list(
+        getattr(args, "include_dir", None) or [])
+    records = []
+    for directory in directories:
+        found = load_results(directory)
+        if len(directories) > 1:
+            # Seeded E2 folders reuse run ids; name records by folder.
+            folder = os.path.basename(os.path.normpath(directory))
+            for record in found:
+                record.result.run_id = f"{folder}/{record.result.run_id}"
+        records.extend(found)
     if not records:
-        LOGGER.error("no readable records in %s", args.output_dir)
+        LOGGER.error("no readable records in %s", ", ".join(directories))
         return 2
 
-    diagnostic = diagnostic_runs(args.output_dir)
+    diagnostic = [run for directory in directories
+                  for run in diagnostic_runs(directory)]
     if diagnostic:
         LOGGER.error(
             "refusing to report: %s ran with the sensing equivalence "
@@ -489,7 +515,8 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             diagnostic)
         return 1
 
-    labelled = labelled_runs(args.output_dir)
+    labelled = [run for directory in directories
+                for run in labelled_runs(directory)]
     if labelled:
         LOGGER.error(
             "refusing to report: diagnostic run(s) %s must not be pooled "
@@ -497,7 +524,8 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             labelled)
         return 1
 
-    factors = effective_real_time_factors(args.output_dir)
+    factors = _merged([effective_real_time_factors(directory)
+                       for directory in directories])
     if len(factors) > 1 or "unknown" in factors:
         LOGGER.error(
             "refusing to report: these records do not share one real-time "
@@ -527,7 +555,8 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
                       for mode, ids in sorted(modes.items())))
         return 1
 
-    launch_modes = twin_launch_modes(args.output_dir)
+    launch_modes = _merged([twin_launch_modes(directory)
+                            for directory in directories])
     if len(launch_modes) > 1:
         # The twin's code, config and results in lockstep are the same;
         # but a GUI session with the model open and a batch session load
@@ -584,6 +613,8 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
             "; ".join(f"{run_id} ({'; '.join(problems)})"
                       for run_id, problems in sorted(uncovered.items())))
         return 1
+    if args.experiment == "E2" and (len(used) > 1 or len(directories) > 1):
+        return _report_pairs(records, args)
     if len(used) > 1:
         LOGGER.error(
             "refusing to report: these records come from %d scenarios; "
@@ -630,6 +661,29 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
         return 1
 
     return 0 if report.get("claim_holds", False) else 1
+
+
+def _report_pairs(records: List[RunRecord], args) -> int:
+    """E2 across seeded scenarios: one pair per seed (paired_analysis)."""
+    from acav.paired_analysis import (analyse_pairs, paired_refusals,
+                                      report_lines)
+
+    problems = paired_refusals(records)
+    if problems:
+        LOGGER.error("refusing to analyse these records as pairs: %s",
+                     " | ".join(problems))
+        return 1
+    paired = analyse_pairs(records)
+    text = json.dumps({"experiment": "E2", "paired": paired}, indent=2,
+                      default=str)
+    print(text)
+    for line in report_lines(paired):
+        print(line)
+    if args.json:
+        with open(args.json, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.write("\n")
+    return 0
 
 
 def _write_figures(experiment: str, report: dict, records: List[RunRecord],
