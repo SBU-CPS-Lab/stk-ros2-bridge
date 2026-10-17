@@ -196,7 +196,7 @@ def _run(tmp_path, twin_ok=True, **twin):
     deps = Deps(popen=scheduler_or_bridge,
                 wait_for_bridge_connected=lambda *a: ConnectResult(True,
                                                                    "com"),
-                wait_for_twin_ack=lambda prefix, timeout: (
+                wait_for_twin_ack=lambda prefix, timeout, *rest: (
                     waits.append(timeout) or twin_ok),
                 prompt=prompts.append, launch_twin=launch)
     code = execute_run(config, deps)
@@ -300,7 +300,7 @@ class TestManualIsUnchanged:
         deps = Deps(popen=lambda *a, **k: FakeProcess(),
                     wait_for_bridge_connected=lambda *a: ConnectResult(
                         True, "com"),
-                    wait_for_twin_ack=lambda prefix, timeout: (
+                    wait_for_twin_ack=lambda prefix, timeout, *rest: (
                         waits.append(timeout) or True),
                     prompt=prompts.append, launch_twin=no_launch)
         config = _config(tmp_path)
