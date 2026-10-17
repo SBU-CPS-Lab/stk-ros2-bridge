@@ -101,7 +101,10 @@ def _run(tmp_path, early, acks, twin_launch="matlab-batch"):
             return False
         return acks
 
+    recorder = types.SimpleNamespace(close=lambda: None, error=None)
     deps = Deps(popen=scheduler_or_bridge,
+                check_idle=lambda prefix: None,
+                start_recorder=lambda *a: recorder,
                 wait_for_bridge_connected=lambda *a: ConnectResult(True,
                                                                    "com"),
                 wait_for_twin_ack=wait, prompt=lambda message: None,
