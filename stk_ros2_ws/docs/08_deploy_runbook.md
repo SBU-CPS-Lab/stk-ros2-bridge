@@ -163,68 +163,45 @@ folder that mixes scenarios. Send back one folder per scenario. To
 analyse the seeds as pairs, give one folder with `--output-dir` and the
 others with `--include-dir` ([C6_analysis.md](C6_analysis.md) section 8).
 
-### 4.3 E3: lockstep against free-run, and fault replay
+### 4.3 E3: lockstep against free-run, with fault replay
 
-Purpose: what lockstep buys and what free-run costs. Matrix:
-`<N_REPEATS>` lockstep and `<N_REPEATS>` free-run runs, identical
-configuration, reference scenario; one campaign at rtf 1.0 and one at
-rtf 0.5 (`--real-time-factor` in the run command; it applies to the
-free-run runs, lockstep ignores the wall clock). Duration per campaign:
-`<N_REPEATS>` x (about 10.5 min + about 15.5 min) at rtf 1.0;
-`<N_REPEATS>` x (about 10.5 min + about 38 min) at rtf 0.5.
+Purpose: what lockstep buys and what free-run costs, with and without a
+seeded wheel fault. One campaign (`build_e3_matrix`): for the no-fault
+cell and each of `<N_FAULT_SEEDS>` seeded faults, lockstep x 2, free-run
+rtf 1.0 x `<N_REPEATS>`, free-run rtf 0.5 x `<N_REPEATS>`, reference
+scenario, in that order. `plan` prints
+`E3 runs = (1 + N_FAULT_SEEDS) x (2 lockstep + 2 x N_REPEATS free-run)`,
+the measured wall time per run kind (rtf 0.5: not measured with an
+automated twin), the combined E1 + E2 + E3 hours, the resume rule and
+every run's command. The rate and the fault reach each run through
+`{real_time_factor}`, `{fault_json}` and `{run_config}`, substituted by
+the campaign in Python: nothing changes between blocks and PowerShell's
+quote stripping does not apply.
 
 ```powershell
-ros2 run acav run_acav_campaign plan --experiment E3 --output-dir results\E3_rtf1_<commit> --repeats <N_REPEATS>
+ros2 run acav run_acav_campaign plan --experiment E3 --output-dir results\E3_<commit> --repeats <N_REPEATS> --fault-seeds <N_FAULT_SEEDS>
 
-ros2 run acav run_acav_campaign run --experiment E3 --output-dir results\E3_rtf1_<commit> --repeats <N_REPEATS> --twin-launch matlab-batch -- `
+ros2 run acav run_acav_campaign run --experiment E3 --output-dir results\E3_<commit> --repeats <N_REPEATS> --fault-seeds <N_FAULT_SEEDS> --twin-launch matlab-batch -- `
     python src\acav\scripts\run_acav_run.py `
         --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
         --execution-mode '{execution_mode}' --seed '{seed}' `
         --output '{output}' --scenario '{scenario}' --backend '{backend}' `
         --attitude-provider '{attitude_provider}' --run-config '{run_config}' `
         --gains-json '{gains_json}' --fault-json '{fault_json}' `
-        --bridge-config src\acav\config\bridge_params_acav.yaml `
-        --real-time-factor 1.0
-
-ros2 run acav run_acav_campaign report --experiment E3 --output-dir results\E3_rtf1_<commit> --repeats <N_REPEATS>
-```
-
-For rtf 0.5, use another folder (`results\E3_rtf05_<commit>`) and
-`--real-time-factor 0.5`. `--repeats` must be at least 2.
-
-Check, in addition to section 4: free-run runs have
-`free_run_start_gate` ok and a `free_run_pacing` entry in summary.json.
-Then the coupling analysis (section 5).
-
-**Fault replay (lockstep).** `<N_FAULT_SEEDS>` seeded wheel-fault runs,
-one per seed, through the E5 builder:
-
-```powershell
-ros2 run acav run_acav_campaign plan --experiment E5 --output-dir results\E5_lock_<commit> --seeds <N_FAULT_SEEDS>
-
-ros2 run acav run_acav_campaign run --experiment E5 --output-dir results\E5_lock_<commit> --seeds <N_FAULT_SEEDS> --twin-launch matlab-batch -- `
-    python src\acav\scripts\run_acav_run.py `
-        --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
-        --execution-mode '{execution_mode}' --seed '{seed}' `
-        --output '{output}' --scenario '{scenario}' --backend '{backend}' `
-        --attitude-provider '{attitude_provider}' --run-config '{run_config}' `
-        --gains-json '{gains_json}' --fault-json '{fault_json}' `
+        --mismatch '{mismatch}' --mismatch-guard '{mismatch_guard}' `
+        --real-time-factor '{real_time_factor}' `
         --bridge-config src\acav\config\bridge_params_acav.yaml
 
-ros2 run acav run_acav_campaign report --experiment E5 --output-dir results\E5_lock_<commit> --seeds <N_FAULT_SEEDS>
+ros2 run acav run_acav_campaign report --experiment E3 --output-dir results\E3_<commit> --repeats <N_REPEATS> --fault-seeds <N_FAULT_SEEDS>
 ```
 
-The fault reaches the run through `{fault_json}` and `{run_config}`,
-substituted by Python, so PowerShell's quote stripping does not apply.
-Reproduction: run the same campaign into a second folder and compare
-each run's `determinism_signature` between the two (they must be equal;
-E5_P9d_lock1 and E5_P9d_lock2 are an example pair). `report` checks
-that every seeded fault tripped SAFE.
-
-**Fault runs in free-run: no committed command yet.** The E5 builder
-plans lockstep runs only; the free-run fault runs so far were started
-by an uncommitted analysis script ([dev/phase3_backlog.md](dev/phase3_backlog.md),
-2026-10-17). Do not improvise one; this needs a decision first.
+Check, in addition to section 4: free-run runs have `free_run_start_gate`
+ok and a `free_run_pacing` entry in summary.json. `report` gives the
+lockstep replay check (each lockstep cell's two runs share one
+determinism signature: the fault replay) and the free-run spread per
+rate and fault (saturation events, captures, SAFE, distinct
+signatures). Then the coupling analysis (section 5). Old E5 folders
+still report with `--experiment E5`.
 
 ### 4.4 E6: loop cost
 

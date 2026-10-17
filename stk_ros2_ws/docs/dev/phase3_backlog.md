@@ -340,7 +340,8 @@ outside the code: process priority or CPU affinity, also recorded.
 
 **Open items:**
 
-- **No committed command for free-run fault runs.** `build_e5_fault_campaign`
+- **Done (7675185): free-run fault runs are part of the E3 matrix.**
+  Earlier note: **No committed command for free-run fault runs.** `build_e5_fault_campaign`
   plans seeded fault runs in lockstep only. The free-run fault runs
   (results/E5_P9d_free1, results/E5_P10_free2_3186642) were started by
   results/_analysis/p9d/launch_fault_run.py (gitignored), which plans the

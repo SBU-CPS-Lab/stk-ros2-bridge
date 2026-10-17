@@ -152,7 +152,7 @@ backend (`RunRecord.unreportable_reasons`).
 |---|---|---|
 | **E1** | What does an interface-convention mismatch do, and is it caught? | Lockstep, per repeat: a control and six mismatch types (below), each guard-on; frame_pairing also guard-ablated. Run count: `<N_REPEATS>` x (1 + 2 + 5). |
 | **E2** | Does kinematic planning over-promise? | Kinematic against dynamics-aware scheduling on the same targets, lockstep, on the reference scenario and on seeded scenarios. Capture rate, coverage rate, over-promise gap, outcome breakdown. **Headline.** |
-| **E3** | What does lockstep buy, and what does free-run cost? | Repeated lockstep and free-run runs with identical configuration, free-run at rtf 1.0 and 0.5; compare determinism signatures, outcomes and coupling metrics. Includes **deterministic fault replay**: a seeded wheel fault, SAFE on the momentum guard, and bit-identical reproduction in lockstep (formerly E5). |
+| **E3** | What does lockstep buy, and what does free-run cost? | One matrix: execution mode (lockstep; free-run at rtf 1.0 and 0.5) x fault (none, `<N_FAULT_SEEDS>` seeded wheel faults) x repeats (lockstep 2, free-run `<N_REPEATS>`), `(1 + N_FAULT_SEEDS) x (2 + 2 N_REPEATS)` runs. Lockstep replay: each fault cell's two lockstep runs must share one signature (**deterministic fault replay**, formerly E5); free-run: the spread of outcomes, saturation events and signatures. |
 | **E6** | What does it cost? | Repeated identical lockstep runs: per-step sense, actuate and barrier-wait times, achieved step rate. Graphics off, no CPU sampler, operator-started STK. |
 
 **E1 mismatch types** (`acav/campaign.py` `E1_MISMATCH_TYPES`; the five

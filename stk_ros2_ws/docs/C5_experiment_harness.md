@@ -161,7 +161,7 @@ the fault made no difference rather than that the run was reproduced.
 |---|---|---:|---|
 | `build_e1_matrix` | E1 | `--repeats` x (1 + 2 + 5) | control, frame_pairing guard on and ablated, five more guard-on mismatch types (`--e1-types`), lockstep |
 | `build_e2_scheduler_comparison` | E2 | 2 | kinematic and dynamics-aware, lockstep, on `--scenario` (reference by default) |
-| `build_e3_determinism` | E3 | 2 x `--repeats` | `--repeats` lockstep and `--repeats` free-run runs, identical config, seeds 0..repeats-1 on both sides |
+| `build_e3_matrix` | E3 | (1 + `--fault-seeds`) x (2 + 2 x `--repeats`) | per fault cell (none, seeds 0..K-1): lockstep x 2, free-run rtf 1.0 and 0.5 x `--repeats`; `build_e3_determinism` remains for the older two-mode form |
 | `build_e5_fault_campaign` | E5 | `--seeds` | one seeded wheel fault per seed, lockstep |
 | `build_e6_latency` | E6 | `--repeats` | identical lockstep runs |
 
@@ -169,12 +169,13 @@ The real-time factor is not part of a matrix: it is passed to every run
 through the launch command (`--real-time-factor 0.5` after `--`), and
 recorded per run. E3 at rtf 0.5 is therefore its own campaign directory.
 
-**E3's fault replay.** The E5 builder plans the seeded fault runs in
-lockstep only. The free-run fault runs made so far (results/E5_P9d_free1,
-results/E5_P10_free2_3186642) were started with an analysis script that
-plans the fault exactly as the E5 builder does and calls the run
-orchestrator in-process; there is no committed campaign command for
-free-run fault runs yet ([dev/phase3_backlog.md](dev/phase3_backlog.md)).
+**E3's fault replay** is part of the E3 matrix: every mode gets the same
+seeded faults, and the rate reaches each run through `{real_time_factor}`
+(`RunSpec.real_time_factor`, checked against the record). The plan emits
+every run's exact command (`campaign_runner.planned_commands`). The
+earlier free-run fault runs (results/E5_P9d_free1,
+results/E5_P10_free2_3186642) predate it and were started by an analysis
+script; the E5 builder still plans lockstep fault runs for old folders.
 
 E3 sets the same seeds on both sides so that an identical free-run batch
 would mean a deterministic loop, not an unvaried one, and groups results
