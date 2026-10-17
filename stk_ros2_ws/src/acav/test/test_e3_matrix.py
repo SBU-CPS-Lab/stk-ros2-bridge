@@ -112,7 +112,6 @@ def test_the_launcher_substitutes_the_real_time_factor():
     assert '"real_time_factor"' in inspect.getsource(CommandLauncher.__call__)
 
 
-@pytest.mark.xfail(strict=True, reason="rtf 0.5 time not entered yet")
 def test_plan_prints_formula_times_and_combined_campaign(tmp_path, capsys):
     from acav.campaign_cli import main
     code = main(["plan", "--experiment", "E3", "--repeats", "3",

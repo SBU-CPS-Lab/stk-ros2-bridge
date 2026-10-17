@@ -481,7 +481,9 @@ MEASURED_WALL_MIN = {
     (FREE_RUN, 1.0): (15.3, 16.2,
                       "E3_P9_rtf1 15.3, E5_P9d_free1 15.3, E5_P10_free2 "
                       "16.2"),
-    (FREE_RUN, 0.5): None,
+    (FREE_RUN, 0.5): (27.3, 27.3,
+                      "1 run: LIVE_E3_d0bf796 "
+                      "E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375"),
 }
 #: Said beside the missing rtf 0.5 time: measured, but with a manual twin.
 UNMEASURED_NOTE = {(FREE_RUN, 0.5): "the one run at rtf 0.5, "
@@ -498,7 +500,8 @@ def wall_time_lines() -> List[str]:
                          f"({UNMEASURED_NOTE[(mode, rate)]})")
         else:
             low, high, source = measured
-            lines.append(f"  {name}: {low:.1f}-{high:.1f} min ({source})")
+            span = (f"{low:.1f}" if low == high else f"{low:.1f}-{high:.1f}")
+            lines.append(f"  {name}: {span} min ({source})")
     return lines
 
 
