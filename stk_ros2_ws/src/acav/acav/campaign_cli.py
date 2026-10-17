@@ -758,9 +758,11 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
         report["claim"] = ("each lockstep cell's repeats share one "
                            "determinism signature (fault replay included)")
     if args.experiment == "E1":
-        report["arms"], fail_stops, report["missing_runs"] = _e1_arms(
+        (report["arms"], fail_stops, report["missing_runs"],
+         report["runs_to_retry"]) = _e1_arms(
             campaign, records, directories, total_targets)
         report["claim_holds"] = (not report["missing_runs"]
+                                 and not report["runs_to_retry"]
                                  and report["arms"].get("control", {})
                                  .get("runs", 0) > 0)
         report["claim"] = ("every planned E1 arm ran or stopped (fail-stop, "
@@ -891,6 +893,7 @@ def _e1_arms(campaign: Campaign, records: List[RunRecord],
     arms: dict = {}
     fail_stops: List[str] = []
     missing: List[str] = []
+    retry: List[str] = []
     for run in campaign.runs:
         arm = e1_arm(run.mismatch, run.mismatch_guard, run.attitude_provider)
         entry = arms.setdefault(arm, {"runs": 0, "records": [],
@@ -913,11 +916,24 @@ def _e1_arms(campaign: Campaign, records: List[RunRecord],
         if summary is None:
             missing.append(run.run_id)
             continue
+        from acav.run_outcome import classify
+        outcome = classify(summary)
+        if outcome["kind"] == "interrupted":
+            entry.setdefault("interrupted", []).append(run.run_id)
+            retry.append(run.run_id)
+            continue
+        if outcome["kind"] == "infrastructure_failure":
+            entry.setdefault("infrastructure_failures", []).append(
+                {"run_id": run.run_id, "reason": outcome["reason"]})
+            retry.append(run.run_id)
+            continue
         fail_stops.append(run.run_id)
         stop = {"run_id": run.run_id,
                 "failed_steps": [s["step"] for s in summary.get("steps", [])
-                                 if not s.get("ok")]}
+                                 if not s.get("ok")],
+                "outcome": outcome["kind"], "reason": outcome["reason"]}
         if run.mismatch == "time_offset":
+            # Only for a run that ended by itself.
             stop["cause"] = _time_offset_cause(
                 summary, logs, _control_ack_s(campaign, directories))
         entry["fail_stops"].append(stop)
@@ -929,7 +945,7 @@ def _e1_arms(campaign: Campaign, records: List[RunRecord],
             coverage_rate(r.result, total_targets) for r in group)
         entry["outcomes"] = _sum_counts(outcome_breakdown(r.result)
                                         for r in group)
-    return arms, fail_stops, missing
+    return arms, fail_stops, missing, retry
 
 
 def _control_ack_s(campaign: Campaign, directories: List[str]

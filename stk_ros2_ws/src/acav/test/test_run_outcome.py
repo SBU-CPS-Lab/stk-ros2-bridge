@@ -28,7 +28,6 @@ from acav.campaign_cli import main
 
 from test_e1_mismatch import _write  # noqa: I100
 
-PENDING = pytest.mark.xfail(strict=True, reason="classification not written")
 
 # E1-...-mismatchTimeOffset.logs.superseded-20261017T192525/summary.json
 INTERRUPTED = {
@@ -100,7 +99,6 @@ ENDED_BY_ITSELF = {
 }
 
 
-@PENDING
 @pytest.mark.parametrize("summary, kind", [
     (INTERRUPTED, "interrupted"),
     (INFRASTRUCTURE, "infrastructure_failure"),
@@ -112,7 +110,6 @@ def test_classify(summary, kind):
     assert classify(summary)["kind"] == kind
 
 
-@PENDING
 def test_the_guard_reason_is_the_twins_own():
     from acav.run_outcome import classify
     reason = classify(GUARD)["reason"]
@@ -121,7 +118,6 @@ def test_the_guard_reason_is_the_twins_own():
                              "command (quaternion residual 1.41421)")
 
 
-@PENDING
 def test_the_infrastructure_reason_names_the_server():
     from acav.run_outcome import classify
     assert "Server failed to start" in classify(INFRASTRUCTURE)["reason"]
@@ -147,7 +143,6 @@ def _report(tmp_path, capsys):
     return code, json.loads(out[:out.rindex("}") + 1])
 
 
-@PENDING
 def test_report_lists_an_infrastructure_failure_apart(tmp_path, capsys):
     _, q_run, _ = _folder(tmp_path, INFRASTRUCTURE, ENDED_BY_ITSELF)
     code, report = _report(tmp_path, capsys)
@@ -160,7 +155,6 @@ def test_report_lists_an_infrastructure_failure_apart(tmp_path, capsys):
     assert code == 1
 
 
-@PENDING
 def test_report_names_the_guard_reason(tmp_path, capsys):
     _folder(tmp_path, GUARD, ENDED_BY_ITSELF)
     code, report = _report(tmp_path, capsys)
@@ -173,7 +167,6 @@ def test_report_names_the_guard_reason(tmp_path, capsys):
     assert code == 0
 
 
-@PENDING
 def test_an_interrupted_run_is_no_result(tmp_path, capsys):
     _, _, t_run = _folder(tmp_path, GUARD, INTERRUPTED)
     code, report = _report(tmp_path, capsys)
