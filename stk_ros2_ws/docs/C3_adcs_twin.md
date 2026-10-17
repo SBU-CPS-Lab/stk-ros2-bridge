@@ -1,7 +1,9 @@
-# C3 — The ADCS twin
+# C3: The ADCS twin
 
-The Simulink/Stateflow digital twin the bridge drives, and the Python
-reference that pins its semantics.
+The MATLAB/Simulink digital twin the bridge drives, and the Python
+reference that pins its semantics. Sections 1-3 are the design;
+sections 4-6 describe how the twin runs in the loop today; section 7
+keeps the design decisions that came out of live bring-up.
 
 ## 1. Why there are two implementations
 
@@ -26,7 +28,7 @@ So the semantics are fixed once, in Python, where they are tested:
 | `acav/twin_fixtures.py` | `test_acav_twin.m` | the contract between them |
 
 That third row was missing until the wiring pass, and its absence is
-exactly where two defects lived undetected — see section 8. Every row of
+exactly where two defects lived undetected (section 7). Every row of
 this table has to exist, or the part with no counterpart is the part
 nothing checks.
 
@@ -114,7 +116,7 @@ settling.
 `test_twin_reference.py::test_every_acav_slew_fits_the_scheduler_s_budget`
 guards this. **The table was measured with fixed targets.** In the live
 loop the target direction moves, and the guidance now compensates for it
-(section 9): live slews end within ~1.4° and enter IMAGE immediately, so
+(section 7): live slews end within ~1.4° and enter IMAGE immediately, so
 these settling margins describe the original fixed-target design, not
 the measured live behaviour. If a gain change breaks it, E2's headline becomes an
 artifact, so the test fails rather than the study quietly degrading.
@@ -129,294 +131,145 @@ one.
 ## 4. Mission modes
 
 ```
-NADIR ──slew requested──▶ SLEW ──profile done──▶ SETTLE
-  ▲                                                 │
-  │                                    error ≤ 2°   │
-  │                                                 ▼
-  └────────────── slew requested ◀───────────── IMAGE
+NADIR --slew requested--> SLEW --profile done--> SETTLE
+  ^                                                 |
+  |                                     error <= 2 deg
+  |                                                 v
+  +--------------- slew requested <------------- IMAGE
 
-  any state ──momentum ≥ capacity or rate > 15°/s──▶ SAFE  (latched)
+  any state --momentum >= capacity or rate > 15 deg/s--> SAFE (latched)
 ```
 
-Two properties are load-bearing and are asserted by tests:
+Two properties are load-bearing and tested: the SAFE guards are
+evaluated first, so a wheel that saturates during IMAGE still trips
+SAFE; and SAFE latches, so a fault run has one well-defined outcome to
+replay. Recovery is an operator action.
 
-- **The SAFE guards are evaluated first and unconditionally.** A wheel
-  that saturates during IMAGE must trip SAFE rather than be masked by an
-  already-satisfied hold. Written the other way round, the chart behaves
-  correctly in every nominal run and silently fails to protect the
-  vehicle in exactly the campaign (E5) that exists to test it.
-- **SAFE latches.** An ADCS that re-armed the instant the trip cleared
-  would oscillate in and out and make E5's deterministic replay
-  meaningless. Recovery is an operator action.
+**Where the mode is actually decided.** `adcs.twin_step` calls
+`+adcs/mission_mode.m`, the transition logic as a function, every step;
+that is the mode the twin uses and publishes on `TwinStatus.mode`. The
+Stateflow chart `MissionMode` (`adcs.build_mission_chart`) is built into
+the model and structurally checked (SAFE latches, guard order), but it
+is **not wired into the signal path** and drives nothing
+(`simulink/build_acav_twin.m`, the comment at the chart). Mode entry is
+entangled with slew-profile initialisation in a way the chart alone does
+not capture; wiring it would mean restructuring `GuidanceControl` to
+take the chart's mode as an input. Until that is done, the paper may
+show the chart as the specification of the mode logic, but must not
+describe it as executing. Tracked in
+[dev/phase3_backlog.md](dev/phase3_backlog.md).
 
-The Stateflow chart is what the paper shows; `+adcs/mission_mode.m` is
-the same logic as a function, which is what the fixtures can exercise.
-They must agree, and a change belongs in both.
+## 5. The twin in the loop
 
-## 5. What has actually been executed
+**Model.** `simulink/build_acav_twin.m` generates `acav_twin.slx` for
+one run: Subscribe blocks (attitude, rate, orbit, setpoint,
+ScenarioTime) feed `UnpackTelemetry`, which feeds the MATLAB Function
+`GuidanceControl`; it calls `adcs.simulink_step`, which calls
+`adcs.twin_step`. Outputs go to Publish blocks: `/stk/cmd/attitude`,
+`/acav/twin_status`, `/stk/lockstep/ack` (lockstep) and
+`/acav/twin_identity`. Every outgoing stamp comes from the telemetry's
+simulation time, never a ROS or wall clock. The `.slx` is a build
+artifact; edit the builder.
 
-Run against MATLAB **R2023a and R2024a** on the development
-machine -- both, deliberately: the cross-check used to run only on
-R2023a while message generation and model builds happened on R2024a, so
-no single version had seen both halves.
+**Per step** (`adcs.twin_step`): read the setpoint, choose the mode,
+plan or continue the slew profile, compute the control torque, pass it
+through the wheel model (limits, momentum, faults), integrate the
+rigid body one 0.1 s step, and output the achieved attitude, the mode,
+the boresight error and the wheel state. The twin owns attitude and body
+rate: STK's read-back is checked against the twin's own previous output
+(a mismatch beyond about 1e-4 rad stops the twin), except in E1's
+explicit ablation.
 
-| | |
+**Lockstep** (run config `execution_mode` "lockstep"): one step per
+new ScenarioTime, then the attitude command for the next step, then the
+ack.
+
+**Free-run** (`adcs.simulink_step`): samples arrive at
+wall-clock-driven times. With t0 the first ready sample and k the steps
+integrated so far, a sample at t integrates
+`n = floor((t - t0)/0.1 + 1e-6) + 1 - k` steps; n = 0 holds the last
+outputs. Sub-step j runs at `t0 + j*0.1` on the newest sample stamped at
+or before it, with that sample's position and target moved forward to
+the sub-step's time (`+adcs/geometry_at.m`: position along the
+velocity, the Earth-fixed target turned with the Earth). Holding one
+sample's geometry over every sub-step pulsed the controller's reference
+rate and cost captures; a sample on the step grid is used as received,
+so on-grid free-run equals lockstep bit for bit. Sub-step statistics
+(occurrences of n > 1, the largest n, the stamp offset) go to
+`<run>.logs/twin_substeps.json`; about once per wall second the call
+counts go to `<run>.logs/twin_loop.csv`
+(`wall_local,calls,ready,fresh,holds,t_s`).
+
+**What a status reports between publishes.** Every integration step,
+sub-steps included, feeds `saturation_events` (cumulative rising edges
+of the saturation flag) and `max_boresight_error_since_last_rad`
+([03_message_reference.md](03_message_reference.md)).
+
+**Pacing.** Simulink pacing is on at `PollingRateHz` (default 100)
+model steps per wall second (`build_acav_twin.m`). Offline on the deploy
+host, 200 Hz and above made Simulink busy-wait about one core, while
+100 Hz was held to about 66 steps/s. The rate is part of the identity.
+
+**Identity.** `v3 <cfg> <build> <runtime> <polling>Hz`, fixed at reset,
+published on the first ready step and then at most once per wall second
+(`acav/twin_identity.py`; [00_architecture.md](00_architecture.md)
+section 9).
+
+**Faults** (`+adcs/wheel_fault.m`): a seeded wheel fault from the run
+config, evaluated against the step's own time and applied in the
+actuator model only. The controller is not told; it keeps commanding
+torque the vehicle cannot produce, which is what a fault run tests. The
+fault's axis is zero-based in the record and converted in one place.
+
+**Parameters.** `adcs.config` reads the reference scenario YAML (always
+the default path, never a seeded scenario; the runner refuses a scenario
+whose twin-relevant sections differ) and the run config for gains,
+fault and execution mode.
+
+## 6. Running and testing it
+
+Runs: manual (build, open, Play) or automated (`matlab -batch
+run_twin_session`); see [02_matlab_setup.md](02_matlab_setup.md).
+
+MATLAB tests in `src/stk_matlab`, each run from that folder after
+`setup_stk_ros`:
+
+| Test | Checks |
 |---|---|
-| `test_acav_twin` | **52/52 pass** (fixture version 6, R2024a, 2026-10-06) — the MATLAB reproduces every fixture: closed-loop trajectories, the per-step orchestration, and the moving-geometry cases of section 9 |
-| `adcs.build_mission_chart` | builds; SAFE latches (0 outgoing), reachable from all four nominal states, all guards at execution order 1 |
-| `build_acav_twin` | writes a fully wired `.slx` **and passes Simulink's diagram update** (R2024a on Linux here, R2023b on the deploy machine), with `ros2genmsg` run first |
-| `test_simulink_adapter` | **passes** — `adcs.simulink_step`, the Normal-mode adapter the model calls, matches `adcs.twin_step` over 12 closed-loop steps, gates invalid/zero startup telemetry, and resets on simulation start |
-| `ros2genmsg` | **succeeds**, R2024a, given a Python 3.8-3.11 interpreter and a `-include cstdint` compile flag the dev box needs but the deploy machine should not (see `docs/C4_scheduler.md` section 2) |
+| `test_acav_twin` | Replays the Python reference's fixtures (`acav/twin_fixtures.py`, `export_twin_fixtures`) through the MATLAB, to 1e-9. Refuses stale fixtures. |
+| `test_simulink_adapter` | `adcs.simulink_step` against `adcs.twin_step` over closed-loop steps; startup gating; reset. |
+| `test_free_run_twin` | Free-run sub-stepping, causal geometry, the TwinStatus fields' classes and values. |
+| `test_twin_model_runs` | Builds the model and **runs** it for 1 s. A diagram update passes even when a block's output class is wrong; running it does not (d97800c stopped every live run at its first step that way). |
+| `test_twin_identity` | The identity text and the shared fingerprint vector. |
+| `test_settle_retarget`, `test_target_rate_reset` | Re-targeting rules. |
+| `test_e1_ablation` | E1's explicit mismatch-guard ablation. |
 
-So the algorithms, the chart, message generation and the signal wiring
-are all built, and Simulink's own compiler accepts the wiring.
-`build_acav_twin` now treats a diagram-update failure as fatal and does
-not save the model.
+After any change to the twin or to a `.msg` file, run
+`test_twin_model_runs` before a live session.
 
-**Correction.** An earlier version of this section said the diagram
-update could not pass on this dev box for any custom `stk_msgs` type,
-because of a tooling limitation. That was wrong. The model wired each
-Subscribe block's output **1** into `UnpackTelemetry`, and output 1 of
-`ros2lib/Subscribe` is the boolean `IsNew` flag; the message bus is
-output **2**. Every "cannot determine sizes and/or types" and "is not a
-bus signal" error came from reading message fields off a boolean. The
-control case that seemed to rule this out (the ROS 2 Current Time block
-working) has only one output, so it was never exposed to the wrong port.
-With the wiring fixed, the same dev-box setup passes diagram update.
+## 7. Design decisions from live bring-up
 
-Three things this turned up:
+Kept because each explains why the code is the way it is:
 
-- **`jsondecode` returns a struct array only when every object in a JSON
-  array has identical field names, and a cell array otherwise.** The
-  fixture sections legitimately mix shapes, so the harness normalises
-  both through one accessor. The symptom was `Dot indexing is not
-  supported for variables of this type`, which says nothing about the
-  cause.
-- **There is no ROS time-source model parameter.** R2023a's model has
-  none, and the ROS 2 Current Time block exposes only `OutputFormat` and
-  `SampleTime`. An earlier version set an invented `ROSTimeSource` and
-  warned when it failed, which read as a release incompatibility rather
-  than as a parameter that never existed. Time follows `/clock` because
-  the *node* runs with `use_sim_time` — a launch-time setting.
-- **`profile_done` was derived in Python and passed as an argument in
-  MATLAB**, so the two disagreed about a SLEW state with no profile. The
-  cross-check caught it. It is now an explicit input on both sides,
-  which also stops a bug state (SLEW without a profile) from being
-  silently treated as "finished".
-
-## 6. Running it
-
-On the Windows machine, with the workspace built and sourced:
-
-```matlab
-cd stk_ros2_ws\src\stk_matlab
-setup_stk_ros                 % paths + ros2genmsg
-test_acav_twin                % cross-check against the reference
-build_acav_twin               % generate acav_twin.slx
-```
-
-`test_acav_twin` is the C3 equivalent of `verify_acav_scenario.py`:
-every check runs, nothing stops at the first failure, and the summary
-says what is wrong rather than that something is. Paste its output the
-way you paste the verifier's.
-
-If the fixtures are stale it refuses to run rather than checking against
-the wrong expectations. Regenerate with:
-
-```
-python src\acav\scripts\export_twin_fixtures.py
-```
-
-and review the diff — a change in an expected value is a change in what
-the twin is required to do.
-
-`build_acav_twin` writes a `.slx`. That file is a **build artifact** and
-is not checked in: Simulink's binary format does not diff or merge, so a
-reviewer cannot see what changed in a control law and a git conflict in
-one is unresolvable. Edit the builder, not the model.
-
-## 7. Open against the live install
-
-- **The boresight is confirmed.** C2 run #4 saw a nadir target inside a
-  measured (1.80, 2.20]° cone, so `+Z` is the boresight under the
-  scenario's default attitude and `sensor.boresight_body_axis =
-  [0, 0, 1]` stands.
-- **Block wiring is built.** `build_acav_twin` needs `setup_stk_ros` to
-  have run first; it checks for the message types up front and says so,
-  rather than dying inside a mask callback with a half-built model open.
-  The five Subscribe blocks feed their message output (port 2, not the
-  `IsNew` flag on port 1) into a consolidating `UnpackTelemetry` MATLAB
-  Function, which feeds `GuidanceControl`; that calls
-  `adcs.simulink_step`, which runs `adcs.twin_step` once per telemetry
-  timestamp. Outputs go out through Blank-Message/Bus-Assignment/
-  Header-Assignment chains to Publish blocks that are enabled only
-  once telemetry is valid. The model passes diagram update; see
-  section 5.
-- **Every outgoing stamp comes from `ScenarioTime`, never from a ROS
-  clock.** An attitude command is stamped at the time the commanded
-  attitude is reached (this step + `step_s`), and a twin status at this
-  step's time. The first live run used ROS Header Assignment blocks,
-  which stamp with the Simulink node's own clock, and that node is not
-  run on simulation time. Every attitude sample went to STK years
-  outside the scenario and every status sample outside every hold
-  window. The same run showed that `t` reached `adcs.twin_step` as
-  absolute epoch seconds rather than seconds since the window start
-  (the function's documented contract), which would have fired every
-  E5 fault on the first step. Both are fixed in `build_acav_twin`.
-- **The twin carries its own body rate.** `adcs.simulink_step` takes
-  STK's reported rate once, to initialise, then feeds `twin_step` the
-  `omegaNext` it produced the step before. STK holds only the attitude
-  samples the twin wrote, so its rate is a numerical derivative of the
-  twin's own trajectory -- no independent information -- and across a
-  missing sample (STK then reports its basic attitude) it is enormous:
-  the third live run turned a 155 deg read-back jump into a steady
-  ~800 deg/s spin. The attitude still closes through STK, which is what
-  E1's mis-pairing acts on. `twin_step` itself is unchanged, and so is
-  every fixture: the closed-loop fixtures already fed back the twin's own
-  `omegaNext`.
-- **The twin now closes its own loop.** See section 8: building the
-  wiring exposed that `twin_step` never integrated the torque it
-  computed, and that is fixed.
-- **The `MissionMode` chart is built but deliberately not wired into the
-  signal path.** `adcs.twin_step` already calls `adcs.mission_mode`
-  directly as a function to decide `state.mode`, entangled with
-  slew-profile initialization the chart alone does not capture. Wiring
-  the chart in parallel would either duplicate the mode computation with
-  no consumer, or need restructuring `GuidanceControl` to take the
-  chart's mode as an input — a control-flow change, not a wiring one. It
-  stays in the model as the paper's hybrid-model figure.
-
-## 8. The defect the wiring pass found, and what closed it
-
-Building the model's signal wiring turned up two real defects, both in
-`+adcs/twin_step.m`, and both for the same structural reason: it was the
-**only** part of the twin with no counterpart in `twin_reference.py`, so
-no fixture could be generated for it and the cross-check that caught
-`quat.align`'s transposed matrix had nothing to say about it. The table
-in section 1 had a hole in it and the hole is where the bugs were.
-
-**The vehicle could not move.** `quaternionCmd` was `in.quaternion`
-returned verbatim: the twin read an attitude from STK, computed a
-torque, and published back the attitude it had just read. Nothing
-anywhere integrated that torque — `adcs.wheels` and
-`adcs.rigid_body_step` existed and were fixture-covered, but `twin_step`
-never called them. The loop had no integrator at all, so every capture
-would have been decided by wherever the vehicle already happened to
-point, and E2's whole comparison would have been degenerate while
-looking perfectly self-consistent.
-
-The design note that justified it — "in the closed loop STK is the truth
-and the dynamics are bypassed" — rested on a misreading of what STK does
-with injected attitude. `AddAttitude CBFQuat` stores and interpolates
-samples; it does **not** propagate attitude dynamics. STK is the truth
-for orbit, geometry and access. The vehicle's attitude *response* is the
-twin's to compute. `twin_step` now runs the commanded torque through the
-wheels, integrates one step from the state STK reported, and publishes
-the result — still the ACHIEVED attitude rather than the reference,
-which was the part of the original intent that was right.
-
-**SAFE-mode torque disagreed between the two implementations.** The
-reference zeroed the torque; the MATLAB applied rate damping. Rate
-damping is correct — the point of SAFE is to stop the vehicle tumbling,
-and a safe mode that commands nothing leaves the rate that tripped it
-exactly where it was — so the reference was corrected to match, and the
-decision now lives in one place (`twin_reference.control_torque`) used by
-both `simulate_slew` and `twin_step`. No nominal slew enters SAFE, so no
-existing expected value changed: the regenerated fixture diff touches
-only the version, the new `step_s` field and the new section.
-
-**An honest limit this pinned, which is not a defect.** With reaction
-wheels and no desaturation path, SAFE can only remove about
-`h_max / J_xx` ≈ 9.3 °/s of body rate before the wheels saturate. A
-tumble larger than that is damped down to a residual and then persists
-with the wheels pinned at capacity. That is what this vehicle really
-does, it is what E5 injects faults into, and a model that quietly
-recovered instead would be the more dangerous error — so the
-`safe_rate_damping` fixture deliberately runs through saturation rather
-than stopping short of it.
-
-The twin also accumulates a running integral of |τ·ω| in its state and
-publishes it on `TwinStatus`, alongside wheel momentum and a saturation
-flag. It is the only party holding the delivered torque and the body
-rate at the same instant, so integrating anywhere else would need both
-republished at the telemetry rate — and a running total survives a
-dropped sample where a consumer-side integration would silently lose
-that step's contribution. Those three fields are what let C5's run
-record report peak momentum, saturation events and wheel energy instead
-of leaving them at their defaults; see `docs/C5_experiment_harness.md`
-section 7.
-
-E5's wheel fault also enters through `twin_step` and nowhere else: the
-health schedule is evaluated against the step's own time and handed to
-the actuator model, so a dead axis simply stops delivering torque and a
-saturated one starts full. The controller is never told, and that is the
-point — it keeps commanding torque the vehicle cannot produce. A twin
-that reconfigured itself around the failure would be measuring
-fault-tolerant control rather than what E5 asks about. See
-`docs/C5_experiment_harness.md` section 3 for the two fault kinds and
-which one actually trips SAFE.
-
-`twin_step` now has a fixture section of its own (`twin_step`, fixture
-version 5) that replays whole runs closed-loop — each step's command fed
-back as the next step's measurement, exactly as the deployed loop does
-through STK. A twin that computes a torque without integrating it shows
-up there as a boresight error that refuses to decrease, which is the
-regression boundary that was missing.
-
-## 9. Moving targets: guidance changes made during live bring-up
-
-The design above was verified against fixed geometry. In the live loop
-both the satellite and a ground target move in the inertial frame (orbit
-and Earth rotation), and the first live campaigns showed what that does
-to a design that ignores it. The changes, all made on both sides (Python
-reference and MATLAB):
-
-- **Desired-rate feedforward.** The rate of the desired attitude is
-  estimated by differencing it between steps and fed forward in NADIR,
-  SETTLE and IMAGE, instead of a zero reference rate that leaves a
-  standing tracking error on a moving line of sight.
-- **Transported slew profiles.** A slew was planned to the target
-  direction at its start; by its end the direction had moved, and live
-  slews finished ~10° short, then settled at the torque limit. The
-  planned profile is now rotated by the motion of the desired attitude
-  (`q_desired · finish*`), which is the identity at the start of the slew
-  and lands on the current target direction at its end. The profile rate
-  is re-expressed in the actual body axes and the line-of-sight rate is
-  added.
-- **Target identity.** The setpoint's target ID reaches the twin. A
-  change of target (or its loss, or reacquisition) resets the rate
-  history, so no finite difference spans two targets. A change re-plans
-  the slew mid-SLEW, and from SETTLE starts a new one. A change on the
-  exact step the previous slew's profile ends also re-plans: that step's
-  profile is not counted as done for the new target. Without that rule
-  the change was consumed as the mode moved SLEW → SETTLE and the
-  feedback loop alone closed the whole new slew. The moving-geometry
-  fixtures found this before any live run met it.
-- **The twin owns attitude and rate.** STK's read-back is checked against
-  the twin's own previous output each step (any mismatch beyond ~1e-4 rad
-  stops the twin), and the dynamics continue from the twin's integrated
-  endpoint. STK's body rate is a numerical derivative of the attitudes
-  the twin wrote and carries no independent information. E1's treatment
-  is the only exception (an explicit, configured ablation of the
-  mismatch guard; see `C5_experiment_harness.md`).
-
-Measured in the live E6 campaign of 2026-10-05: every slew ended within
-~1.4° of its target and went straight to IMAGE; all five attempted
-targets were captured at ~0.002° error (`09_live_runs_and_results.md`).
-
-**Cross-check coverage.** Fixture version 6 adds `moving_twin_step`: a
-circular polar orbit and targets fixed on a rotating Earth, evaluated by
-the same formulas on both sides, in five closed-loop cases. The cases are
-tracking a moving target, a re-target mid-slew, a re-target on the step a
-slew ends, a re-target in SETTLE, and loss of target to nadir. Each case
-compares checkpoints and also every mode transition and every slew
-(re)plan time, so a re-plan one side makes and the other does not fails
-by name. `test_moving_fixtures.py` asserts that each case still exercises
-the path it exists for. Reverting the slew-end re-plan rule on the MATLAB
-side alone makes `retarget_as_slew_ends` fail (3.3° attitude difference
-at t = 12.5 s), which shows the section discriminates.
-
-Known residual behaviour: when the last target is done and the setpoint
-drops to nadir, the change is absorbed in IMAGE by feedback at the torque
-limit (no slew is planned without a target). Nothing is imaged then; the
-live E6 runs show it at t ≈ 400–409 s.
+- **The twin integrates its own dynamics.** `AddAttitude` stores and
+  interpolates samples; STK does not propagate attitude dynamics. An
+  early `twin_step` published back the attitude it had read and never
+  integrated its torque, so the vehicle could not move. It now runs the
+  torque through the wheels and integrates one step.
+- **SAFE applies rate damping**, in both implementations
+  (`twin_reference.control_torque`). With no desaturation path, SAFE can
+  remove only about `h_max / J_xx` (9.3 deg/s) of body rate before the
+  wheels saturate; the fixtures run through that limit.
+- **The twin carries its own body rate.** STK's rate is a numerical
+  derivative of the attitudes the twin wrote; across a missing sample it
+  is enormous (a 155 deg read-back jump became an ~800 deg/s spin).
+- **Moving geometry.** Desired-rate feedforward, slew profiles
+  transported with the moving line of sight, and re-planning on a change
+  of target (including on the step a slew ends) are implemented on both
+  sides and covered by the `moving_twin_step` fixtures
+  (`test_moving_fixtures.py`).
+- **Stamps from ScenarioTime.** Header Assignment blocks stamp with the
+  Simulink node's own clock, which is not simulation time; every sample
+  landed years outside the scenario on the first live run.
+- **Free-run geometry is propagated, not held** (P2c), and the twin's
+  loop is paced (P5); see section 5.

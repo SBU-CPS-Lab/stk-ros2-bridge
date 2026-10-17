@@ -1,9 +1,17 @@
 # E3 pilot on 48813ac — free-run analysis
 
+> **Index.** Engineering history, not current documentation. The analysis
+> of the first E3 free-run pilot (48813ac, 2026-10-15): why free-run
+> degraded (unpaced loop, held geometry, the clock published before
+> sensing) and the fixes that followed. Its run folders are now under
+> results/_archive/freerun_fixes. The current free-run design is in
+> [../05_time_synchronization.md](../05_time_synchronization.md); current
+> results in [../09_live_runs_and_results.md](../09_live_runs_and_results.md).
+
 **Measured by the user** on 2026-10-15 (five runs, STK graphics off);
 **derived from the run logs** with `src/acav/scripts/analyze_coupling.py`
 (commit `1b561a5`) and the analysis behind it. Run folders:
-`results/E6_E3pilot_48813ac` and `results/E3_pilot_48813ac`.
+`results/_archive/freerun_fixes/E6_E3pilot_48813ac` and `results/_archive/freerun_fixes/E3_pilot_48813ac`.
 
 This is a pilot, not an E3 result: two free-run runs at rtf 1.0 on code
 that has since changed (free-run pacing `a6436a4`; free-run provenance

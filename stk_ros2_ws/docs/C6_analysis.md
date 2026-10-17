@@ -1,4 +1,4 @@
-# C6 — Analysis and figures
+# C6: Analysis and figures
 
 Turns a campaign directory (C5's `RunRecord` files) into the numbers and
 figures the paper needs, via one command: `run_acav_campaign report`.
@@ -23,7 +23,7 @@ acav/campaign_cli.py: analyse()     -- picks the right aggregation
         |                              per experiment, prints JSON
         v
 acav/report_figures.py              -- lays the SAME dict out as a
-        |                              Figure, one function per E1-E6
+        |                              Figure, one function per experiment
         v
 run_acav_campaign report            -- writes JSON + figures/ next
                                         to the records it read
@@ -32,11 +32,11 @@ run_acav_campaign report            -- writes JSON + figures/ next
 ## 2. Running it
 
 ```
-run_acav_campaign report --experiment E2 --output-dir results/E2
+run_acav_campaign report --experiment E2 --output-dir results/<E2 folder>
 ```
 
 Prints the JSON report (same as C5), and — unless `--no-figures` is
-given — writes `results/E2/figures/E2_*.{pdf,svg,png}`. Needs no STK,
+given — writes `<E2 folder>/figures/E2_*.{pdf,svg,png}`. Needs no STK,
 no MATLAB, no ROS: this is meant to run wherever the analysis actually
 happens, which per this project's own environment notes is this dev
 machine, not the Windows deploy box.
@@ -75,8 +75,8 @@ hand. Any architecture or pipeline diagram in this project's docs (see
 | E2 | Capture rate vs coverage rate | Grouped bar, same 0-1 scale. **Never** a dual-axis chart — the two metrics have different denominators (`acav/metrics.py`), so two y-scales would let unrelated ranges appear to correlate. |
 | E2 | Outcome breakdown | Stacked horizontal bar, status colors. `CaptureOutcome` *is* a status (captured / still slewing / no access / SAFE), so status color, not a generic categorical cycle. |
 | E3 | Determinism | Two panels: distinct-signature count (a status fact — deterministic or not) and pointing-error spread (a magnitude, degrees) — different scales, so two panels rather than one dual-axis chart. |
-| E4 | Gain surface | Heatmap, one sequential hue (blue). Missing gain combinations are left blank (NaN), never interpolated — an interpolated cell would show a value the vehicle was never actually flown at. |
-| E5 | Replay reproduction | A status-colored dot per replayed seed. No axis to sum or compare in magnitude, only per-seed pass/fail. |
+| E4 | Gain surface | Heatmap. **E4 is dropped from the study**; the figure function remains. |
+| E5 (E3 fault replay) | Replay reproduction | A status-colored dot per replayed seed. No axis to sum or compare in magnitude, only per-seed pass/fail. |
 | E6 | Latency breakdown | One stacked horizontal bar: sense + actuate + barrier-wait. Three parts of one step, so a stack — a grouped bar would wrongly suggest the phases are alternatives rather than components of one total. |
 
 E1's comparison is **not** grouped by scheduler the way E2's is:
@@ -121,32 +121,47 @@ before averaging, because a mock round trip says nothing about the
 deploy machine's real STK latency — the entire quantity E6 exists to
 report.
 
-## 6. What has actually been executed
+## 6. What has been executed
 
-Every figure function is smoke-tested against synthetic `RunRecord`s in
-`src/acav/test/test_report_figures.py`, including a regression test for
-a real bug the smoke-testing process itself caught: an early version of
-`e6_latency_figure` read `mean_sense_ms`/`mean_actuate_ms` while
-`campaign.latency_breakdown` produces `mean_sense_latency_ms`/
-`mean_actuate_latency_ms`. The mismatched keys fell back to a default of
-`0.0` silently — the figure rendered without error, just with two of
-three phases missing from the bar. It was caught by actually reading
-the rendered PNG, not by the smoke test alone, which is why that
-specific check now asserts on bar widths rather than only "did this
-raise".
+Every figure function is smoke-tested against synthetic records
+(`src/acav/test/test_report_figures.py`), including a regression test
+for a real bug: an early `e6_latency_figure` read keys the aggregation
+does not produce and silently drew two of three phases as zero; the test
+now asserts on bar widths. The `run` -> `report` -> figures pipeline has
+been run end to end against an injected launcher for every experiment.
 
-`E1`/`E2`/`E3`/`E5`/`E6`'s full `run` → `report` → figures pipeline has
-been run end to end against an injected launcher (not live STK) and
-produces `figures/*.{pdf,svg,png}` correctly, including the E5
-replay-pairing logic that matches a `<run_id>-replay` record back to its
-original by construction (see `RunSpec.run_id`, not by re-matching
-faults, which would also pair two *unrelated* runs that happened to
-share one).
+`report` also refuses directories it must not pool
+([C5_experiment_harness.md](C5_experiment_harness.md) section 7) before
+it computes anything. The live numbers, and which records they come
+from, are in [09_live_runs_and_results.md](09_live_runs_and_results.md).
 
-**One live figure exists: E6**, from the campaign of 2026-10-05 (five
-reportable COM runs; measured total 658.1 ms per step, of which sense
-621.5 ms, actuate 18.9 ms, barrier wait 13.0 ms). Its title shows the
-measured end-to-end total; the component sum is disclosed separately
-because the two are timed over different boundaries. The figures for
-E1–E5 do not exist yet. Results and their caveats:
-`09_live_runs_and_results.md`.
+## 7. Coupling analysis: `analyze_coupling`
+
+For E3, and for any diagnosis of a free-run run, the records alone do
+not say why a run behaved as it did. `scripts/analyze_coupling.py`
+reads each run's record and its `<run>.logs` folder (the topic captures,
+`bridge.log`, `summary.json`), with no STK and no ROS, and writes one
+`<run>.coupling.json` per run and a `coupling.csv` to
+`<folder>/_coupling` (or `--out`):
+
+```
+python src\acav\scripts\analyze_coupling.py results\E3_P9_rtf1_9fed085 [more folders]
+```
+
+What each quantity means (`acav/coupling_analysis.py`):
+
+| Quantity | Meaning |
+|---|---|
+| `control_rate_hz` | Twin commands per scenario second. Lockstep gives 10 Hz. |
+| Command gaps (p50, p90, max, count over 0.6 s) | How long the vehicle went without a new command, in scenario time. |
+| `image_ages` | Per attempted target: the image epoch minus the stamp of the newest twin status at or before it, and that status's error. Lockstep gives 0. |
+| `n_gt1_count`, `max_n` | Samples the twin integrated over more than one step, from `twin_substeps.json` (or from command spacing). |
+| Command-stamp offset | The step the twin actually reached minus the stamp its command carried. |
+| Write lag | When the bridge wrote a command (its next sample after the command's source sample) minus the command's stamp. |
+| COM stalls over 300 ms | Bridge round trips over 300 ms once the loop is closed. |
+| STK read-back | Read-backs at a written stamp, and those beyond the newest written sample with their angle to it (what STK reports past the last command). |
+| Twin loop | Ready calls per wall second, the share that were holds (n = 0), and the polling rate from the twin identity. |
+| Bridge samples consumed | Distinct bridge samples, and how many the twin answered with a command one step later. |
+| Run conditions | Execution mode, graphics mode, real-time factor, start-gate wait, free-run pacing (cycles, overruns). |
+
+Percentiles are `sorted[n // 2]` and `sorted[int(0.9 * n)]`.

@@ -1,16 +1,17 @@
-# C5 — The experiment harness
+# C5: The experiment harness
 
-What turns the closed loop into experiments: run matrices for E1–E5,
-provenance that decides whether a number may be published, seeded faults
-that can be replayed exactly, and a campaign driver that survives being
-interrupted at run 73 of 100.
+What turns the closed loop into experiments: the run matrices (E1, E2,
+E3 with its fault replay, E6), provenance that decides whether a number
+may be published, seeded faults that can be replayed exactly, a run
+orchestrator that checks every step of one run, and a campaign runner
+that resumes after an interruption.
 
 ## 1. Why the harness is split in two
 
 | Module | Role |
 |---|---|
 | `acav/run_record.py` | Provenance + serialisation. **The C5/C6 contract.** |
-| `acav/fault_injection.py` | Seeded wheel faults for E5 |
+| `acav/fault_injection.py` | Seeded wheel faults (E3 fault replay, formerly E5) |
 | `acav/campaign.py` | The run matrices, and what the results mean |
 | `acav/campaign_runner.py` | Executes a matrix. Knows nothing about STK |
 | `acav/campaign_cli.py` | `ros2 run acav run_acav_campaign` |
@@ -20,9 +21,9 @@ is thin wiring, and takes its launcher by injection so the whole loop —
 resume, validation, aggregation — is exercised in tests here without
 STK or MATLAB. This is the same division C4 draws between
 `scheduling.py` and `scheduler_node.py`, and for a sharper reason: a
-campaign is 40 runs for E3, 49 for E4 and 100+ for E5, each needing STK
-and MATLAB. It is an overnight thing on one machine and it cannot be
-iterated on. Everything about it that can be decided in milliseconds on
+campaign is tens of runs, each needing STK and MATLAB for 10-16
+minutes (C1 section 8). It is an overnight thing on one machine and it
+cannot be iterated on. Everything about it that can be decided in milliseconds on
 any machine is decided by tested code before the night starts.
 
 **The harness does not know how to launch a run.** The launch topology —
@@ -71,7 +72,9 @@ target nobody pointed at.
 
 ## 3. Seeded faults, and why the fault is a value
 
-E5's claim is deterministic fault *replay*, so the thing being replayed
+The fault runs are E3's fault-replay part, still labelled E5 in the
+campaign builder, run ids and records. Their claim is deterministic
+fault *replay*, so the thing being replayed
 has to be deterministic first. Three properties, each corresponding to a
 way the experiment could look correct while being unreproducible:
 
@@ -129,9 +132,9 @@ travels as a small JSON the runner writes beside each result:
 
 `adcs.config(scenario, runConfig)` merges it, and `build_acav_twin`
 takes a `RunConfigPath` that bakes it into the generated model. The same
-file carries **E4's gains**, which had the same problem: neither is a
-property of the scenario — the scenario is identical in every run of
-both — so neither belonged in the YAML.
+file carries the gains (used by the dropped E4 sweep), which had the
+same problem: neither is a property of the scenario, so neither belongs
+in the YAML. It also carries the run id and the execution mode.
 
 Three details that are load-bearing. A missing run-config file is an
 **error**, not a silent default: a gain sweep that quietly used nominal
@@ -154,162 +157,141 @@ the fault made no difference rather than that the run was reproduced.
 
 ## 4. The matrices
 
-| Builder | Runs | Shape |
-|---|---:|---|
-| `build_e1_convention` | 2 | validated read-back vs deliberately mis-paired |
-| `build_e2_scheduler_comparison` | 2 | kinematic vs dynamics-aware, same targets |
-| `build_e3_determinism` | 40 | 20 lockstep vs 20 free-run, identical config |
-| `build_e4_gain_sweep` | 49 | 7×7 over bandwidth × profile authority |
-| `build_e5_fault_campaign` | N | one seeded wheel fault per seed |
+| Builder (`acav/campaign.py`) | `--experiment` | Runs | Shape |
+|---|---|---:|---|
+| `build_e1_convention` | E1 | 2 | validated read-back against the deliberately mis-paired one, lockstep |
+| `build_e2_scheduler_comparison` | E2 | 2 | kinematic and dynamics-aware, lockstep, on `--scenario` (reference by default) |
+| `build_e3_determinism` | E3 | 2 x `--repeats` | `--repeats` lockstep and `--repeats` free-run runs, identical config, seeds 0..repeats-1 on both sides |
+| `build_e5_fault_campaign` | E5 | `--seeds` | one seeded wheel fault per seed, lockstep |
+| `build_e6_latency` | E6 | `--repeats` | identical lockstep runs |
+| `build_e4_gain_sweep` | E4 | 49 | dropped from the study; kept in code |
 
-E3 sets the **same** seeds on both sides rather than leaving them unset,
-so that if a free-run batch does come out identical it is because the
-loop was deterministic and not because nothing in it varied. Its results
-are grouped by the mode the bridge *reported*, so a run that asked for
-lockstep and fell back belongs to the free-run group rather than
-inflating a determinism claim it does not support.
+The real-time factor is not part of a matrix: it is passed to every run
+through the launch command (`--real-time-factor 0.5` after `--`), and
+recorded per run. E3 at rtf 0.5 is therefore its own campaign directory.
+
+**E3's fault replay.** The E5 builder plans the seeded fault runs in
+lockstep only. The free-run fault runs made so far (results/E5_P9d_free1,
+results/E5_P10_free2_3186642) were started with an analysis script that
+plans the fault exactly as the E5 builder does and calls the run
+orchestrator in-process; there is no committed campaign command for
+free-run fault runs yet ([dev/phase3_backlog.md](dev/phase3_backlog.md)).
+
+E3 sets the same seeds on both sides so that an identical free-run batch
+would mean a deterministic loop, not an unvaried one, and groups results
+by the mode the bridge *reported*.
 
 E1's treatment sets `sensing.force_attitude_provider` on the bridge,
-pairing the Earth-fixed read-back provider (`ECF Attitude Quaternions`)
-against the inertial command form ACAV uses (`AddAttitude Quat`, see
-`config/bridge_params_acav.yaml`). The read-back is wrong by the
-Earth-rotation angle. The twin's own mismatch guard would stop such a run,
-so the treatment also disables it (`attitude_mismatch_policy:
-e1_readback_ablation` in the run configuration): E1 measures what the
-guard prevents, not a silent failure of the guarded system. The knob fails
-loudly on an unrecognised provider name rather than falling back to the
-validated one: a typo that silently produced the nominal pairing would
-yield a "treatment" that behaves like the control and reports that
-mis-pairing costs nothing.
+pairing `ECF Attitude Quaternions` against the inertial command, and
+disables the twin's mismatch guard (`attitude_mismatch_policy:
+e1_readback_ablation` in the run config): E1 measures what the guard
+prevents. The provider is observed on BridgeStatus and recorded; the
+runner rejects an E1 record whose read-back provider was never observed.
 
-`run_acav_run.py` delivers the provider: it writes a per-run copy of the
-bridge YAML with `sensing.force_attitude_provider` set from the run (empty
-for every non-treatment run, so a value left in a shared file cannot turn
-a nominal run into a treatment). The provider is then **observed, like the
-backend**: the bridge reports the provider it reads through and whether it
-was forced on `BridgeStatus`, the scheduler records it as
-`provenance.attitude_readback_provider` and derives
-`provenance.attitude_provider` (the forced provider, empty for the
-validated pairing) from it, and the runner rejects an E1 record whose
-read-back provider was never observed. Until 2026-10 the recorded
-provider was the scheduler's launch parameter, which labelled the record
-without proving what the bridge did.
+Run ids are derived from the configuration, never from position, which
+is what makes resume possible.
 
-E4 does not sweep damping: C3 fixed ζ = 0.707, and a third axis would
-take the campaign from an overnight run to a weekend one for a parameter
-the design does not treat as free. E4 is only interpretable at all
-because E3 establishes that a single run is noise-free — otherwise every
-grid point would need repeats and the surface would measure variance.
+## 5. One run: the run orchestrator
 
-Run ids are derived from the configuration, never from position in the
-list. Positional ids renumber when a seed is inserted and silently
-repoint every result an earlier campaign wrote; they are also the only
-reason resume can work, since a completed run is identifiable on disk
-only if its output name is a function of the run.
+`acav/deploy_run_cli.py` (`scripts/run_acav_run.py`) runs one run end to
+end and records every step in `<run>.logs/summary.json`:
 
-## 5. What the runner refuses to do
+| Step | What it checks |
+|---|---|
+| `run_config` | Writes or validates `<run>.runconfig.json` for this run. |
+| `scenario` | With `--scenario`: the file differs from the reference only in its targets (the twin reads the reference). |
+| `idle_check` | No other run's bridge, scheduler or twin is publishing. |
+| `bridge_connected` | The bridge reaches CONNECTED within 180 s; fails at once if it exits. Records `bridge_connect_s` and every startup phase. |
+| `stk_process` | COM runs: exactly one STK Desktop, started by the operator (refused otherwise unless `--allow-com-started-stk`). |
+| `stk_graphics` | STK's graphics state matches `--graphics-mode` (default off). |
+| `twin_launch` | `--twin-launch matlab-batch` only: MATLAB started. |
+| `twin_acking` | The twin acks (manual: `--twin-ack-timeout-s`; automated: 252.6 s). |
+| `twin_identity` | The twin loaded this run's config and runs this checkout's code. |
+| `scheduler_exit` | The scheduler ran and wrote the record. |
+| `stk_graphics_end` | Graphics state held for the whole run. |
+| `free_run_start_gate` | Free-run: the start gate opened. |
+| `matlab_session` | Automated: MATLAB stopped cleanly. |
+| `topic_capture` | The five captured topics were saved. |
 
-- **Treat a missing file as an empty result.** A launcher that exits
-  cleanly without writing has not produced a run; scoring it as one that
-  captured nothing would put launch problems into the headline metric.
-- **Merge a record that does not match the run requested.** A wrong seed
-  or fault breaks E5's replay claim, a wrong scheduler breaks E2's
-  comparison, wrong gains break E4's surface. Each is reported as a
-  failure and excluded. Execution mode is deliberately *not* checked —
-  see E3 above.
-- **Resume over a mismatched record.** An existing file that disagrees
-  with its run is re-run rather than trusted.
-- **Lose the night to one bad run.** A launcher exception costs one run
-  unless `--stop-on-error` is given.
+Post-run steps are bounded (`POST_RUN_TIMEOUT_S`): one that does not
+finish is recorded as failed and the run goes on. Any exception a step
+raises is kept in `summary.json` under `errors` (type, message,
+traceback). QuickEdit is turned off for the run and restored after.
+Run conditions are written into the record's provenance afterwards:
+graphics mode, real-time factor, MATLAB version, STK process.
 
-## 6. Running it
+## 6. The campaign runner
 
-```
-# Is this the matrix I meant? Cheap, launches nothing.
-ros2 run acav run_acav_campaign plan --experiment E3 --output-dir results/E3
+`run_acav_campaign {plan,run,report}` (`acav/campaign_cli.py`,
+`acav/campaign_runner.py`):
 
-# Execute it. Re-issue after a crash; completed runs are skipped.
-ros2 run acav run_acav_campaign run --experiment E3 --output-dir results/E3 -- \
-    python launch_one_run.py --run {run_id} --mode {execution_mode} \
-                             --scheduler {scheduler} --out {output}
+- **plan** writes `campaign.json` and lists the runs; launches nothing.
+- **run** executes the matrix with the launch command after `--`
+  (`CommandLauncher` placeholders: `{run_id}`, `{experiment}`,
+  `{scheduler}`, `{execution_mode}`, `{seed}`, `{output}`,
+  `{scenario}`, `{backend}`, `{attitude_provider}`, `{run_config}`,
+  `{gains_json}`, `{fault_json}`, `{twin_launch}`). Arguments are passed
+  as a list, so a value with spaces or quotes reaches the run intact.
+  With `--twin-launch matlab-batch` the runner appends
+  `--twin-launch matlab-batch` to each run's command.
+- **report** reads the directory; it needs no STK and no MATLAB.
 
-# Analyse. Needs no launch command, no STK and no MATLAB.
-ros2 run acav run_acav_campaign report --experiment E3 --output-dir results/E3
-```
+**Resume rules.** A run whose record exists, is readable, matches the
+requested run (seed, fault, scheduler, gains, scenario targets) and
+whose `summary.json` records no failed step is skipped. Any failed
+step, a MATLAB session that did not stop cleanly included, makes it run
+again; the previous attempt's record, run config and logs are renamed
+`<name>.superseded-<time>`, never deleted. Resuming over records made by
+other code is refused unless `--resume-across-code-versions`; running
+from a dirty tree is refused unless `--allow-dirty`. `--no-resume`
+re-runs everything. A launcher error costs one run unless
+`--stop-on-error`.
 
-Placeholders available to the launch command: `{run_id}`,
-`{experiment}`, `{scheduler}`, `{execution_mode}`, `{seed}`, `{output}`,
-`{scenario}`, `{backend}`, `{gains_json}`, `{fault_json}`.
+**Cleanup.** Before each automated run, processes the previous run
+recorded (its launcher's and MATLAB's PIDs, and what they started;
+only `matlab.exe` and `libmwros2server.exe`) are killed and listed in
+`twin_cleanup.jsonl`.
 
-Exit codes: `0` the claim held, `1` it ran but the result does not
-support the claim (or runs are missing, or some are unreportable), `2`
-the invocation was wrong and nothing was measured.
+**Manifest.** `campaign.json` records the matrix, the code version and
+the twin launch mode.
 
-The launch script is the operator's to write, and it is where the
-scheduler's new parameters are passed through: `experiment`, `seed`,
-`gains_json`, `fault_json`, `output_json`. The scheduler records the
-gains and fault as **configured** and the backend and execution mode as
-**observed** — a backend can silently differ from what was asked for and
-gains cannot.
+## 7. Reportability, coverage and pooling
 
-A concrete launch script now exists —
-`acav/deploy_run_cli.py` (`scripts/run_acav_run.py`), which starts the
-bridge, hands off to a human for the MATLAB/Simulink twin (confirmed
-over ROS, not just a keypress — see that module's own docstring for
-why an unattended MATLAB step is not scripted yet), then runs the
-scheduler and captures every process's log. See
-[08_deploy_runbook.md](08_deploy_runbook.md) for how to actually run it
-on the Windows machine.
+A record may appear in the paper only if `RunRecord.reportable`
+(derived on every read, never stored): a real STK backend; in lockstep,
+twin telemetry in every hold window; an access answer for every
+attempted target; access computed over a written attitude. `report`
+exits 1 and names any unreportable record.
 
-## 7. What the record now carries from the twin
+**Target coverage.** Each record must name a known scenario by digest
+(the reference, a committed generated seed, or `--scenario`) and contain
+exactly that scenario's targets (`run_record.target_coverage_problems`;
+legacy digests via `LEGACY_SCENARIO_DIGESTS`).
 
-`TwinStatus` carries the reaction-wheel state alongside mode and
-pointing error, so the run-level quantities in `RunResult` are populated
-rather than left at their defaults:
+**Pooling.** `report` refuses a directory whose records differ in:
+STK graphics mode (including "mixed" or "unverified" records), twin
+launch mode, how STK was started (`stk_process.started_by`; records
+without it count as "not recorded"), or scenario; and it refuses runs
+labelled with a diagnostic (`--diagnostic-label`) or made with the
+sensing equivalence diagnostic. Each refusal names the groups and their
+runs. It also warns unless all records come from one clean commit.
+
+## 8. What the record carries from the twin
 
 | Quantity | How it is derived |
 |---|---|
-| `peak_momentum_fraction` | per-axis max of \|h\| / capacity, over the run |
-| `wheel_saturation_events` | count of wheels *entering* saturation |
-| `entered_safe_mode` | any sample reporting the SAFE mode name |
-| `wheel_energy_J` | max of the twin's own cumulative ∫\|τ·ω\| |
+| `peak_momentum_fraction` | per-axis max of \|h\| / capacity over the run |
+| `wheel_saturation_events` | the larger of the published flag's rising edges and the twin's cumulative `saturation_events` |
+| `entered_safe_mode` | any sample reporting SAFE |
+| `wheel_energy_J` | max of the twin's own cumulative integral of \|tau . omega\| |
 
-Three of those decisions are load-bearing. A saturation **event** is an
-entry, not a step spent saturated: counting steps would make the number
-a function of the telemetry rate, so the same run sampled twice as often
-would report twice the faults and two runs at different rates could not
-be compared — which is exactly what E5 needs of them. Wheel energy is
-**accumulated by the twin**, because the twin is the only party holding
-the delivered torque and the body rate at the same instant, and a
-running total survives a dropped telemetry sample where a consumer-side
-integration would silently lose that step's contribution; the consumer
-takes the maximum rather than the last value so one late, stale message
-cannot under-report the run. Momentum crosses the wire in N·m·s rather
-than normalised, so a consumer that disagreed about the capacity cannot
-silently disagree about how close to saturation the vehicle was.
+A saturation event is an entry into saturation, not a step spent
+saturated, so the count does not depend on the telemetry rate. Wheel
+energy is accumulated by the twin, the only party that holds torque and
+rate at the same instant. Momentum crosses the wire in N m s, so a
+consumer cannot silently disagree about the capacity. All of these
+enter `determinism_signature`.
 
-These also give `determinism_signature` something to discriminate on: it
-already hashed all three, but while they were constant they contributed
-nothing, and E3's comparison rested entirely on per-target outcomes.
-
-## 8. Open items
-
-- **E6 needs a latency breakdown the bridge does not publish.**
-  `RunResult.mean_step_latency_ms` is now populated, but from the
-  scheduler's own tick-to-tick wall clock — which in lockstep is a real
-  measure of the achieved step rate, since the barrier does not release
-  until every participant has acked. It is *not* the sense/actuate/
-  barrier breakdown C1 section 9 asks E6 for; that has to come from the
-  bridge measuring its own phases and publishing them. The field is
-  labelled for what it actually is rather than filled with the backend
-  round-trip time, which would have mislabelled one component as the
-  whole.
-- **One experiment has run live: E6** (two five-run campaigns; see
-  `09_live_runs_and_results.md`). E1–E5 have not.
-- **Code version and scenario fingerprint.** Every record now carries
-  `provenance.code_version` (git commit, `+dirty`, or `unknown`, from
-  `acav/code_version.py`) and a `scenario_sha256` of the file actually
-  loaded, also when no scenario path is given. The run configuration,
-  the campaign manifest and `summary.json` carry the code version too,
-  and `report` warns unless a campaign's records come from one clean
-  commit. The E6 campaigns predate both and record neither.
+The E6 latency breakdown comes from the bridge (BridgeStatus mean
+sense, actuate and barrier-wait times per second, with their sample
+counts), recorded by the scheduler; see [C6_analysis.md](C6_analysis.md).

@@ -1,5 +1,12 @@
 # Phase 3 backlog — recorded 2026-10-15, not started
 
+> **Index.** The open and done engineering backlog, oldest first; each
+> section is dated. Several items have since shipped (for example the
+> proposed `target_generator.py` became `acav/scenario_generator.py`);
+> check the code before acting on an older item. Candidate studies not yet decided for the paper are
+> recorded here, not in [../C1_case_study_spec.md](../C1_case_study_spec.md).
+> The newest section is at the end.
+
 To run after Phase 2 items 3 (E3 free-run) and 4 (MATLAB automation).
 All of Phase 3 must land before the final paper runs, because it changes
 the scenario and therefore every scenario hash. Then: decide repeat
@@ -240,8 +247,8 @@ the golden trace and the E6-smoke-1 signature.
 
 ## Noted after the 72be372 live session (do not fix yet)
 
-Runs: `results/E6_P2d_72be372`, `results/E3_P2d_rtf1_72be372`,
-`results/E3_P2d_rtf05_72be372` (measured 2026-10-15; per-run CPU
+Runs: `results/_archive/freerun_fixes/E6_P2d_72be372`, `results/_archive/freerun_fixes/E3_P2d_rtf1_72be372`,
+`results/_archive/freerun_fixes/E3_P2d_rtf05_72be372` (measured 2026-10-15; per-run CPU
 samples in `<run>.cpu.csv`; means below are over gate opening, or
 scheduler start in lockstep, to run completion). The host has 2 physical cores and 4
 logical processors; "cores" below are logical-processor seconds per
@@ -319,3 +326,41 @@ changes what "free-run at rtf 1.0" means: the bridge would no longer run
 as fast as the host allows. If adopted, it must be a recorded run
 condition like the pacing, and the rtf 1.0 arm re-run. Alternatives
 outside the code: process priority or CPU affinity, also recorded.
+
+## Recorded 2026-10-17 (P10 live session and P11)
+
+**Candidate studies, not decided** (moved here from the experiment list,
+[../C1_case_study_spec.md](../C1_case_study_spec.md) section 9):
+
+- A communication-step study: how the result changes with the exchange
+  step (0.1 s today) in lockstep.
+- An offline file-exchange baseline: STK ephemeris and attitude
+  exchanged by files, without the live loop, as the conventional
+  workflow the paper compares against.
+
+**Open items:**
+
+- **No committed command for free-run fault runs.** `build_e5_fault_campaign`
+  plans seeded fault runs in lockstep only. The free-run fault runs
+  (results/E5_P9d_free1, results/E5_P10_free2_3186642) were started by
+  results/_analysis/p9d/launch_fault_run.py (gitignored), which plans the
+  fault as the builder does and calls `deploy_run_cli.main` in-process.
+  E3's fault replay needs a committed path (an execution-mode option on
+  the E5 builder, or an E3 fault arm) before the final runs.
+- **The twin-ack wait does not end when MATLAB exits.** The d97800c
+  incident (results/_archive/incidents/E2_P10_seed1_d97800c) waited
+  252.8 s after launch although MATLAB had exited at about 112 s. The
+  bridge wait now fails fast on exit (3d143bc); the twin-ack wait could
+  do the same with `MatlabBatchTwin.exit_code()`.
+- **The MissionMode Stateflow chart is not wired into the model's signal
+  path** (`simulink/build_acav_twin.m`, comment at the chart). The mode
+  is decided by `adcs.mission_mode` inside `adcs.twin_step`. Wiring the
+  chart means making `GuidanceControl` take the chart's mode as an input.
+  Until then the paper may not describe the chart as executing
+  ([../C3_adcs_twin.md](../C3_adcs_twin.md) section 4).
+- **Repeat counts** for E2 seeds, E3 and E6 are still to be decided; the
+  runbook writes them as placeholders.
+- **MATLAB start/build time varies.** Launch to first ack took
+  103.4-113.2 s in 11 automated runs and 152.2 s in one (E5_P10_free2:
+  every MATLAB phase slower; cause not determined). The ack timeout
+  (252.6 s) still has 100 s of margin over the slowest.

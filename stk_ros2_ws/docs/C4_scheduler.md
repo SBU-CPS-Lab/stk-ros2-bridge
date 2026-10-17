@@ -1,4 +1,4 @@
-# C4 — The ACAV scheduler
+# C4: The ACAV scheduler
 
 The Python ROS 2 node that decides which target to point at and when,
 and scores what actually happened. This is what makes E2 (kinematic vs.
@@ -151,7 +151,7 @@ time.
   available. Declining is skip-*aware*: it does not spend the declined
   target's slot, so the following target inherits the extra time.
 
-`test_scheduling.py` pins the scenario's own stated intent
+`test_scheduling.py` pins the reference scenario's stated intent
 (`config/acav_scenario.yaml`'s target comments: "a kinematic scheduler
 attempts all 7; a dynamics-aware one should decline at least T5 and
 T7") as an executable check, and separately confirms that declining T5
@@ -161,90 +161,88 @@ docstring — and is not what the live scheduler uses to decide).
 
 ## 4. Lockstep participation
 
-`acav_scenario.yaml` names `acav_scheduler` in
-`bridge.barrier_participants`; `SchedulerOptions.participant_name`
-defaults to the same string, checked against the loaded spec at
-construction (a mismatch only warns, since a free-run smoke test has no
-barrier to violate, but a lockstep run would time out silently
-otherwise).
+The bridge's ACAV configuration names `acav_scheduler` as a barrier
+participant (`src/acav/config/bridge_params_acav.yaml`);
+`SchedulerOptions.participant_name` defaults to the same string. The ack
+is published on every `scenario_time` tick before anything slow is
+considered. Target-position and access requests are `call_async` with a
+done-callback, never a blocking `call()`, so an STK round trip can never
+make an ack late.
 
-The ack is published unconditionally, every `scenario_time` tick,
-**before** anything that could plausibly be slow is even considered.
-Target-position and access-answer service calls are `call_async` plus a
-done-callback — never a blocking `call()` — specifically so a slow STK
-round trip can never be why a step's ack is late. This is a lighter
-version of the same lesson `nodes/bridge_node.py` learned the hard way
-(a blocking wait needing an executor thread that a small pool cannot
-spare): this node never blocks at all, so it needs no dedicated thread,
-just a `MultiThreadedExecutor` for headroom.
+**Target positions.** Before the first lockstep step is released, each
+target's position is resolved as an ICRF trajectory sampled every 10 s
+over the window (`TARGET_POSITION_STEP_S`; interpolation error below
+0.5 m) and interpolated per tick, rather than one position at the image
+epoch.
 
-## 5. What has actually been executed
+## 5. Scoring a target
 
-Everything below was run against the `osrf/ros:humble-desktop-full`
-container on the development machine, not just built.
+For each attempted target with image epoch t_i:
 
-| Check | Result |
-|---|---|
-| `colcon build` (whole workspace, incl. the two new messages) | clean |
-| `ros2 pkg executables acav` | lists `acav_scheduler` |
-| `python3 -c "import acav.scheduler_node"` | succeeds with **no ROS sourced** — confirms the lazy-import discipline holds |
-| `ros2 run acav acav_scheduler` standalone (no bridge) | builds its schedule (5 attempted / 2 declined) and idles cleanly |
-| `ros2 run stk_bridge bridge_node` (mock, free_run) + `acav_scheduler` together | epoch resolves; `/acav/setpoint` publishes continuously at the fast rate, correctly formatted, degrading to `has_target: false` when a target's position cannot be resolved; `/stk/lockstep/ack` publishes `"acav_scheduler:<step_index>"` every tick |
+1. **Hold window.** TwinStatus samples stamped in [t_i - 2 s, t_i] are
+   buffered (`acav/capture_tracking.py`). Each sample's pointing error
+   for the hold check is `max_boresight_error_since_last_rad` when the
+   twin reports it, so an excursion between two published samples in
+   free-run counts (`metrics.PointingSample.hold_error_deg`).
+2. **Access.** At `t_i + access_query_delay_s` (0.2 s) of scenario time
+   the scheduler calls the bridge's `compute_access` from the sensor to
+   the target over the hold window. If the satellite's written attitude
+   does not yet reach t_i, the bridge answers with the
+   `ATTITUDE_NOT_COVERED` prefix ([03_message_reference.md](03_message_reference.md));
+   the scheduler records the deferral and asks again on the next tick.
+   In lockstep the first request is always covered.
+3. **Outcome** (`metrics.evaluate_capture`): access at t_i and the hold
+   condition give `captured`, `not_settled`, `no_access` or
+   `no_access_and_not_settled`; SAFE at t_i gives `safe_mode`; no sample
+   in the hold window gives `no_telemetry`. Each result records how long
+   the access answer was deferred (`access_wait_s`, scenario and wall).
 
-**A bridge bug this smoke test found and fixed, unrelated to C4's own
-logic.** Running `bridge_node` against the mock backend in this
-container crashed its free-run status publish every iteration:
-`BackendDiagnostics.com_apartment_thread_id` (`uint32`) was assigned
-`threading.get_ident()` directly, which is only guaranteed to fit 32
-bits on Windows (where this bridge normally runs) — on 64-bit Linux it
-routinely does not, and the message library's own bounds assertion
-caught it. Masked to the low 32 bits in
-`interfaces/ros_publishers.py::publish_diagnostics`; the field is
-documented as diagnostic-only, so the mask loses no meaning anything
-else depends on. This was never exercised before because mock-backend
-testing on Linux is new as of this phase.
+**Run end.** After the window's end the scheduler finishes once every
+target is accounted for, or after a 15 s wall grace
+(`FINALIZE_GRACE_WALL_S`). A target still unscored then is recorded
+`access_unverified` if its access was deferred because the attitude
+never reached t_i, otherwise `no_access_answer`; either makes the
+record unreportable ([C1_case_study_spec.md](C1_case_study_spec.md)
+section 6).
 
-The target objects themselves (`*/Target/T1`, etc.) do not exist in the
-smoke test above, because `MockBackend` is an in-process Python object
-with no state outside the process holding it — `build_acav_scenario.py
---backend mock` run separately builds a scenario into a *different*
-`MockBackend` instance than the one `bridge_node` owns, unlike the COM
-backend, where both processes are clients of the one real STK.exe. This
-is a property of the mock, not a gap in the scheduler: the scheduler's
-own logic (which targets, when, scored how) is what section 3's tests
-cover, and per C1 section 8, no reported number may come from the mock
-regardless.
+**Run-level quantities** (`capture_tracking.RunAggregate`): peak momentum
+fraction per axis, wheel energy (the largest cumulative value seen),
+whether SAFE was entered, and saturation events: the larger of the
+scheduler's own count of rising edges in the published
+`wheels_saturated` flag and the twin's cumulative `saturation_events`.
+In lockstep the two are equal; in free-run the twin's count includes
+sub-steps nobody saw published (the seed-4 fault re-run on 3186642
+counted the T3 blip at t = 127.235 s this way).
+
+**The record** (`_write_output`): the result plus provenance (backend
+and STK version as reported by the bridge, the attitude provider
+observed on BridgeStatus, scenario digest, seed and generator version,
+code version, twin identity). The run orchestrator adds the run
+conditions afterwards (graphics mode, real-time factor, MATLAB version,
+STK process); [C5_experiment_harness.md](C5_experiment_harness.md).
 
 ## 6. Running it
 
+The run orchestrator starts the scheduler after the twin's identity has
+been checked (`run_acav_run.py`, [08_deploy_runbook.md](08_deploy_runbook.md)).
+By hand:
+
 ```
 ros2 run acav acav_scheduler --ros-args \
-    -p scenario_config:=<path to acav_scenario.yaml, default: installed> \
+    -p scenario_config:=<scenario YAML; default: the installed reference> \
     -p scheduler_type:=dynamics_aware \
-    -p output_json:=/tmp/run_dynamics_aware.json
+    -p output_json:=<record path>
 ```
 
-Requires a running `stk_bridge` (COM backend, against a live,
-C2-verified scenario) and the twin publishing `/acav/twin_status`. On
-completion (the scenario window has elapsed and every attempted target
-has been scored, or a 10 s grace period after window end) it writes
-`output_json` and shuts down, matching `verify_acav_scenario.py`'s
-run-once, script-friendly shape for C5's campaign driver to invoke
-repeatedly.
+It needs a running bridge and a twin publishing `/acav/twin_status`. It
+writes `output_json` and shuts down at the end of the run
+(`auto_shutdown`, on by default).
 
-## 7. Open items
+## 7. Status
 
-- **The twin's signal wiring is built** (`docs/C3_adcs_twin.md`
-  section 7), turning `/acav/setpoint` and `/acav/twin_status` from
-  declared topics into a working loop, and it passes Simulink's diagram
-  update (section 2 corrects an earlier wrong diagnosis here). The
-  `quaternionCmd` defect that wiring exposed (the twin computed a torque
-  but never integrated it, so the vehicle could not slew) is fixed and
-  now fixture-covered; see `docs/C3_adcs_twin.md` section 8.
-- **E2 has not run live yet.** The scheduler has run live in lockstep
-  with the dynamics-aware policy (the E6 campaigns,
-  `09_live_runs_and_results.md`); the kinematic policy and the
-  comparison itself have not. Live runs also changed one input: target
-  positions are now a time-varying ICRF trajectory sampled every 10 s and
-  interpolated, resolved before the first lockstep step is released,
-  instead of one position at the imaging epoch.
+Both policies have run live in lockstep (E2 on the reference scenario
+and, on 3186642, the dynamics-aware policy on generated seed 1); see
+[09_live_runs_and_results.md](09_live_runs_and_results.md). Offline
+coverage: `test_scheduling.py`, `test_capture_tracking.py`,
+`test_access_deferral.py`, `test_target_coverage.py`,
+`test_twin_status_fields.py`, `test_scheduler_completion.py`.
