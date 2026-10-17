@@ -108,3 +108,24 @@ its first step: a uint32/double class mismatch, fixed in 3186642) and
 E5_P10_free1_3186642 (the bridge was still in convention validation
 when the runner's 90 s bound expired, on a COM-started STK; the bound is
 now 180 s and every startup phase is recorded).
+
+## Live verification session (d0bf796, 2026-10-17)
+
+Operator-started STK (pid 21316, `stk_process` step), automated twin.
+Folders: results\LIVE_E6_d0bf796 (the E6 and E1 runs, in one folder by
+mistake) and results\LIVE_E3_d0bf796. Read with
+`results/_analysis/live_check/summarize_live_check.py`. Earlier attempts
+of each run are kept as `*.superseded-*`.
+
+| Step | Latest attempt | Earlier attempts |
+|---|---|---|
+| a. E6 x1 | record; signature equals E6-smoke-1 | bridge exited: no STK running; bridge exited: no scenario open; MATLAB exited (code 1) when its stop-file and log paths were relative (matlab_console.log:23) |
+| b. E1 control | record; 5/5 captured; signature equals E6-smoke-1 | -- |
+| b. quaternion_order, guard on | infrastructure failure, not a detection: the twin's ROS 2 node did not start ("Server failed to start. Details: Transport stopped.") | superseded-20261017T191957: the twin's own guard stop, adcs:simulink_step:AttitudeMismatch (quaternion residual 1.41421); superseded-20261017T183741: the same infrastructure failure |
+| b. time_offset, guard on | ended by itself at the ack timeout; the report's label: confirmed (MATLAB alive and running, 0 twin statuses and commands, 127 bridge attitude samples; control acked in 112.1 s) | interrupted (KeyboardInterrupt): no result; MATLAB exited (code 1) |
+| c. E3 free-run rtf 0.5, fault seed 4 | record; 27.3 min wall; 3/5 captured; 1 saturation event; SAFE (T4, T6); start gate 123.7 s; twin ready calls 71.4 per wall second | -- |
+
+What this does not show: the cause of the twin's "Server failed to
+start" (not established); a guard-on quaternion_order result in its
+latest attempt (to be retried); anything about repeat-to-repeat spread
+(one run per cell).

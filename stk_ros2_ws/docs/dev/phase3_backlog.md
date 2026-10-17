@@ -385,3 +385,25 @@ E3 (mode x fault matrix) is in place; the live verification session
 - **The E4 comments** in the reference scenario YAML, the generated
   scenarios, `+adcs/config.m` and `build_acav_twin.m`: clean them at the
   next planned scenario or twin fingerprint change.
+
+## After the live verification session on d0bf796 (recorded 2026-10-17)
+
+Fixed since: every path handed to MATLAB is absolute (6afe951); the E1
+report and the live-check summarizer classify a run without a record as
+interrupted, infrastructure failure, guard fail-stop or other (5e0d0f3);
+leftover matlab.exe / libmwros2server.exe are recorded before MATLAB
+starts and a leftover ROS 2 server is waited on or refused (01bf18d);
+the plan uses the measured rtf 0.5 time, 27.3 min from one run
+(57dbbfd).
+
+Still open:
+- Retry E1 quaternion_order guard-on: its latest attempt was an
+  infrastructure failure. The guard stop seen in an earlier attempt is
+  evidence the path works, not the session result.
+- The cause of "Server failed to start. Details: Transport stopped." is
+  not established; watch `twin_leftovers` in the next sessions.
+- One folder per experiment (the runbook now sets one per experiment).
+- The rtf 0.5 time rests on one run; per-rate repeats for E3 (rtf 0.5
+  with fewer repeats) are not supported by the matrix builder yet.
+- Repeat counts, the MissionMode decision, final runs and paper text as
+  listed above.

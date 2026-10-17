@@ -78,6 +78,8 @@ otherwise parses braces as a script block). The continuation backtick
 must be the last character on its line. `--twin-launch matlab-batch`
 starts and stops MATLAB per run; manual mode prompts you instead.
 
+**Absolute output folders.** Every command below sets an absolute folder per experiment (`$outE1`, ... from `Join-Path (Get-Location)`) and passes that. MATLAB runs from `src\stk_matlab`, so a relative folder handed to it pointed somewhere else: in the live session on d0bf796 MATLAB could not write `simulink_diagnostics.txt` and `matlab.log` was never made. Since 6afe951 the runner makes every path it gives MATLAB absolute anyway; the absolute folders keep every other tool independent of the current directory too. Use one folder per experiment: E6 and E1 records in one folder cannot be reported separately.
+
 How to check any finished run (two commands):
 
 ```powershell
@@ -112,9 +114,10 @@ Duration: at most `<N_REPEATS>` x 8 x about 10.5 min; guard-on attitude
 arms and the time offset are expected to stop early (not timed yet).
 
 ```powershell
-ros2 run acav run_acav_campaign plan --experiment E1 --output-dir results\E1_<commit> --repeats <N_REPEATS>
+$outE1 = Join-Path (Get-Location) 'results\E1_<commit>'
+ros2 run acav run_acav_campaign plan --experiment E1 --output-dir $outE1 --repeats <N_REPEATS>
 
-ros2 run acav run_acav_campaign run --experiment E1 --output-dir results\E1_<commit> --repeats <N_REPEATS> --twin-launch matlab-batch -- `
+ros2 run acav run_acav_campaign run --experiment E1 --output-dir $outE1 --repeats <N_REPEATS> --twin-launch matlab-batch -- `
     python src\acav\scripts\run_acav_run.py `
         --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
         --execution-mode '{execution_mode}' --seed '{seed}' `
@@ -124,7 +127,7 @@ ros2 run acav run_acav_campaign run --experiment E1 --output-dir results\E1_<com
         --mismatch '{mismatch}' --mismatch-guard '{mismatch_guard}' `
         --bridge-config src\acav\config\bridge_params_acav.yaml
 
-ros2 run acav run_acav_campaign report --experiment E1 --output-dir results\E1_<commit> --repeats <N_REPEATS>
+ros2 run acav run_acav_campaign report --experiment E1 --output-dir $outE1 --repeats <N_REPEATS>
 ```
 
 Check: each record's `provenance.mismatch` / `mismatch_guard` names its
@@ -143,10 +146,11 @@ scenario; build that scenario in STK first, section 3). Duration: about
 22 min per scenario.
 
 ```powershell
+$outE2 = Join-Path (Get-Location) 'results\E2_seed1_<commit>'
 $scenario = 'src\acav\config\scenarios\generated\acav_seed1.yaml'
-ros2 run acav run_acav_campaign plan --experiment E2 --output-dir results\E2_seed1_<commit> --scenario $scenario
+ros2 run acav run_acav_campaign plan --experiment E2 --output-dir $outE2 --scenario $scenario
 
-ros2 run acav run_acav_campaign run --experiment E2 --output-dir results\E2_seed1_<commit> --scenario $scenario --twin-launch matlab-batch -- `
+ros2 run acav run_acav_campaign run --experiment E2 --output-dir $outE2 --scenario $scenario --twin-launch matlab-batch -- `
     python src\acav\scripts\run_acav_run.py `
         --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
         --execution-mode '{execution_mode}' --seed '{seed}' `
@@ -155,7 +159,7 @@ ros2 run acav run_acav_campaign run --experiment E2 --output-dir results\E2_seed
         --gains-json '{gains_json}' --fault-json '{fault_json}' `
         --bridge-config src\acav\config\bridge_params_acav.yaml
 
-ros2 run acav run_acav_campaign report --experiment E2 --output-dir results\E2_seed1_<commit> --scenario $scenario
+ros2 run acav run_acav_campaign report --experiment E2 --output-dir $outE2 --scenario $scenario
 ```
 
 For the reference scenario leave out `--scenario`. `report` refuses a
@@ -179,9 +183,10 @@ the campaign in Python: nothing changes between blocks and PowerShell's
 quote stripping does not apply.
 
 ```powershell
-ros2 run acav run_acav_campaign plan --experiment E3 --output-dir results\E3_<commit> --repeats <N_REPEATS> --fault-seeds <N_FAULT_SEEDS>
+$outE3 = Join-Path (Get-Location) 'results\E3_<commit>'
+ros2 run acav run_acav_campaign plan --experiment E3 --output-dir $outE3 --repeats <N_REPEATS> --fault-seeds <N_FAULT_SEEDS>
 
-ros2 run acav run_acav_campaign run --experiment E3 --output-dir results\E3_<commit> --repeats <N_REPEATS> --fault-seeds <N_FAULT_SEEDS> --twin-launch matlab-batch -- `
+ros2 run acav run_acav_campaign run --experiment E3 --output-dir $outE3 --repeats <N_REPEATS> --fault-seeds <N_FAULT_SEEDS> --twin-launch matlab-batch -- `
     python src\acav\scripts\run_acav_run.py `
         --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
         --execution-mode '{execution_mode}' --seed '{seed}' `
@@ -192,7 +197,7 @@ ros2 run acav run_acav_campaign run --experiment E3 --output-dir results\E3_<com
         --real-time-factor '{real_time_factor}' `
         --bridge-config src\acav\config\bridge_params_acav.yaml
 
-ros2 run acav run_acav_campaign report --experiment E3 --output-dir results\E3_<commit> --repeats <N_REPEATS> --fault-seeds <N_FAULT_SEEDS>
+ros2 run acav run_acav_campaign report --experiment E3 --output-dir $outE3 --repeats <N_REPEATS> --fault-seeds <N_FAULT_SEEDS>
 ```
 
 Check, in addition to section 4: free-run runs have `free_run_start_gate`
@@ -211,9 +216,10 @@ no CPU sampler, nothing else running. Duration: `<N_REPEATS>` x about
 10.5 min.
 
 ```powershell
-ros2 run acav run_acav_campaign plan --experiment E6 --output-dir results\E6_<commit> --repeats <N_REPEATS>
+$outE6 = Join-Path (Get-Location) 'results\E6_<commit>'
+ros2 run acav run_acav_campaign plan --experiment E6 --output-dir $outE6 --repeats <N_REPEATS>
 
-ros2 run acav run_acav_campaign run --experiment E6 --output-dir results\E6_<commit> --repeats <N_REPEATS> --twin-launch matlab-batch -- `
+ros2 run acav run_acav_campaign run --experiment E6 --output-dir $outE6 --repeats <N_REPEATS> --twin-launch matlab-batch -- `
     python src\acav\scripts\run_acav_run.py `
         --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
         --execution-mode '{execution_mode}' --seed '{seed}' `
@@ -222,7 +228,7 @@ ros2 run acav run_acav_campaign run --experiment E6 --output-dir results\E6_<com
         --gains-json '{gains_json}' --fault-json '{fault_json}' `
         --bridge-config src\acav\config\bridge_params_acav.yaml
 
-ros2 run acav run_acav_campaign report --experiment E6 --output-dir results\E6_<commit> --repeats <N_REPEATS>
+ros2 run acav run_acav_campaign report --experiment E6 --output-dir $outE6 --repeats <N_REPEATS>
 ```
 
 Check: every run's `determinism_signature` equals E6-smoke-1's
@@ -311,9 +317,10 @@ Generated by `results/_analysis/live_check/make_checklist.py` from the plan buil
 **a. E6, one automated run** (1 run). Pass: its `determinism_signature` equals results\E6_smoke\E6-smoke-1.json's.
 
 ```powershell
-ros2 run acav run_acav_campaign plan --experiment E6 --output-dir results\LIVE_E6_<commit> --repeats 1
+$outLiveE6 = Join-Path (Get-Location) 'results\LIVE_E6_<commit>'
+ros2 run acav run_acav_campaign plan --experiment E6 --output-dir $outLiveE6 --repeats 1
 
-ros2 run acav run_acav_campaign run --experiment E6 --output-dir results\LIVE_E6_<commit> --repeats 1 --twin-launch matlab-batch -- `
+ros2 run acav run_acav_campaign run --experiment E6 --output-dir $outLiveE6 --repeats 1 --twin-launch matlab-batch -- `
     python src\acav\scripts\run_acav_run.py `
         --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
         --execution-mode '{execution_mode}' --seed '{seed}' --output '{output}' `
@@ -322,15 +329,16 @@ ros2 run acav run_acav_campaign run --experiment E6 --output-dir results\LIVE_E6
         --mismatch '{mismatch}' --mismatch-guard '{mismatch_guard}' --real-time-factor '{real_time_factor}' `
         --bridge-config src\acav\config\bridge_params_acav.yaml
 
-ros2 run acav run_acav_campaign report --experiment E6 --output-dir results\LIVE_E6_<commit> --repeats 1
+ros2 run acav run_acav_campaign report --experiment E6 --output-dir $outLiveE6 --repeats 1
 ```
 
 **b. E1: control, quaternion_order and time_offset, guard on** (3 runs: E1-dynamics_aware-lockstep, E1-dynamics_aware-lockstep-mismatchQuaternionOrder, E1-dynamics_aware-lockstep-mismatchTimeOffset). Pass: the control completes with a record; quaternion_order is a fail-stop whose `matlab_session` records the twin's own stop reason; time_offset is labelled by `report` either "confirmed" or "cause not independently confirmed" (both valid; note which).
 
 ```powershell
-ros2 run acav run_acav_campaign plan --experiment E1 --output-dir results\LIVE_E1_<commit> --repeats 1 --e1-types quaternion_order,time_offset
+$outLiveE1 = Join-Path (Get-Location) 'results\LIVE_E1_<commit>'
+ros2 run acav run_acav_campaign plan --experiment E1 --output-dir $outLiveE1 --repeats 1 --e1-types quaternion_order,time_offset
 
-ros2 run acav run_acav_campaign run --experiment E1 --output-dir results\LIVE_E1_<commit> --repeats 1 --e1-types quaternion_order,time_offset --twin-launch matlab-batch -- `
+ros2 run acav run_acav_campaign run --experiment E1 --output-dir $outLiveE1 --repeats 1 --e1-types quaternion_order,time_offset --twin-launch matlab-batch -- `
     python src\acav\scripts\run_acav_run.py `
         --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
         --execution-mode '{execution_mode}' --seed '{seed}' --output '{output}' `
@@ -339,14 +347,15 @@ ros2 run acav run_acav_campaign run --experiment E1 --output-dir results\LIVE_E1
         --mismatch '{mismatch}' --mismatch-guard '{mismatch_guard}' --real-time-factor '{real_time_factor}' `
         --bridge-config src\acav\config\bridge_params_acav.yaml
 
-ros2 run acav run_acav_campaign report --experiment E1 --output-dir results\LIVE_E1_<commit> --repeats 1 --e1-types quaternion_order,time_offset
+ros2 run acav run_acav_campaign report --experiment E1 --output-dir $outLiveE1 --repeats 1 --e1-types quaternion_order,time_offset
 ```
 
 **c. E3: one automated free-run run at rtf 0.5 with fault seed 4** (E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375; fault {"at_s": 218.375, "axis": 0, "axis_name": "x", "health": 0.0, "kind": "saturation", "seed": 4}). Record: wall time, captured/attempted, saturation events, twin loop rate. The `--%` passes the rest of the line to Python unchanged, so the JSON keeps its quotes in Windows PowerShell 5.1:
 
 ```powershell
-mkdir results\LIVE_E3_<commit>
-python src\acav\scripts\run_acav_run.py --% --run-id E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375 --experiment E3 --scheduler dynamics_aware --execution-mode free_run --seed 0 --output results\LIVE_E3_<commit>\E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375.json --scenario "" --backend com --attitude-provider "" --run-config results\LIVE_E3_<commit>\E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375.runconfig.json --gains-json {} --fault-json "{\"at_s\": 218.375, \"axis\": 0, \"axis_name\": \"x\", \"health\": 0.0, \"kind\": \"saturation\", \"seed\": 4}" --mismatch "" --mismatch-guard "" --real-time-factor 0.5 --bridge-config src\acav\config\bridge_params_acav.yaml --twin-launch matlab-batch
+$env:OUT_LIVE_E3 = Join-Path (Get-Location) 'results\LIVE_E3_<commit>'
+mkdir $env:OUT_LIVE_E3
+python src\acav\scripts\run_acav_run.py --% --run-id E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375 --experiment E3 --scheduler dynamics_aware --execution-mode free_run --seed 0 --output %OUT_LIVE_E3%\E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375.json --scenario "" --backend com --attitude-provider "" --run-config %OUT_LIVE_E3%\E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375.runconfig.json --gains-json {} --fault-json "{\"at_s\": 218.375, \"axis\": 0, \"axis_name\": \"x\", \"health\": 0.0, \"kind\": \"saturation\", \"seed\": 4}" --mismatch "" --mismatch-guard "" --real-time-factor 0.5 --bridge-config src\acav\config\bridge_params_acav.yaml --twin-launch matlab-batch
 ```
 
 **Estimated duration** (measured wall time per automated run, summary.json; lockstep 9.5-11.4 min from E5_P9d_lock2 9.5, E5_P9d_lock1 9.9, E6_P9 seed0 10.3, E6_P9 seed2 10.4, E2_P10_seed1 11.4): steps a and b, 4 lockstep runs, at most 38.0-45.6 min (the two E1 fail-stops should end sooner; not measured); step c, free-run rtf 0.5: to be measured (this session measures it). Add STK start and the scenario build.
