@@ -1,85 +1,143 @@
-# Time Synchronization
+# Time synchronisation
 
-## The bridge is the clock authority
+The bridge owns simulation time. It advances STK's clock, publishes it
+on `/clock` and `/<prefix>/scenario_time` (`ScenarioTime`: time,
+execution mode, real-time factor, step index, paused), and every other
+participant takes its time from there. The twin never reads the wall
+clock for simulation time. `core/time_sync.py` holds the clock;
+`nodes/bridge_node.py` runs the loop on a dedicated thread (section 4).
 
-In `lockstep` and `paced` modes, the bridge node publishes `/clock` and
-every other node -- including MATLAB/Simulink -- runs with
-`use_sim_time:=true`. This is what makes a run reproducible: replace
-"wall clock" with "whatever the bridge says," and every node agrees.
+Two execution modes are used by the experiments, chosen per run by
+`run_acav_run.py --execution-mode {lockstep,free_run}`; the runner
+writes the mode into the bridge config and into the twin's run config
+(`deploy_run_cli.py` `write_bridge_config`, `prepare_run_config`), so
+the two cannot disagree. `core/time_sync.py` also accepts `paced` and
+`external`; no experiment uses them.
 
-## Execution modes
+## 1. Lockstep
 
-| Mode | STK clock | `/clock` behaviour | Use |
-|---|---|---|---|
-| `free_run` | Real-time (STK animates on wall clock) | Mirrors wall time | Visualization, demos |
-| `paced` | Real-time-factor-scaled | Scaled wall time | Human review at non-1x speed |
-| `lockstep` | Stepped by the bridge | Advances only on step | **Default for control work** |
-| `external` | Follows another authority | Adopted, not published | Federating with a third simulator |
+**Principle.** The bridge advances one step (`time.step_s`, 0.1 s) and
+then waits until every participant in `time.barrier_participants` has
+acknowledged it. Nothing depends on wall time, so a run's commands,
+twin status and record signature are the same on any host speed.
 
-Configured via `bridge_params.yaml`'s `time:` block, or at runtime via
-the `SetExecutionMode` service.
+**One iteration** (`_lockstep_iteration`; settings from
+`src/acav/config/bridge_params_acav.yaml`):
 
-## Lockstep, in detail
+1. From step 1 on, with `require_attitude_command_each_step: true`,
+   wait for the attitude command stamped for the step about to be taken
+   (up to `barrier_timeout_s`, 30 s). A missing or rejected command
+   aborts the run (`LockstepCommandError`). Apply the commands.
+2. Advance: `t_k = t_(k-1) + step_s`, pushed into STK.
+3. Publish `/clock` and `ScenarioTime(t_k)`, sense, publish telemetry,
+   run the slower rate groups, publish status at 1 Hz wall.
+4. Barrier: wait for `"<participant>:<k>"` on `/<prefix>/lockstep/ack`
+   from `matlab_twin` and `acav_scheduler`. The twin sends its ack after
+   its attitude command for the next step.
 
-Each iteration of the bridge's step loop (`nodes/bridge_node.py`'s
-`_lockstep_iteration`):
+**Startup.** With `wait_for_startup_participants: true` the bridge holds
+step 1 and republishes it every 2 s (`STARTUP_REPUBLISH_S`) from its
+stored samples, without new COM work, until every participant has
+joined; that wait is not counted in E6's barrier-wait mean.
 
-1. **Apply** commands accumulated in the inbox since the last step.
-2. **Advance** simulation time by `step_s` and push it into STK.
-3. **Publish** the new state (telemetry, `/clock`, `scenario_time`) --
-   participants have the new state in hand *before* being asked to
-   acknowledge it.
-4. **Wait** for every declared `barrier_participants` entry to
-   acknowledge this step index, or apply the configured timeout policy.
+**Barrier timeout policy** (`time.on_barrier_timeout`): `abort`
+(default and ACAV: the run stops, loudly), `continue` (advances anyway,
+logged as no longer deterministic), `wait` (blocks indefinitely).
 
-### Acknowledging a step from MATLAB
+**What lockstep guarantees, and how it is checked.** The reference
+determinism signature is E6_smoke's; every change to the loop is
+checked against it by a live E6 run, and offline by
+`src/stk_bridge/test/test_lockstep_trace_golden.py`, which drives the
+real iteration for 250 steps and compares every stage and epoch with a
+golden trace.
 
-```matlab
-client.Commands.acknowledgeStep("matlab_twin", stepIndex);
+## 2. Free-run
+
+**Principle.** Simulation time follows the wall clock times the
+real-time factor (`time.real_time_factor`, `--real-time-factor`):
+
+```
+t = t_gate + (wall - wall_gate) * rtf          (core/time_sync.py now)
 ```
 
-Publish this **after** any commands your control law computed for this
-step, never before -- see `CommandPublisher.acknowledgeStep`'s help text
-and `interfaces/ros_subscribers.py`'s ordering note. Acking before your
-commands land lets the bridge advance past a step whose control input
-never arrived.
+Nobody waits for anybody after the start, so what the twin sees per
+published sample, and how many sub-steps it integrates at once, depend
+on the host's load. E3 measures what that changes.
 
-### Barrier timeout policy
+**Start gate** (`_arm_startup_gate`, `_free_gate_iteration`). The clock
+starts paused at exactly t = 0. The bridge senses once, publishes that
+state, republishes it every 2 s, and opens the gate when every barrier
+participant has acked; the clock then runs from t = 0. The wait is
+recorded in `startup_gate.json` and in summary.json
+(`free_run_start_gate.wait_s`; e.g. 176.5 s in
+results/E5_P10_free2_3186642, most of it MATLAB starting and building).
+Without the gate the window ran on through MATLAB's start.
 
-| Policy | Behaviour |
-|---|---|
-| `abort` | Raises `LockstepBarrierTimeoutError`. **Default.** Fails loudly and immediately. |
-| `continue` | Advances anyway, logged at ERROR: *"this run is no longer deterministic."* |
-| `wait` | Blocks indefinitely. Pair with a health watchdog or it hangs forever on a dead participant. |
+**Pacer** (`core/free_run_pacer.py`). Cycles are scheduled at
+`start + k * period`, the fastest rate group's period (0.1 s of
+simulation time). A cycle that ends early sleeps to the next scheduled
+start; a cycle that overruns is followed at once, the schedule is
+rebased (no catch-up burst), and the overrun is counted.
+`free_run_pacing.json` records cycles, overruns and the period.
 
-### Why a dedicated thread, not an executor timer
+**Order within a cycle** (`_free_running_iteration`): apply the
+commands that have arrived, sense and publish telemetry, then publish
+`/clock` and ScenarioTime with the same time, then the slower rate
+groups and status. The clock is published after sensing because the
+twin steps only when the telemetry it holds is stamped with the latest
+ScenarioTime: published first, it left the twin unable to step for a
+whole sensing time per cycle (E3 at rtf 1.0 on 4b26de0: 31% of samples
+answered; fixed in 1628866).
 
-The step loop **blocks** on the barrier wait, and the acknowledgement
-that releases it arrives as a ROS message via an executor callback. If
-the loop itself occupied an executor thread, it would be waiting on a
-callback that needs an executor thread to run -- a deadlock that is
-either permanent (small thread pool) or intermittent under load (large
-pool). The step loop therefore runs on its own dedicated thread; the
-executor's threads handle ROS I/O only. See
-`nodes/bridge_node.py`'s module docstring, and
-`test/test_time_sync.py::test_ack_from_another_thread_releases_a_blocked_wait`
-for the automated regression test of this property.
+**The twin in free-run** (`+adcs/simulink_step.m`). Simulink runs paced
+at `PollingRateHz` (100) model steps per wall second. Each time
+ScenarioTime has moved, the twin integrates `n` 0.1 s sub-steps to catch
+up (zero-order hold of the latest command and telemetry), with the
+target geometry propagated causally to each sub-step
+(`+adcs/geometry_at.m`) instead of held at the last published value.
+In the TwinStatus it publishes, `saturation_events` counts every
+sub-step, and `max_boresight_error_since_last_rad` is the largest error
+over the sub-steps integrated since the previous status ([03_message_reference.md](03_message_reference.md)).
+Sub-step statistics go to `twin_substeps.json`; per-wall-second counters
+to `twin_loop.csv`.
 
-## Confirmed STK 12.6 behaviour: out-of-order samples are NACKed
+**Sensing in free-run.** Combined attitude/rate (B) and orbit batching
+(C) are off ([00_architecture.md](00_architecture.md) section 6).
 
-Originally assumed STK would silently drop an out-of-order real-time
-sample. Confirmed otherwise against a live install: STK 12.6 **NACKs**
-it explicitly (`core/validation.py`'s `monotonicity_enforced` check).
-`core/actuation.py`'s local monotonicity guard is kept anyway --
-catching the violation before the round trip saves the COM call, gives
-a counter rather than requiring a log grep, and stays correct
-regardless of whether a given backend's behaviour matches this finding.
+**Access in free-run.** The scheduler asks for access at
+`t_i + access_query_delay_s`; if the twin's written attitude does not
+yet reach t_i, the bridge defers the answer
+([03_message_reference.md](03_message_reference.md), `compute_access`)
+and the scheduler asks again on its next tick. A target whose attitude
+never reaches t_i by the end of the run is recorded `access_unverified`
+and makes the record unreportable ([C4_scheduler.md](C4_scheduler.md)).
 
-## Rate expectations
+## 3. Rates and costs
 
-Budget **1-20 Hz** for a closed loop over COM on this project's
-reference hardware -- a general expectation, not a guarantee for your
-scenario. Run `scripts/benchmark_rates.py` against your actual STK
-install and object count before committing to a `step_s` value; object
-count, data-provider complexity, and topology (T1 vs T2/T3) all change
-the achievable rate materially.
+On the deploy host (2 cores) a lockstep step costs about 60 ms in E6
+with graphics off and an operator-started STK (E6_P9_9fed085: 60.0,
+61.1 and 60.2 ms; sense 34.3-34.6 ms), so the 7200 steps of the 720 s
+window take about 7 minutes of stepping, plus startup. Sensing
+dominates. See
+[09_live_runs_and_results.md](09_live_runs_and_results.md) for the
+measured numbers and [C6_analysis.md](C6_analysis.md) for how they are
+computed.
+
+## 4. Why the step loop has its own thread
+
+In lockstep the loop blocks on the barrier, and the ack that releases it
+arrives through an executor callback. If the loop ran in an executor
+thread it would wait for a callback that needs an executor thread: a
+deadlock with a small pool, an intermittent one with a large pool. The
+loop therefore runs on its own thread; executor threads handle ROS I/O
+only, and STK calls go through the single COM worker thread
+(`nodes/bridge_node.py` module docstring;
+`test_time_sync.py::test_ack_from_another_thread_releases_a_blocked_wait`).
+
+## 5. Out-of-order samples
+
+STK 12.6 rejects (NACKs) a real-time attitude sample earlier than the
+newest one it holds (`core/validation.py` `monotonicity_enforced`).
+`core/actuation.py` keeps a local monotonicity guard anyway, and clears
+an object's attitude history before its first command, since a reused
+scenario keeps samples from the previous run.

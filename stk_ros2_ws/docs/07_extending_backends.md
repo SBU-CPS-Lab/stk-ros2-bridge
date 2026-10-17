@@ -82,10 +82,31 @@ trusted.
    than being more forgiving than production. A backend that is kinder
    than real STK will pass tests that then fail against the real thing.
 
+## Contracts added since bring-up
+
+Three parts of `StkBackend` that later features depend on:
+
+* `revision` (`backends/base.py`): a counter that changes on every
+  structural change (scenario or object lifecycle, propagator changes,
+  real-time attitude enable/ClearData, raw Connect commands) but not on
+  attitude sample writes. Orbit batching (`core/orbit_batch.py`) keeps
+  its audited blocks only while it is unchanged; a backend that cannot
+  tell returns None, and batching then reads instantaneously.
+* `get_current_scenario_name` and `graphics_state` are not abstract:
+  the defaults refuse scenario reuse and report no graphics. The ACAV
+  runs need both from the COM backend (`scenario.use_existing`, the
+  graphics-off requirement).
+* Starting STK is a decision for the operator, not the backend: the
+  COM backend attaches to a running STK Desktop and starts one only with
+  `backend.com.start_stk` (`com_backend.py` `_obtain_application`). A
+  new desktop-style backend should follow the same rule, since the run
+  orchestrator refuses an STK it cannot attribute to the operator
+  (`acav/stk_process.py`).
+
 ## The gRPC path (STK 12.8+, not yet needed)
 
 STK 12.6 has no gRPC remoting -- `agi.stk12` is in-process only on this
-version (see `docs/00_architecture.md` section 1). If this project is
+version (see [00_architecture.md](00_architecture.md) section 3). If this project is
 ever upgraded past STK 12.8, a `grpc_backend.py` implementing the same
 `StkBackend` contract against `agi.stk12.stkengine`'s remotable
 `STKRuntime` would slot in as a fifth backend type with **zero changes**

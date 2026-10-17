@@ -1,364 +1,329 @@
-# `stk_ros2_bridge` — Architecture, Package Structure & Implementation Plan
+# Architecture
 
-**Target:** AGI/Ansys STK **12.6 (2023 R1)** · ROS 2 **Humble** · MATLAB **R2023b / R2024a** (ROS Toolbox)
-**Approach:** A — Python `agi.stk12` Object Model + `rclpy`
-**Status:** Phase 0 (design) — code generation begins at Phase 1
+How the framework is built today: what each part does, how a run moves
+through it in each execution mode, and how a result is tied back to the
+code, configuration and scenario that produced it. Every claim names
+the file (and function) it describes, so it can be checked against the
+code. History appears only where it explains a design decision.
 
----
+## 1. What the framework is
 
-## 1. Version-driven design constraints
+A co-simulation framework that couples **STK 12.6 (2023 R1)**, the
+physics and geometry reference, to a **MATLAB R2023b / Simulink**
+digital twin of a satellite's attitude control system, over **ROS 2
+Humble**. STK propagates the orbit and evaluates access geometry; the
+twin integrates the attitude dynamics and the controller; ROS 2 carries
+telemetry, commands and the shared clock between them.
 
-These are hard constraints for 12.6 and they shape every decision below.
+The case study built on it, ACAV (Attitude-Coupled Access Verification,
+[C1_case_study_spec.md](C1_case_study_spec.md)), asks whether an imaging
+schedule that is feasible on geometry alone is still feasible once the
+attitude dynamics are in the loop.
 
-| Constraint | Consequence |
-|---|---|
-| `agi.stk12` is **in-process only** (no gRPC until 12.8) | The bridge node runs on the STK host. No remote Python→STK. |
-| STK Object Model is **COM / Windows-only** | Bridge process is Windows in the default deployment. |
-| STK Connect (TCP :5001) is the **only** network-transparent interface | Reserved as the remote backend for a future Linux split. |
-| `agi.stk12` requires **Python ≥ 3.8** | Compatible with ROS 2 Humble's Windows build (Python 3.8). ✔ |
-| ROS 2 Humble on Ubuntu uses **Python 3.10** | Only relevant if the bridge later moves to Linux + STK Engine. |
-| MATLAB ROS Toolbox: **Humble on R2023b–R2024a** | Pin the MATLAB release to match. Mismatched distros break custom messages. |
-| `ros2genmsg` on Windows needs **MSVC** | Custom `stk_msgs` must be compiled on the MATLAB side too. See §7. |
+Non-goals: the framework is not a flight software stack, does not
+replace STK's own analysis tools, and does not make a free-running
+co-simulation deterministic. It measures what lockstep and free-run
+cost and change (experiments E3 and E6).
 
-### 1.1 The central design decision: backend abstraction
+## 2. Components
 
-Everything STK-facing goes behind one interface, `StkBackend`. Three implementations ship:
-
-| Backend | Transport | Host | Use |
+| Package | Kind | Entry points | Role |
 |---|---|---|---|
-| `com` | `agi.stk12.stkdesktop`, in-process COM | Windows, with GUI | **Default.** Full fidelity + 3D visualization. |
-| `engine` | `agi.stk12.stkengine`, in-process, `noGraphics=True` | Windows **or Linux** | Headless / CI / batch. Needs Engine entitlement. |
-| `connect` | Raw TCP to port 5001 | Any → Windows STK | Remote/cross-OS. Lower rate, text parsing. |
+| `src/stk_msgs` | ament_cmake | -- | All ROS interfaces: telemetry, commands, status, services, actions, plus the application messages `TargetSetpoint` and `TwinStatus`. |
+| `src/stk_bridge` | ament_python | `python -m stk_bridge.nodes.bridge_node` (`nodes/bridge_node.py`) | The bridge: the only process that talks to STK. Clock authority, sensing, actuation, services. |
+| `src/stk_matlab` | MATLAB (not a colcon package) | `run_twin_session.m`, `simulink/build_acav_twin.m`, `setup_stk_ros.m` | The digital twin (`+adcs`), the Simulink model generator, and the client helpers (`+stkros`). |
+| `src/acav` | ament_python | `scripts/run_acav_run.py`, `run_acav_campaign`, `build_acav_scenario`, `verify_acav_scenario`, `acav_scheduler`, `scripts/analyze_coupling.py` | The case study: scenario builder and verifier, scheduler node, single-run orchestrator, campaign runner, analysis. |
 
-This is the whole migration story. Moving to a Linux ROS graph, to headless CI, or to STK 12.8's gRPC later means **adding or selecting a backend**, not restructuring the node. Nothing above `backends/` may import `agi.stk12` or touch COM types.
+**`stk_bridge`** has three layers, and nothing above `backends/` imports
+`agi.stk12`:
 
----
+- `backends/`: one interface (`backends/base.py`, `StkBackend`) with
+  four implementations. `com_backend.py` (STK Desktop over COM, the one
+  every experiment uses), `connect_backend.py` (STK Connect over TCP
+  5001), `engine_backend.py` (STK Engine; no licence on this project's
+  host, never exercised), and `mock_backend.py` (analytic, for tests;
+  records made with it are never reportable,
+  `acav/run_record.py` `unreportable_reasons`). The COM backend only
+  attaches to an STK Desktop the operator started; it starts one only
+  when `backend.com.start_stk` is set (`com_backend.py`
+  `_obtain_application`).
+- `core/`: no ROS imports. Time (`time_sync.py`, `free_run_pacer.py`),
+  sensing (`sensing.py`, `rate_group.py`, `orbit_batch.py`,
+  `orbit_block.py`), actuation (`actuation.py`), scenario setup and
+  convention validation (`scenario_manager.py`, `validation.py`),
+  the COM worker thread (`com_thread.py`), health and status
+  (`health.py`, `step_timing.py`, `graphics_state.py`,
+  `startup_phases.py`).
+- `interfaces/` and `nodes/`: ROS publishers, subscribers, services,
+  actions, QoS profiles, and the node that wires them to `core/`.
 
-## 2. Deployment topologies
+**The twin** (`src/stk_matlab`) is generated, not checked in by hand:
+`build_acav_twin.m` writes `acav_twin.slx` for one run's configuration.
+Its per-step logic is MATLAB code in `+adcs` (`simulink_step.m` is the
+Simulink adapter, `twin_step.m` one control step, `geometry_at.m` the
+causal target geometry). `run_twin_session.m` builds and runs the model
+headless (`matlab -batch`) for the automated runs. See
+[C3_adcs_twin.md](C3_adcs_twin.md).
 
-**T1 — Single-host Windows (recommended for Phase 1–5).**
-STK 12.6 Desktop, `stk_bridge` node, ROS 2 Humble (Windows binaries), and MATLAB/Simulink all on one machine. Zero network boundary, lowest latency, simplest to debug. DDS over loopback.
+**`acav`**: `scheduler_node.py` chooses targets and scores captures;
+`deploy_run_cli.py` (`run_acav_run.py`) runs one run end to end;
+`campaign_cli.py` / `campaign_runner.py` (`run_acav_campaign`) plan,
+run, resume and report a matrix of runs; `run_record.py` defines the
+record; `metrics.py`, `capture_tracking.py` and `coupling_analysis.py`
+compute the results. See [C4_scheduler.md](C4_scheduler.md),
+[C5_experiment_harness.md](C5_experiment_harness.md) and
+[C6_analysis.md](C6_analysis.md).
 
-**T2 — Split, bridge stays with STK.**
-Windows: STK + `stk_bridge` (COM backend) + ROS 2 Humble. Linux: MATLAB/Simulink + rest of ROS graph. DDS over LAN with a shared `ROS_DOMAIN_ID`. Requires firewall rules for RTPS discovery (UDP 7400–7500 range).
+## 3. Deployment topology
 
-**T3 — Split, bridge on Linux.**
-Windows: STK only. Linux: `stk_bridge` with `connect` backend + everything else. Fully Linux ROS graph, at the cost of Connect's text round-trips.
+Everything runs on one Windows host (topology T1): STK 12.6 Desktop,
+the bridge, ROS 2 Humble (Windows binaries, DDS over loopback), MATLAB
+R2023b and the case-study nodes. `agi.stk12` in STK 12.6 is in-process
+only, so the bridge must run on the STK host. The split topologies
+(Linux ROS graph, Connect backend) and STK Engine are possible through
+the backend interface but are not used or tested by this project.
 
-**T4 — All-Linux (license permitting).**
-STK Engine headless on Ubuntu, `engine` backend, in-process with `rclpy`. Cleanest, but no GUI and requires an Engine-on-Linux entitlement.
+The host used for every recorded run has 2 physical cores (4 logical,
+Intel Core i5-6300U); this matters for every timing number (E6) and for
+free-run behaviour (E3).
 
-Selected via `backend.type` + `backend.connect.host` in `bridge_params.yaml`. No code change.
+## 4. Execution mode: lockstep
 
----
-
-## 3. Runtime architecture
-
-![STK ↔ ROS 2 bridge runtime architecture](figures/bridge_architecture.svg)
-
-Hand-authored (`docs/figures/bridge_architecture.svg`), not generated by
-an auto-layout tool — see `docs/C6_analysis.md` section 3 for why that
-matters for every figure in this project, not only the C6 ones. The
-same topology in plain text, for a terminal or a diff:
-
-```
-                          ┌─────────────────────────────────────────┐
-                          │  MATLAB / Simulink  (digital twin)      │
-                          │  dynamics · ADCS · FDIR · estimators    │
-                          │  ROS Toolbox: ros2publisher/subscriber, │
-                          │  Simulink Publish/Subscribe/Call Service│
-                          └───────▲──────────────────────┬──────────┘
-                    /stk/telemetry/*                 /stk/cmd/*
-                    /clock, /tf                      services, actions
-                          ┌───────┴──────────────────────▼──────────┐
-                          │        stk_bridge_node  (rclpy)         │
-                          │                                         │
-                          │  interfaces/  publishers · subscribers  │
-                          │               services · actions · tf   │
-                          │  ───────────────────────────────────────│
-                          │  core/  time_sync (CLOCK AUTHORITY)     │
-                          │         rate_group · sensing            │
-                          │         actuation · scenario_manager    │
-                          │         frames · conversions · health   │
-                          │  ───────────────────────────────────────│
-                          │  backends/  StkBackend  (abstract)      │
-                          └───────┬─────────────────────────────────┘
-                     com │      engine │        connect │
-                          ▼             ▼                ▼
-                   ┌──────────────────────────────────────────┐
-                   │            STK 12.6 (2023 R1)            │
-                   │  Data Providers · Real-time propagator   │
-                   │  SetPosition · external .e/.a · Access   │
-                   └──────────────────────────────────────────┘
-```
-
-### 3.1 Threading model
-
-COM apartment rules make this non-negotiable:
-
-- **Main thread** — owns the COM apartment (STA). *All* `agi.stk12` calls happen here. `rclpy` executor callbacks that touch STK are dispatched onto it via a work queue.
-- **Executor thread(s)** — `MultiThreadedExecutor` handles ROS I/O, serialization, publishing. Never touches STK objects directly.
-- **Handoff** — a bounded `queue.Queue` of command objects, drained each tick. Backpressure policy configurable (`drop_oldest` / `block` / `reject`).
-
-This is exactly the failure mode the seed's best-practice #3 warned about, and the reason the bridge is a separate process from MATLAB rather than an S-function.
-
-### 3.2 Execution modes (`core/time_sync.py`)
-
-| Mode | Behaviour | Use |
-|---|---|---|
-| `free_run` | STK animates on wall clock; bridge samples at fixed rate. `/clock` mirrors wall time. | Visualization, demos. |
-| `paced` | STK stepped at a configurable real-time factor. | Human-in-the-loop review. |
-| `lockstep` | **Bridge is clock authority.** Advances STK one step, samples, publishes `/clock`, waits for all command topics to report for that stamp, then steps again. | **Default for control work.** Deterministic and reproducible. |
-| `external` | Another node owns `/clock`; bridge follows. | Federating with a third simulator. |
-
-All downstream nodes (including MATLAB) run `use_sim_time:=true`. Lockstep barrier participants are declared in config so the bridge knows whom to wait for and can time out cleanly.
-
-### 3.3 Multi-rate sensing (`core/rate_group.py`)
-
-Not every quantity needs 10 Hz. Data providers are grouped:
-
-- **fast** (default 10 Hz) — Cartesian Position/Velocity, Attitude Quaternion, angular velocity
-- **medium** (1 Hz) — LLA, eclipse/lighting, sensor boresight, beta angle
-- **slow** (0.1 Hz) — access status, link budget (C/N₀, Eb/N₀, margin)
-- **on_demand** — coverage, long-horizon access, arbitrary DP queries via service
-
-Groups are declared in `sensing_pipeline.yaml`, so adding a telemetry channel is a config edit, not a code change. Bulk extraction uses `IAgDrDataSetCollection.ToNumpyArray()` (available from 12.6) on the COM/engine backends.
-
-### 3.4 Actuation paths (`core/actuation.py`)
-
-| ROS input | STK mechanism | Notes |
-|---|---|---|
-| `/stk/cmd/position` | Real-time propagator + `SetPosition` | Append-only; points become historical. Configure look-ahead/behind. |
-| `/stk/cmd/attitude` | External attitude (`.a`) file, chunked rewrite + reload | 12.6 has no per-sample attitude injection; we buffer and rewrite. |
-| `/stk/cmd/ephemeris` | `StkExternal` propagator, `.e` / CCSDS `.oem` | Batch replay of a Simulink-propagated trajectory. |
-| `ExecuteManeuver` action | Astrogator segment mutation + `RunMCS` | Requires Astrogator license. |
-| `ExecuteConnect` service | Raw Connect passthrough | Deliberate escape hatch for anything unmodelled. |
-
-The attitude path is the one real wart in 12.6 and gets its own buffering strategy (write-behind with configurable flush interval) documented in Phase 4.
-
-### 3.5 Frames and units (`core/frames.py`, `core/conversions.py`)
-
-The highest-risk area for silent, plausible-looking bugs. Explicit rules:
-
-- **Units.** STK reports km, km/s. ROS is REP-103 SI: metres, m/s. Conversion happens once, at the backend boundary. Nothing above `backends/` sees kilometres.
-- **Quaternions.** STK's Object Model quaternion element order is **(q1, q2, q3, q4) = (x, y, z, w)** — same ordering convention as ROS `geometry_msgs/Quaternion`, but this is verified per-data-provider at startup by a self-test rather than assumed, because STK's *Connect* text output and some DP variants differ. Never trust an unvalidated quaternion.
-- **Frames.** ICRF / J2000 / Fixed (ECEF) / LVLH / Body are published as an explicit `frame_id` string on every message, plus a `tf2` tree rooted at `icrf`. REP-105 names (`map`, `odom`, `base_link`) are *not* forced onto orbital frames — a `frames.yaml` alias table maps them if a downstream consumer expects them.
-- **Time.** STK epochs (UTCG / EpSec) ↔ ROS `builtin_interfaces/Time`. Leap seconds handled via the configured epoch and STK's own time conversion, not by hand.
-
-A startup self-test cross-checks one state vector through both a Data Provider and a Connect `Report` to catch convention drift before the loop ever runs.
-
----
-
-## 4. Package structure
+The bridge is the clock authority and nothing advances until every
+declared participant has acknowledged the current step. The ACAV
+configuration declares two participants, `matlab_twin` and
+`acav_scheduler` (`src/acav/config/bridge_params_acav.yaml`,
+`time.barrier_participants`). One step of
+`nodes/bridge_node.py` `_lockstep_iteration`:
 
 ```
-stk_ros2_ws/
-├── README.md
-├── docs/
-│   ├── 00_architecture.md
-│   ├── 01_installation_windows.md
-│   ├── 02_matlab_setup.md
-│   ├── 03_message_reference.md
-│   ├── 04_frames_and_units.md
-│   ├── 05_time_synchronization.md
-│   ├── 06_troubleshooting.md
-│   └── 07_extending_backends.md
-└── src/
-    ├── stk_msgs/                        # ament_cmake — interfaces only
-    │   ├── CMakeLists.txt
-    │   ├── package.xml
-    │   ├── msg/
-    │   │   ├── OrbitState.msg
-    │   │   ├── AttitudeState.msg
-    │   │   ├── AngularRate.msg
-    │   │   ├── LLAState.msg
-    │   │   ├── SatelliteState.msg
-    │   │   ├── EclipseState.msg
-    │   │   ├── SensorPointing.msg
-    │   │   ├── SensorFieldOfView.msg
-    │   │   ├── AccessInterval.msg
-    │   │   ├── AccessIntervalArray.msg
-    │   │   ├── AccessStatus.msg
-    │   │   ├── LinkBudget.msg
-    │   │   ├── LinkBudgetArray.msg
-    │   │   ├── GroundStationAER.msg
-    │   │   ├── EphemerisPoint.msg
-    │   │   ├── EphemerisSegment.msg
-    │   │   ├── AttitudeCommand.msg
-    │   │   ├── PositionCommand.msg
-    │   │   ├── ManeuverCommand.msg
-    │   │   ├── ImpulsiveBurn.msg
-    │   │   ├── FiniteBurn.msg
-    │   │   ├── ScenarioTime.msg
-    │   │   ├── BridgeStatus.msg
-    │   │   ├── BackendDiagnostics.msg
-    │   │   ├── DataProviderRequest.msg
-    │   │   ├── DataProviderResult.msg
-    │   │   └── ObjectDescriptor.msg
-    │   ├── srv/
-    │   │   ├── LoadScenario.srv
-    │   │   ├── SaveScenario.srv
-    │   │   ├── ResetScenario.srv
-    │   │   ├── CreateObject.srv
-    │   │   ├── DeleteObject.srv
-    │   │   ├── SetPropagator.srv
-    │   │   ├── QueryDataProvider.srv
-    │   │   ├── ComputeAccess.srv
-    │   │   ├── GetLinkBudget.srv
-    │   │   ├── SetAnimationTime.srv
-    │   │   ├── StepSimulation.srv
-    │   │   ├── SetExecutionMode.srv
-    │   │   └── ExecuteConnect.srv
-    │   └── action/
-    │       ├── RunScenario.action
-    │       ├── ExecuteManeuver.action
-    │       └── ComputeCoverage.action
-    │
-    ├── stk_bridge/                      # ament_python — the bridge
-    │   ├── package.xml
-    │   ├── setup.py
-    │   ├── setup.cfg
-    │   ├── resource/stk_bridge
-    │   ├── stk_bridge/
-    │   │   ├── __init__.py
-    │   │   ├── exceptions.py
-    │   │   ├── backends/
-    │   │   │   ├── __init__.py
-    │   │   │   ├── base.py              # StkBackend ABC + dataclasses
-    │   │   │   ├── com_backend.py       # agi.stk12 STKDesktop
-    │   │   │   ├── engine_backend.py    # agi.stk12 STKEngine headless
-    │   │   │   ├── connect_backend.py   # raw TCP :5001
-    │   │   │   ├── connect_protocol.py  # ACK/NACK, framing, parsers
-    │   │   │   ├── mock_backend.py      # analytic Kepler, for CI
-    │   │   │   └── factory.py
-    │   │   ├── core/
-    │   │   │   ├── __init__.py
-    │   │   │   ├── frames.py
-    │   │   │   ├── conversions.py
-    │   │   │   ├── data_providers.py
-    │   │   │   ├── sensing.py
-    │   │   │   ├── actuation.py
-    │   │   │   ├── attitude_writer.py   # .a file buffering/flush
-    │   │   │   ├── ephemeris_writer.py  # .e / .oem writer
-    │   │   │   ├── scenario_manager.py
-    │   │   │   ├── time_sync.py
-    │   │   │   ├── rate_group.py
-    │   │   │   ├── com_thread.py        # STA work queue
-    │   │   │   ├── health.py
-    │   │   │   └── validation.py        # startup self-tests
-    │   │   ├── interfaces/
-    │   │   │   ├── __init__.py
-    │   │   │   ├── qos.py
-    │   │   │   ├── ros_publishers.py
-    │   │   │   ├── ros_subscribers.py
-    │   │   │   ├── ros_services.py
-    │   │   │   ├── ros_actions.py
-    │   │   │   └── tf_broadcaster.py
-    │   │   └── nodes/
-    │   │       ├── __init__.py
-    │   │       ├── bridge_node.py       # main entry point
-    │   │       ├── clock_node.py        # standalone /clock authority
-    │   │       └── diagnostics_node.py
-    │   ├── config/
-    │   │   ├── bridge_params.yaml
-    │   │   ├── sensing_pipeline.yaml
-    │   │   ├── frames.yaml
-    │   │   ├── qos_profiles.yaml
-    │   │   └── scenario_defaults.yaml
-    │   ├── launch/
-    │   │   ├── stk_bridge.launch.py
-    │   │   ├── stk_bridge_mock.launch.py
-    │   │   ├── stk_bridge_connect.launch.py
-    │   │   └── full_twin.launch.py
-    │   ├── scripts/
-    │   │   ├── check_environment.py
-    │   │   ├── validate_conventions.py
-    │   │   └── benchmark_rates.py
-    │   └── test/
-    │       ├── test_conversions.py
-    │       ├── test_frames.py
-    │       ├── test_connect_protocol.py
-    │       ├── test_rate_group.py
-    │       ├── test_time_sync.py
-    │       ├── test_sensing.py
-    │       ├── test_actuation.py
-    │       ├── test_mock_backend.py
-    │       ├── test_integration_mock.py
-    │       ├── test_flake8.py
-    │       └── test_pep257.py
-    │
-    └── stk_matlab/                      # not a ROS package — MATLAB side
-        ├── setup_stk_ros.m
-        ├── +stkros/
-        │   ├── BridgeClient.m
-        │   ├── TelemetrySubscriber.m
-        │   ├── CommandPublisher.m
-        │   ├── ScenarioService.m
-        │   └── frames.m
-        ├── simulink/
-        │   ├── stk_twin_template.slx        # generated by script
-        │   ├── build_twin_template.m
-        │   └── stk_bus_definitions.m
-        └── examples/
-            ├── example_01_read_telemetry.m
-            ├── example_02_closed_loop_attitude.m
-            └── example_03_lockstep_stepping.m
+bridge                                   twin (Simulink)        scheduler
+  |  1 (after step 0) wait for the AttitudeCommand stamped for the step
+  |    about to be taken; missing -> abort. Apply it (actuate).
+  |  2 advance STK time by step_s (0.1 s): t_k
+  |  3 publish /clock + ScenarioTime(t_k), then sense and publish telemetry
+  |---- telemetry, ScenarioTime(t_k) ------->|                    |
+  |                                          | integrate to t_k   |
+  |<--- AttitudeCommand (stamp t_k + 0.1) ---|                    |
+  |<--- ack "matlab_twin:k" -----------------|                    |
+  |<--- ack "acav_scheduler:k" ----------------------------------|
+  |  4 wait for every ack of step k (barrier, timeout 30 s)
+  v  (repeat)
 ```
 
----
+Step 1 is `time.require_attitude_command_each_step` (on for ACAV): an
+ack and a command travel on different topics and ROS 2 does not order
+them, so the bridge waits for the command itself rather than trusting
+the ack's arrival.
 
-## 5. Line-of-code estimate
+Why it is deterministic: the order of every exchange is fixed by the
+barrier, and no step depends on wall time. The same inputs give the
+same commands, twin status and record signature on any host speed;
+E6_smoke is the reference signature every change is checked against.
+`test_lockstep_trace_golden.py` pins the iteration's stage order and
+epochs. At step 1 the bridge republishes the same initial step until
+late participants (MATLAB, the scheduler) have joined
+(`time.wait_for_startup_participants`). A barrier timeout aborts the
+run by default (`time.on_barrier_timeout: abort`).
 
-Counts are non-blank, non-comment source lines, with comments/docstrings adding roughly 30% on top.
+## 5. Execution mode: free-run
 
-| Component | Files | Est. LOC |
-|---|---:|---:|
-| `stk_msgs` — msg/srv/action + build files | 45 | 750 |
-| `backends/` (base, com, engine, connect, protocol, mock, factory) | 8 | 2,150 |
-| `core/` (frames, conversions, DP, sensing, actuation, writers, scenario, time, rate, COM thread, health, validation) | 14 | 3,600 |
-| `interfaces/` (pub, sub, srv, action, tf, qos) | 7 | 1,750 |
-| `nodes/` (bridge, clock, diagnostics) | 4 | 1,000 |
-| `config/` YAML | 5 | 450 |
-| `launch/` | 4 | 300 |
-| `scripts/` (env check, convention validator, benchmark) | 3 | 450 |
-| `test/` | 11 | 1,400 |
-| Package plumbing (`setup.py`, `package.xml`, `setup.cfg`, resource) | 6 | 200 |
-| MATLAB `+stkros` + Simulink builder + examples | 11 | 900 |
-| `docs/` | 8 | 1,100 |
-| **Total** | **~126** | **~14,050** |
+Simulation time follows the wall clock times the real-time factor:
+`t = t0 + (wall - wall0) * rtf` (`core/time_sync.py` `now`). Nothing
+waits for anyone, so how far the twin gets per published sample
+depends on the host. `nodes/bridge_node.py`:
 
-Core runtime Python alone (backends + core + interfaces + nodes) is **~8,500 LOC** — that's the part that must be correct; the rest is declarative, generated, or documentation.
+1. **Start gate** (`_arm_startup_gate`, `_free_gate_iteration`). With
+   `time.wait_for_startup_participants` the clock starts paused at
+   exactly t = 0, senses once, republishes that state, and opens only
+   when every participant has acked. The wait is written to
+   `startup_gate.json`; without it the window would run on while MATLAB
+   and the scheduler start.
+2. **Fixed-rate pacer** (`core/free_run_pacer.py`). Cycle k is
+   scheduled at `start + k * period`, the period of the fastest rate
+   group (0.1 s). A cycle that finishes early sleeps until the next
+   start; one that overruns is followed at once and counted
+   (`free_run_pacing.json`: cycles, overruns, period).
+3. **Order within a cycle** (`_free_running_iteration`): apply
+   commands, sense and publish telemetry, *then* publish /clock and
+   ScenarioTime with the same time. Publishing the clock before sensing
+   left the twin unable to step for a whole sensing time per cycle
+   (1628866).
+4. **The twin sub-steps** (`+adcs/simulink_step.m`). Simulink runs at
+   its own paced rate (PollingRateHz, 100 by default), and on each new
+   ScenarioTime integrates as many 0.1 s steps as the clock moved, with
+   the commanded geometry propagated causally to each sub-step
+   (`+adcs/geometry_at.m`) rather than held. Statistics go to
+   `twin_substeps.json` and `twin_loop.csv`.
 
----
+The run orchestrator applies the mode to the bridge and to the twin's
+run config (`deploy_run_cli.py` `write_bridge_config`,
+`prepare_run_config`); `paced` and `external` exist in
+`core/time_sync.py` but are not used by any experiment.
 
-## 6. Phased generation plan
+## 6. Sensing paths
 
-Six phases, each sized to complete cleanly in one response with room for explanation. Each phase ends at a state where the tree is coherent, even if not yet runnable end-to-end.
+Each step the bridge reads position/velocity and attitude/body rate for
+each satellite (`core/sensing.py`), through the data providers that
+startup validation proved correct on this install. Two optimisations
+cut COM round trips; both are recorded per run (`sensing_mode`,
+`orbit_batch_samples` in `summary.json`):
 
-| Phase | Contents | Est. LOC | Runnable at end? |
-|---|---|---:|---|
-| **1** | Workspace scaffolding, `stk_msgs` complete (all msg/srv/action + CMakeLists + package.xml), `stk_bridge` package plumbing, `exceptions.py` | ~1,100 | `colcon build` succeeds; messages introspectable via `ros2 interface show` |
-| **2** | `backends/` — `base.py`, `connect_protocol.py`, `connect_backend.py`, `com_backend.py`, `engine_backend.py`, `mock_backend.py`, `factory.py` | ~2,200 | Backends importable & unit-testable standalone; `mock` works with no STK |
-| **3** | `core/` part 1 — `conversions.py`, `frames.py`, `data_providers.py`, `rate_group.py`, `com_thread.py`, `validation.py` | ~2,000 | Conversion/frame tests pass; convention self-test script runs |
-| **4** | `core/` part 2 — `time_sync.py`, `sensing.py`, `actuation.py`, `attitude_writer.py`, `ephemeris_writer.py`, `scenario_manager.py`, `health.py` | ~2,300 | Full sense/actuate pipeline exercisable against `mock` backend |
-| **5** | `interfaces/` + `nodes/` — QoS, publishers, subscribers, services, actions, tf, `bridge_node.py`, `clock_node.py`, `diagnostics_node.py` | ~2,700 | **Bridge node runs.** Telemetry flows, commands accepted, `/clock` published |
-| **6** | `config/`, `launch/`, `scripts/`, `test/`, MATLAB `+stkros` + Simulink template builder + examples, `docs/` | ~3,700 | End-to-end closed loop with MATLAB/Simulink; docs complete |
+- **(B) Combined attitude/rate** (`sensing.combine_attitude_rate`):
+  one `Attitude Segment Quaternions` query serves both attitude and
+  rate, after a check at a sample the bridge itself wrote proves that
+  its quaternion equals the validated `Attitude Quaternions`. On for
+  ACAV in lockstep. **Off in free-run**: that check needs a sense epoch
+  that is a written sample, which a free-run epoch never is
+  (`bridge_node.py` `_apply_free_run_sensing_policy`). Off for E1, which
+  compares read-back conventions (`deploy_run_cli.py`
+  `write_bridge_config`).
+- **(C) Orbit batching** (`sensing.orbit_batch_samples`, 100 for
+  ACAV): position and velocity for the next 100 epochs come from two
+  interval queries, used only if the block validates and both ends
+  agree with instantaneous reads (1e-6 m, 1e-9 m/s;
+  `core/orbit_batch.py`). **Lockstep only**: free-run would read epochs
+  ahead of the wall clock. Off for E1.
 
-**Dependency order is strict.** Phase 5 needs Phase 4's `SensingPipeline` and `TimeSync` interfaces; Phase 4 needs Phase 3's converters; Phase 3 needs Phase 2's `StkBackend` ABC; everything needs Phase 1's messages. Don't reorder.
+A channel with no data at an epoch publishes nothing for that epoch,
+never a zero or a repeated value (`interfaces/ros_publishers.py`).
 
-**Contract discipline.** At each phase boundary, the public signatures consumed by later phases get frozen and restated at the top of the response, so a later phase generated in a fresh context has an authoritative interface list to code against.
+## 7. Actuation
 
-**Suggested checkpoint after Phase 2:** run `scripts/check_environment.py` against your actual STK 12.6 install before investing in Phases 3–6. It verifies the `agi.stk12` wheel version in `bin\AgPythonAPI`, Python version, COM registration, licensed capabilities (Integration, Real-time propagator, Astrogator), and Connect port reachability. Cheap insurance.
+The twin publishes an `AttitudeCommand` per step, stamped for the next
+step. The bridge applies it with `AddAttitude` on the satellite's
+real-time attitude (`core/actuation.py`): the inertial `Quat` or the
+Earth-fixed `CBFQuat` form, whichever validation paired with the
+read-back provider (`check_attitude_pairing` refuses to start if they
+disagree). STK rejects a sample earlier than the newest one it holds,
+so actuation keeps stamps monotonic per object, clears the object's
+history before its first command (`SetAttitude ClearData`), and records
+the newest written stamp (`last_attitude`).
 
----
+**Access deferral.** `ComputeAccess` over an interval ending at t_i is
+answered only once the written attitude reaches t_i; until then the
+bridge fails the request with the prefix `attitude not yet written
+through the stop time` (`core/actuation.py` `ATTITUDE_NOT_COVERED`,
+`attitude_coverage_gap`), and the scheduler asks again
+([C4_scheduler.md](C4_scheduler.md)). Without it, access was computed
+against STK's default attitude beyond the last written sample.
 
-## 7. Known gotchas to design around
+## 8. Health and status
 
-1. **`ros2genmsg` on Windows requires MSVC.** MATLAB must compile `stk_msgs` itself. Install Visual Studio Build Tools and point MATLAB at the same `stk_msgs` folder. Phase 6's `setup_stk_ros.m` automates this, but the compiler must exist.
-2. **MATLAB release ↔ ROS 2 distro is strict.** R2023b/R2024a → Humble. A mismatch produces custom-message failures that look like network problems.
-3. **`SetPosition` is append-only.** It cannot revise already-propagated ephemeris. If Simulink needs to *replace* a trajectory, that's the `StkExternal` path, not the real-time path.
-4. **Real-time-propagator vehicles are ignored by STK Coverage analysis.** If coverage is a requirement, plan a second object or the external-ephemeris path.
-5. **STK licensing.** Connect *and* the Object Model both come from the **Integration** capability. Real-time propagator, Astrogator, and DSim are separately licensed. Verify before Phase 4.
-6. **DDS discovery across the Win/Linux boundary (T2/T3)** needs matching `ROS_DOMAIN_ID` and open UDP multicast; Windows Firewall blocks it silently by default.
-7. **Rate expectations.** Budget 1–20 Hz for a closed loop over COM, lower over Connect. Phase 6's `benchmark_rates.py` measures *your* scenario — do not design a 50 Hz controller before running it.
+- `BridgeStatus` on `/stk/status`, once per wall second
+  (`bridge_node.py` `_publish_status`): state, backend, STK version,
+  dropped samples, queue depth, the attitude provider in use, and E6's
+  mean sense, actuate and barrier-wait times over the last second with
+  their sample count (`core/step_timing.py`). The state comes from
+  `core/health.py`: STARTING, CONNECTED, DEGRADED, DISCONNECTED, ERROR.
+  During startup the bridge publishes STARTING at every phase change.
+- **Startup phases** (`core/startup_phases.py`): connect, each
+  scenario-setup step, each validation check, sensing and interfaces,
+  timed and written to `bridge_startup_phases.json` as they happen. The
+  run orchestrator waits up to 180 s for CONNECTED and records the
+  phases in `summary.json`.
+- **STK graphics state** (`core/graphics_state.py`): 2D/3D window
+  counts and the main window state, sampled at startup, during the run
+  and at the end (`stk_graphics.json`). Closing the graphics windows
+  and minimising STK cut the E6 step from 120.3 to 70.2 ms
+  (results/_archive/phase1_performance/E6_diag_graphics), so the
+  runner requires "off" unless asked otherwise.
+- `BackendDiagnostics` on `/stk/diagnostics`: the backend's own
+  counters and the validation report.
 
+## 9. Provenance chain
+
+What ties a number in the paper to the run that produced it:
+
+1. **Run config** (`<run>.runconfig.json`, `deploy_run_cli.py`
+   `prepare_run_config`): run id, execution mode, gains and fault for
+   the twin. Written before anything starts; an existing file for
+   another run is refused.
+2. **Twin identity v3** (`acav/twin_identity.py`, published by the
+   twin on `/acav/twin_identity`): `v3 <cfg> <build> <runtime>
+   <polling>Hz`, the sha256 of the run config the twin parsed, the code
+   fingerprint baked in at build and the one recomputed at simulation
+   start, and the Simulink pacing rate. Fingerprints hash file text with
+   CRLF turned into LF, so the checkout's line endings do not change
+   them. The runner starts the scheduler only if all of them match this
+   run and this checkout (`check_identity`).
+3. **Scenario digest** (`run_record.py` `scenario_digest`): sha256 of
+   the scenario YAML with CRLF turned into LF. Records made before that
+   normalisation carry the raw digest of the reference scenario; the
+   committed map `LEGACY_SCENARIO_DIGESTS` takes it to the normalised
+   one.
+4. **Run record** (`run_record.py` `RunRecord`): the result (targets,
+   outcomes, determinism signature) and its provenance (backend, STK
+   version, execution mode, scenario digest/seed/generator version,
+   gains, fault, attitude provider observed from the bridge, code
+   version, twin identity, graphics mode, real-time factor, MATLAB
+   version, STK process). The signature is recomputed from the result
+   on every read, and a stored one that differs is an error.
+5. **Reportability** (`RunRecord.unreportable_reasons`): not a real
+   STK backend; a lockstep target with no twin telemetry in its hold
+   window (`no_telemetry`); no access answer (`no_access_answer`);
+   access never computed over a written attitude (`access_unverified`).
+6. **Target coverage** (`target_coverage_problems`): a record must
+   name a known scenario and contain exactly that scenario's targets.
+7. **Per-run `summary.json`**: every orchestration step with its
+   outcome, plus run conditions (graphics, rtf, start gate, pacing,
+   startup phases, STK process, MATLAB session).
+
+`run_acav_campaign report` refuses to pool records whose conditions
+differ: graphics mode, twin launch mode, how STK was started, scenario,
+diagnostic labels ([C5_experiment_harness.md](C5_experiment_harness.md)).
+
+## 10. Diagram
+
+```
+ +----------------------------- Windows host (T1) ------------------------------+
+ |                                                                              |
+ |  STK 12.6 Desktop  <--COM (one worker thread)-->  stk_bridge (Python)        |
+ |  (started by the operator)                        core/ time, sensing,       |
+ |                                                   actuation, validation      |
+ |                                                         |  ROS 2 (loopback)  |
+ |        +------------------------------------------------+-------------+      |
+ |        | /clock, /stk/scenario_time      /stk/<sat>/attitude, rate,   |      |
+ |        | /stk/status, /stk/lockstep/ack  orbit;  /stk/cmd/attitude    |      |
+ |        v                                                              v      |
+ |  MATLAB/Simulink twin  --/acav/twin_status, /acav/twin_identity-->  acav_    |
+ |  (matlab -batch,        <--/acav/setpoint-------------------------  scheduler|
+ |   run_twin_session.m)                                   ComputeAccess -> bridge
+ |                                                                              |
+ |  run_acav_run.py: launches bridge, twin, scheduler; checks each step;        |
+ |  writes <run>.json (record) and <run>.logs/ (summary.json, logs, topics)     |
+ +------------------------------------------------------------------------------+
+```
+
+`figures/bridge_architecture.svg` is the original bridge-only drawing;
+the per-step sequences are in sections 4 and 5.
+
+## 11. Known constraints
+
+- **One COM thread.** Every STK call runs on the backend worker thread
+  (`core/com_thread.py`); ROS callbacks never touch STK. A slow COM call
+  delays the whole step.
+- **2-core host.** Bridge, STK, MATLAB, the scheduler and DDS share two
+  physical cores; free-run results and every timing depend on that load.
+- **Message types.** After any `.msg` change, rebuild `stk_msgs` with
+  colcon *and* regenerate MATLAB's message types (`setup_stk_ros`,
+  [02_matlab_setup.md](02_matlab_setup.md)); the twin's code
+  fingerprint covers the message definitions, so a stale model is
+  refused by the identity check.
+- **Terminal-epoch NO DATA.** At t = 720 s, the scenario's stop time,
+  `Attitude Segment Quaternions` returns no data: the body-rate sample
+  for that step is not published, the twin cannot acknowledge it, and
+  the bridge logs the missing sample (E6_P9 seed 0 `bridge.log`,
+  lines 284-290). The scheduler has written its record before then;
+  results are not affected.
+- **PowerShell 5.1 quote stripping.** Windows PowerShell 5.1 removes
+  embedded double quotes from arguments passed to native programs, so
+  a JSON value typed on the command line (e.g. a fault) arrives broken.
+  Pass such values through a file (`--run-config`), a campaign
+  placeholder (`{fault_json}`, substituted by Python), or a Python
+  launcher; `acav/stk_process.py` builds its PowerShell script without
+  double quotes for the same reason.
+- **STK started through COM.** An STK Desktop started by automation
+  (`AgUiApplication.exe -Embedding`) ran E6 at 95.7 ms against about
+  60 ms (one run, P10); runs refuse it
+  ([06_troubleshooting.md](06_troubleshooting.md)).

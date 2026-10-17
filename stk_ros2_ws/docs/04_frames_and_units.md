@@ -73,6 +73,18 @@ automatically.
 `core/sensing.py` reads whichever provider `core/validation.py`
 confirmed round-trips correctly (recorded as
 `ValidationReport.attitude_provider`) -- it does not hardcode a choice.
+On STK 12.6 both pairings round-trip; validation then prefers the one
+that matches the configured command form
+(`actuation.default_attitude_inertial`), and the bridge refuses to
+start if the two still disagree (`nodes/bridge_node.py`
+`check_attitude_pairing`). The ACAV configuration commands the inertial
+form (`default_attitude_inertial: true` in
+`src/acav/config/bridge_params_acav.yaml`), so it reads back through
+`Attitude Quaternions`. Experiment E1 forces the mis-paired
+`ECF Attitude Quaternions` on purpose
+(`sensing.force_attitude_provider`, `acav/campaign.py`
+`MISPAIRED_ATTITUDE_PROVIDER`); the provider each run actually used is
+reported on BridgeStatus and recorded in the run record.
 
 ## Position command frames
 

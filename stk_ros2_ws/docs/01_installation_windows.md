@@ -1,95 +1,90 @@
-# Installation (Windows, T1 single-host topology)
+# Installation (Windows, single host)
 
-Covers the default deployment: STK 12.6, the bridge, and ROS 2 Humble
-all on one Windows machine. For the split topologies (T2/T3), see
-[00_architecture.md](00_architecture.md) section 2 and
-[06_troubleshooting.md](06_troubleshooting.md)'s network section.
+Everything runs on one Windows machine: STK 12.6 Desktop, ROS 2 Humble,
+the bridge, MATLAB R2023b and the case-study nodes (topology T1,
+[00_architecture.md](00_architecture.md) section 3). MATLAB is covered
+in [02_matlab_setup.md](02_matlab_setup.md); running experiments in
+[08_deploy_runbook.md](08_deploy_runbook.md).
 
 ## 1. Prerequisites
 
 | Component | Version | Notes |
 |---|---|---|
-| STK | 12.6 (2023 R1) | With the **Integration** capability licensed. |
-| Windows | 10 or 11 | ROS 2 Humble's official Windows binaries target this. |
-| Python | 3.8+ | Confirmed via `check_environment.py`; matches ROS 2 Humble's Windows build. |
-| ROS 2 | Humble | [docs.ros.org](https://docs.ros.org) Windows install instructions. |
-| MATLAB | R2023b or R2024a | For ROS 2 Humble support in ROS Toolbox. See [02_matlab_setup.md](02_matlab_setup.md). |
-| Visual Studio Build Tools | "Desktop development with C++" workload | Required by `ros2genmsg` on the MATLAB side, and useful generally. |
+| Windows | 10 or 11 | The recorded runs used Windows 10 Pro on a 2-core Intel Core i5-6300U. |
+| STK | 12.6 (2023 R1) Desktop | Integration and real-time propagator capabilities (checked at bridge startup, `core/scenario_manager.py` `_check_capabilities`). |
+| ROS 2 | Humble, Windows binaries | Official Windows install. |
+| Python | the one ROS 2's tooling uses | `agi.stk12` must be installed into the same interpreter (section 3). |
+| MATLAB | R2023b with ROS Toolbox and Simulink | See [02_matlab_setup.md](02_matlab_setup.md). |
+| Visual Studio Build Tools | "Desktop development with C++" | Needed by `colcon` and by MATLAB's `ros2genmsg`. |
 
-## 2. Install ROS 2 Humble
+## 2. ROS 2 Humble
 
-Follow the official Windows install guide. After installation, confirm:
+Follow the official Windows install guide, then check:
 
 ```powershell
 ros2 doctor
 ```
 
-## 3. Install the `agi.stk12` Python API
+## 3. The `agi.stk12` Python API
 
-The wheel ships **inside your STK install**, not on PyPI:
+The wheel ships inside the STK install, not on PyPI:
 
 ```powershell
 pip install "C:\Program Files\AGI\STK 12\bin\AgPythonAPI\agi.stk12-12.6.0-py3-none-any.whl"
-```
-
-Install into the **same Python environment ROS 2 Humble's tooling uses**
-(see `stk_bridge/requirements.txt`'s note on why this must not be a
-separate venv). Adjust the wheel filename to whatever is actually
-present in that directory on your machine.
-
-Install the rest of the bridge's Python dependencies:
-
-```powershell
 pip install -r src\stk_bridge\requirements.txt
 ```
 
+Use the wheel file name actually present in that folder. Install into
+the interpreter ROS 2 uses (see `src/stk_bridge/requirements.txt` for
+why not a separate virtual environment).
+
 ## 4. Build the workspace
 
-Source the ROS 2 installation **before** building -- `colcon` is not on
-the path otherwise, and the failure message does not say so:
+Source ROS 2 first (otherwise `colcon` is not found), build, then source
+the workspace:
 
 ```powershell
 cd <path-to>\stk_ros2_ws
-C:\dev\ros2_humble\local_setup.ps1      # your ROS 2 install, not the workspace
+C:\dev\ros2-windows\local_setup.ps1     # your ROS 2 install
 colcon build --symlink-install
-. install\local_setup.ps1                # the workspace, after building
+. install\local_setup.ps1               # this workspace
 ```
 
-From `cmd.exe` rather than PowerShell the two sourcing lines become
-`call C:\dev\ros2_humble\local_setup.bat` and
-`call install\local_setup.bat`.
+After any change to a `.msg` file, rebuild with colcon **and**
+regenerate MATLAB's message types
+([02_matlab_setup.md](02_matlab_setup.md) section 3).
 
-Both lines are needed and they are not interchangeable: the first puts
-`colcon` and the ROS 2 libraries on the path so the build can run, the
-second puts the packages this workspace just built on the path so
-`ros2 run stk_bridge ...` can find them.
+## 5. Run the offline tests
 
-## 5. Verify the environment
+No ROS, STK or MATLAB needed:
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE = "1"
+python -m pytest src/acav/test src/stk_bridge/test -q -p no:cacheprovider -rs
+```
+
+Four tests are skipped outside a sourced ROS 2 workspace (rclpy,
+builtin_interfaces, ament_flake8, ament_pep257); they are not verified
+by this command.
+
+## 6. Check the environment
 
 ```powershell
 python src\stk_bridge\scripts\check_environment.py --backend mock
+python src\stk_bridge\scripts\check_environment.py --backend com   # with STK open
 ```
 
-This should pass everything except the (harmless, expected) STK-specific
-checks if STK isn't running. Then, with STK 12.6 open:
+The COM check attaches to the STK Desktop that is already running; it
+does not start one (since 24b5eeb the COM backend only attaches unless
+`backend.com.start_stk` is set). Start STK Desktop yourself first.
 
-```powershell
-python src\stk_bridge\scripts\check_environment.py --backend com
-```
+**Do not go on past a failing convention-validation check.** The
+bridge's startup validation (`core/validation.py`) proves units,
+quaternion order and the attitude command/read-back pairing on this
+install; see [06_troubleshooting.md](06_troubleshooting.md) for what
+each failure means.
 
-**Do not proceed past a failing convention-validation check.** See
-[06_troubleshooting.md](06_troubleshooting.md) for what each failure
-means; several were found and fixed against a real STK 12.6 install
-during this project's development, and the fixes are baked into the
-current `core/` modules -- but a *different* 12.6 install (different
-patch level, different licensed modules) may still surface something
-new. `check_environment.py` exists precisely so that surfaces as an
-actionable message here, not as a mysterious failure three phases later.
-
-## 6. First run: the mock backend
-
-Before pointing anything at real STK, confirm the ROS-facing half of the
-bridge works:
+## 7. First run without STK: the mock backend
 
 ```powershell
 ros2 launch stk_bridge stk_bridge_mock.launch.py
@@ -102,21 +97,19 @@ ros2 topic echo /stk/status
 ros2 topic echo /stk/sss_1/state
 ```
 
-You should see `state: 1` (CONNECTED) on `/stk/status` and periodic
-`SatelliteState` messages. If this doesn't work, the problem is in the
-bridge's ROS plumbing, not in STK -- debug here first.
+`state: 1` (CONNECTED) on `/stk/status` and periodic `SatelliteState`
+messages mean the ROS side works. The mock backend has no STK physics;
+nothing it produces is reportable.
 
-## 7. Run against real STK
+## 8. Against STK
+
+Start STK Desktop yourself, then:
 
 ```powershell
 ros2 launch stk_bridge stk_bridge.launch.py
 ```
 
-STK Desktop should launch (or be attached to, if already running --
-controlled by `backend.com.attach_to_existing` in
-`config/bridge_params.yaml`). Watch the log for the convention
-validation summary; it must pass before telemetry starts publishing.
-
-## 8. MATLAB side
-
-See [02_matlab_setup.md](02_matlab_setup.md).
+The bridge attaches to that STK, runs convention validation (each phase
+is logged with its duration, `core/startup_phases.py`), and publishes
+telemetry only once validation has passed. For the case study, use the
+run orchestrator instead ([08_deploy_runbook.md](08_deploy_runbook.md)).

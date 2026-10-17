@@ -1,11 +1,133 @@
 # Troubleshooting
 
-Findings below came from running `check_environment.py` against a real
-STK 12.6 install during this project's own development, not from
-documentation alone -- each is a case where an initial assumption was
-wrong and the fix is now baked into `core/`. Listed here in case a
-*different* STK 12.6 install (different patch level, different
-licensed modules) surfaces something similar.
+Two parts. **Part 1** covers the case-study runs: what a failed step in
+`<run>.logs/summary.json` means and what to do. **Part 2** lists the
+STK 12.6 behaviours found while bringing the bridge up against a real
+install; each fix is now in `core/`, and they are listed in case
+another install surfaces something similar.
+
+# Part 1: case-study runs
+
+Every run writes `<run>.logs/summary.json` with one entry per step
+(`step`, `ok`, `detail`) and, since f19ced4, the original exception of
+any step that raised under `errors` (type, message, traceback).
+`run.log` has the same lines with times. Start there.
+
+## `idle_check` failed
+
+"Another run is active on ...": a bridge, scheduler or twin from an
+earlier run is still publishing. Stop it first (and see "Leftover
+MATLAB processes" below). Before f19ced4 this step could also fail with
+"failed to shutdown: rcl_shutdown already called on the given context",
+which hid the real error: the check used rclpy's default context, whose
+signal handlers shut it down. Each wait now runs on its own context with
+no signal handlers, and the real error is recorded.
+
+## `bridge_connected` failed
+
+The detail names where the bridge's startup had got to, from
+`<run>.logs/bridge_startup_phases.json` (each phase's duration, and the
+current phase with its start time). Over 40 runs launch to CONNECTED
+took 43.7-76.1 s; the runner waits up to 180 s
+(`--bridge-connect-timeout-s`) and stops waiting at once if the bridge
+process exits (`bridge_exit_code` in summary.json).
+
+- "no running STK Desktop to attach to": start STK Desktop yourself and
+  build the scenario in it. The bridge no longer starts STK by itself.
+- A phase under `validation/...` that runs far longer than the others:
+  look at `bridge.log` for that check. One free-run run on an STK that
+  automation had started stayed in validation for more than 60 s
+  (results/_archive/incidents/E5_P10_free1_3186642).
+- "no scenario is open" / "expected 'ACAV_SSS1'": build the scenario
+  first ([08_deploy_runbook.md](08_deploy_runbook.md)).
+
+## `stk_process` failed
+
+The bridge attached to an STK Desktop that was started through COM
+(`AgUiApplication.exe ... -Embedding`, parent `svchost.exe`), not by
+you, or the runner cannot tell which STK it used (none found, or more
+than one running). E6 on such an STK stepped at 95.7 ms against about
+60 ms (one run, P10). Close it, start STK Desktop yourself, build the
+scenario, and run again. `--allow-com-started-stk` runs anyway; the run
+records it (`stk_process.started_by`), and `report` will not pool it
+with operator-started runs. An STK is started through COM when a script
+finds none running and was told it may start one (`--start-stk`,
+`backend.com.start_stk`).
+
+## `stk_graphics` failed
+
+The run requires STK's graphics "off": no 2D or 3D Graphics window open
+and STK minimised. Close every graphics window and minimise STK, or
+pass `--graphics-mode on` deliberately (it changes the step time; such
+runs are never pooled with "off" runs). `stk_graphics_end` checks the
+same at the end, and "mixed" means it changed during the run.
+
+## `twin_acking` failed
+
+- Manual twin: "no matlab_twin ack seen before timeout": the model was
+  not running, or its topics do not match. Rebuild it for this run's
+  config and press Play.
+- Automated twin: "MATLAB exited (code N) before the twin acked; see
+  matlab.log". Read, in order: `matlab_session.json` (`exit`, `error`,
+  and `simulink_diagnostics`), `simulink_diagnostics.txt`,
+  `matlab.log`, `matlab_console.log`. A build error is in `error`; a
+  Simulink run-time error (for example a block's output class) is in
+  `simulink_diagnostics`. The runner currently waits out the full ack
+  timeout (252.6 s) even after MATLAB has exited.
+
+## `twin_identity` failed
+
+The twin loaded another run's config, was built from other code, or
+runs code that differs from this checkout. Rebuild the model for this
+run (automated runs always do). After a `.msg` change, also regenerate
+MATLAB's message types ([02_matlab_setup.md](02_matlab_setup.md)).
+
+## The run stopped printing: QuickEdit
+
+With QuickEdit on, selecting text in the console pauses every write to
+it; in P9b a selection held a run for 11.5 min. The runner and the
+campaign turn QuickEdit off while they run and restore it afterwards
+(`acav/console.py`, `console_quickedit` in summary.json), and write the
+console copy of the log from a background thread. Still: do not click
+into the console during timing runs.
+
+## Leftover MATLAB processes
+
+A failed automated run can leave `matlab.exe` or `libmwros2server.exe`
+running. Before each run the campaign runner kills only processes the
+previous run recorded (its launcher's and MATLAB's PIDs) or that those
+started, and appends what it killed to `twin_cleanup.jsonl` in the
+campaign folder (`acav/campaign_runner.py` `_clean_up_twin`). It never
+touches another MATLAB. A single run started by hand is not cleaned up
+this way: check Task Manager before the next run.
+
+## Missing body rate at t = 720 s
+
+`no angular_rate for */Satellite/SSS-1 at t=720.000 s` (and the
+segment query's NO DATA just before it) at the end of every run is
+expected: 720 s is the scenario's stop time, and STK has no
+`Attitude Segment Quaternions` data there
+([00_architecture.md](00_architecture.md) section 11). The scheduler
+has already written the record.
+
+## A JSON argument arrives broken: PowerShell 5.1
+
+Windows PowerShell 5.1 strips embedded double quotes from arguments
+passed to native programs, so `--fault-json '{"wheel": ...}'` typed in
+PowerShell reaches Python without its quotes. Use a run-config file
+(`--run-config`), a campaign placeholder (`{fault_json}`; the campaign
+substitutes it in Python and passes an argument list), or a Python
+launcher. Literal `{placeholder}` arguments must stay in single quotes
+in PowerShell, or the braces are parsed as a script block.
+
+## `report` refuses to pool
+
+`run_acav_campaign report` refuses a directory whose records differ in
+graphics mode, twin launch mode, how STK was started, scenario, or that
+holds a diagnostic run; the message names each group and its runs. Move
+each group to its own directory ([C5_experiment_harness.md](C5_experiment_harness.md)).
+
+# Part 2: STK 12.6 findings from bring-up
 
 ## "Data provider ... returned NO DATA (0 columns, 0 rows)"
 
