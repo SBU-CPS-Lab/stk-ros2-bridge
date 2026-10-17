@@ -1,4 +1,4 @@
-# acav — the ACAV case study
+# acav: the ACAV case study
 
 **Attitude-Coupled Access Verification**, the worked case study for the
 `stk_bridge` paper: mission planning that assumes instantaneous, perfect
@@ -21,25 +21,25 @@ behind each one.
 | Phase | What it is | Where |
 |---|---|---|
 | C1 | The spec, slew model, capture metric, scenario YAML | `spec.py`, `slew_model.py`, `metrics.py`, `config/acav_scenario.yaml` |
-| C2 | Build and verify the STK scenario | `scenario_builder.py`, `scenario_verifier.py`, `ground_track.py`, `stk_queries.py` |
+| C2 | Build and verify the STK scenario; seeded scenarios | `scenario_builder.py`, `scenario_verifier.py`, `ground_track.py`, `stk_queries.py`, `scenario_generator.py`, `scenarios.py` |
 | C3 | The ADCS twin: a tested Python reference plus the MATLAB/Simulink model built from it | `attitude.py`, `twin_reference.py`, `twin_fixtures.py`, `../stk_matlab/+adcs/`, `../stk_matlab/simulink/build_acav_twin.m` |
 | C4 | The target scheduler (kinematic vs. dynamics-aware) as a ROS 2 node | `scheduling.py`, `capture_tracking.py`, `scheduler_node.py` |
-| C5 | The experiment harness: provenance, seeded faults, run matrices, the campaign CLI | `run_record.py`, `fault_injection.py`, `campaign.py`, `campaign_runner.py`, `campaign_cli.py` |
+| C5 | The experiment harness: provenance, seeded faults, run matrices, the run orchestrator, the campaign CLI | `run_record.py`, `fault_injection.py`, `campaign.py`, `campaign_runner.py`, `campaign_cli.py`, `deploy_run_cli.py`, `twin_launcher.py`, `stk_process.py`, `console.py` |
 | C6 | Analysis and figures from a campaign directory | `report_figures.py`, `report_style.py`, wired into `campaign_cli.py`'s `report` verb |
 
-All six are implemented and offline-tested (672 tests, this package
-alone). **E6 has been run live, and E1 and E2 once each** (from modified
-checkouts, so to be re-run before citing); E3–E5 have not. Every live
-run and its result is recorded in
-[`../../docs/09_live_runs_and_results.md`](../../docs/09_live_runs_and_results.md);
-how to run a campaign is in
+All six are implemented and offline-tested. The experiments are E1, E2,
+E3 (lockstep against free-run, with the seeded fault replay) and E6
+([`../../docs/C1_case_study_spec.md`](../../docs/C1_case_study_spec.md)
+section 9). Live evidence so far, none of it final:
+[`../../docs/09_live_runs_and_results.md`](../../docs/09_live_runs_and_results.md).
+How to run each experiment:
 [`../../docs/08_deploy_runbook.md`](../../docs/08_deploy_runbook.md).
 
 ## Running it offline (no STK, no MATLAB, no ROS)
 
 ```
 cd stk_ros2_ws
-python -m pytest src/acav/test -q
+python -m pytest src/acav/test src/stk_bridge/test -q -p no:cacheprovider -rs
 ```
 
 `test/conftest.py` puts this package on `sys.path`, so this needs no
@@ -52,9 +52,10 @@ own ROS-dependent checks run on a machine with no ROS 2 install).
 ## Running it against real STK
 
 ```powershell
-# Build the scenario, and check it was built correctly.
-python scripts/build_acav_scenario.py --backend com
-python scripts/verify_acav_scenario.py --backend com
+# With STK Desktop started by you: build the scenario and verify it.
+python scripts/build_acav_scenario.py --backend com --verify
+# A seeded scenario instead of the reference:
+python scripts/build_acav_scenario.py --backend com --verify --scenario config/scenarios/generated/acav_seed1.yaml
 
 # Print the scenario's target-by-target feasibility table.
 ros2 run acav describe_scenario
@@ -64,8 +65,7 @@ ros2 run acav describe_scenario
 python scripts/export_twin_fixtures.py
 ```
 
-Then, in MATLAB (see `docs/C3_adcs_twin.md` section 6 for the full
-walkthrough):
+Then, in MATLAB (see `docs/C3_adcs_twin.md` section 6 for the tests):
 
 ```matlab
 cd stk_ros2_ws\src\stk_matlab
@@ -84,32 +84,25 @@ ros2 run acav acav_scheduler --ros-args \
 
 Needs a bridge running against the same scenario (see
 `config/bridge_params_acav.yaml` for the ACAV-specific bridge config —
-it differs from `stk_bridge`'s own default only in adding
-`acav_scheduler` as a second lockstep barrier participant) and, for a
+its header lists every difference from `stk_bridge`'s own default,
+among them `acav_scheduler` as a second lockstep barrier participant) and, for a
 lockstep run, the MATLAB twin acking the same barrier. See
 `docs/C4_scheduler.md` for the full parameter list.
 
-## Running a campaign (E1-E6)
+## Running a campaign
 
 ```
-ros2 run acav run_acav_campaign plan   --experiment E3 --output-dir results/E3
-ros2 run acav run_acav_campaign run    --experiment E3 --output-dir results/E3 -- \
-    python scripts/run_acav_run.py --run-id {run_id} --experiment {experiment} \
-        --scheduler {scheduler} --execution-mode {execution_mode} --seed {seed} \
-        --output {output} --scenario {scenario} --backend {backend} \
-        --attitude-provider {attitude_provider} --run-config {run_config} \
-        --gains-json {gains_json} --fault-json {fault_json} \
-        --bridge-config config/bridge_params_acav.yaml
-ros2 run acav run_acav_campaign report --experiment E3 --output-dir results/E3
+ros2 run acav run_acav_campaign plan   --experiment E6 --output-dir <folder> --repeats <N>
+ros2 run acav run_acav_campaign run    --experiment E6 --output-dir <folder> --repeats <N> --twin-launch matlab-batch -- <run command>
+ros2 run acav run_acav_campaign report --experiment E6 --output-dir <folder> --repeats <N>
 ```
 
-`report` needs no STK, no MATLAB and no ROS — it is meant to run
-wherever the analysis actually happens, and writes
-`results/E3/figures/*.{pdf,svg,png}` unless `--no-figures` is given (it
-degrades to JSON-only if `matplotlib` is not installed — see below).
-See [`../../docs/08_deploy_runbook.md`](../../docs/08_deploy_runbook.md)
-for the full walkthrough of running this on the Windows machine with
-STK, including how the MATLAB handoff works and what logs to capture.
+The run command is `scripts/run_acav_run.py` with the campaign's
+`{placeholders}`; the exact, checked commands for each experiment are in
+[`../../docs/08_deploy_runbook.md`](../../docs/08_deploy_runbook.md)
+section 4. `report` needs no STK, no MATLAB and no ROS, and writes
+`<folder>/figures/*.{pdf,svg,png}` unless `--no-figures` is given (it
+degrades to JSON-only if `matplotlib` is not installed).
 
 ## Optional dependencies
 
@@ -127,7 +120,9 @@ live STK has no reason to pull in a plotting stack it never uses.
 ```
 acav/                  library code -- one module per phase, see the table above
 config/
-  acav_scenario.yaml       the C1-C6 contract every phase reads through AcavSpec
+  acav_scenario.yaml       the reference scenario every phase reads through AcavSpec
+                            (must stay byte-identical: records name it by digest)
+  scenarios/generated/     seeded scenarios acav_seed1..10.yaml (generator v2)
   bridge_params_acav.yaml  stk_bridge config for this study (adds acav_scheduler
                             as a lockstep barrier participant)
 scripts/                thin shims so acav's console_scripts can run out of a
