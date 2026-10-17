@@ -412,7 +412,19 @@ def e3_formula_line(n_repeats: int, n_fault_seeds: int) -> str:
             f"{e3_run_count(n_repeats, n_fault_seeds)}")
 
 
-def build_e3_matrix(n_repeats: int, n_fault_seeds: int,
+def fault_seed_list(fault_seeds) -> Tuple[int, ...]:
+    """K (an int) -> seeds 0..K-1; a sequence -> those seeds, in order."""
+    if isinstance(fault_seeds, int):
+        if fault_seeds < 0:
+            raise ValueError("the number of fault seeds cannot be negative")
+        return tuple(range(fault_seeds))
+    seeds = tuple(int(s) for s in fault_seeds)
+    if len(set(seeds)) != len(seeds):
+        raise ValueError(f"fault seeds repeat: {list(seeds)}")
+    return seeds
+
+
+def build_e3_matrix(n_repeats: int, n_fault_seeds,
                     window_duration_s: float, scenario_path: str = "",
                     backend: str = "com",
                     scheduler: str = "dynamics_aware") -> Campaign:
@@ -428,11 +440,9 @@ def build_e3_matrix(n_repeats: int, n_fault_seeds: int,
     """
     if n_repeats < 1:
         raise ValueError("E3 needs at least one free-run repeat per cell")
-    if n_fault_seeds < 0:
-        raise ValueError("the number of fault seeds cannot be negative")
-    faults = plan_campaign_faults(list(range(n_fault_seeds)),
-                                  window_duration_s)
-    cells = [None] + [faults[seed] for seed in range(n_fault_seeds)]
+    seeds = fault_seed_list(n_fault_seeds)
+    faults = plan_campaign_faults(list(seeds), window_duration_s)
+    cells = [None] + [faults[seed] for seed in seeds]
     blocks = [(LOCKSTEP, 1.0, E3_LOCKSTEP_REPEATS)] + [
         (FREE_RUN, rate, n_repeats) for rate in E3_FREE_RUN_RATES]
     runs = []
@@ -451,12 +461,12 @@ def build_e3_matrix(n_repeats: int, n_fault_seeds: int,
         raise ValueError("two E3 runs share a run id (two fault seeds "
                          "planned the same fault)")
     return Campaign(
-        campaign_id=f"E3_matrix_{n_repeats}x_{n_fault_seeds}faults",
+        campaign_id=f"E3_matrix_{n_repeats}x_{len(seeds)}faults",
         experiment="E3",
         description=("Lockstep against free-run at rtf "
                      + " and ".join(f"{r:g}" for r in E3_FREE_RUN_RATES)
                      + ", without a fault and with each seeded wheel fault. "
-                     + e3_formula_line(n_repeats, n_fault_seeds) + "."),
+                     + e3_formula_line(n_repeats, len(seeds)) + "."),
         runs=tuple(runs), scenario_path=scenario_path, backend=backend)
 
 

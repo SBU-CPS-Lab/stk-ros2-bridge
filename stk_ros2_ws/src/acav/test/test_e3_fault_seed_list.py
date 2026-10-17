@@ -12,11 +12,9 @@ import pytest
 
 from acav.fault_injection import plan_fault
 
-PENDING = pytest.mark.xfail(strict=True, reason="not written yet")
 WINDOW = 720.0
 
 
-@PENDING
 def test_a_seed_list_plans_exactly_those_faults():
     from acav.campaign import build_e3_matrix
     runs = build_e3_matrix(1, (0, 1, 4), WINDOW).runs
@@ -32,7 +30,6 @@ def test_a_count_still_means_zero_to_k_minus_one():
     assert {r.fault.seed for r in runs if r.fault} == {0, 1}
 
 
-@PENDING
 @pytest.mark.parametrize("text, seeds", [("3", (0, 1, 2)), ("0,1,4", (0, 1, 4)),
                                          ("4,", (4,)), ("0", ())])
 def test_the_cli_parses_both_forms(text, seeds):
@@ -42,7 +39,6 @@ def test_the_cli_parses_both_forms(text, seeds):
     assert args.fault_seeds == seeds
 
 
-@PENDING
 def test_plan_with_a_seed_list(tmp_path, capsys):
     from acav.campaign_cli import main
     assert main(["plan", "--experiment", "E3", "--repeats", "1",
@@ -52,7 +48,6 @@ def test_plan_with_a_seed_list(tmp_path, capsys):
     assert "fault seeds: 4" in out
 
 
-@PENDING
 def test_the_old_comparison_is_labelled(tmp_path, capsys):
     from acav.campaign import build_e3_matrix
     from acav.campaign_cli import main

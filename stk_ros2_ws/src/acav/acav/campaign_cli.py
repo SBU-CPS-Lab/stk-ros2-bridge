@@ -325,6 +325,17 @@ def analyse(experiment: str, records: List[RunRecord],
     return report
 
 
+def _fault_seeds(text: str):
+    text = text.strip()
+    try:
+        if "," not in text:
+            return tuple(range(int(text)))
+        return tuple(int(s) for s in text.split(",") if s.strip())
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"expected K or a comma-separated seed list, got {text!r}")             from error
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="run_acav_campaign",
@@ -342,10 +353,12 @@ def _parser() -> argparse.ArgumentParser:
                         help="E1: repeats of every arm (default 1); E3: runs "
                              "per execution mode (default 20); E6: runs "
                              "(default 20)")
-    parser.add_argument("--fault-seeds", type=int, default=0,
-                        metavar="K",
+    parser.add_argument("--fault-seeds", type=_fault_seeds, default=(),
+                        metavar="K|S1,S2,...",
                         help="E3: seeded wheel-fault cells beside the "
-                             "no-fault cell (seeds 0..K-1; default 0)")
+                             "no-fault cell: K means seeds 0..K-1 (default "
+                             "0: none); with a comma, the seeds themselves "
+                             "(0,1,4; one seed: 4,)")
     parser.add_argument("--e1-types", default=",".join(E1_MISMATCH_TYPES),
                         metavar="T1,T2,...",
                         help="E1: comma-separated mismatch types (default "
@@ -450,20 +463,23 @@ def _plan_e3(campaign: Campaign, args) -> None:
 
     repeats = (args.repeats if args.repeats is not None
                else DEFAULT_REPEATS["E3"])
-    print(e3_formula_line(repeats, args.fault_seeds))
+    k = len(args.fault_seeds)
+    print(e3_formula_line(repeats, k))
+    print("fault seeds: " + (", ".join(str(s) for s in args.fault_seeds)
+                             or "none"))
     print("measured wall time per automated run (summary.json, started_at "
           "to finished_at):")
     for line in wall_time_lines():
         print(line)
     lines, low, high, unmeasured = estimate_lines(
-        "E3", e3_counts(repeats, args.fault_seeds))
+        "E3", e3_counts(repeats, k))
     for line in lines:
         print(line)
     total = f"  E3 measured part: {low / 60:.2f}-{high / 60:.2f} h"
     if unmeasured:
         total += f", plus {unmeasured} runs not measured"
     print(total)
-    for line in combined_plan_lines(repeats, args.fault_seeds):
+    for line in combined_plan_lines(repeats, k):
         print(line)
     print("order: lockstep, then free-run rtf 1.0, then free-run rtf 0.5; "
           "the rate is in each run's command, nothing changes between "
@@ -733,6 +749,8 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
     report = analyse(args.experiment, records, total_targets)
     fail_stops: List[str] = []
     if args.experiment == "E3":
+        report["determinism_note"] = ("informational; superseded by the "
+                                      "per-cell replay check")
         report["lockstep_replay"] = _lockstep_replay(records)
         report["free_run_spread"] = _free_run_spread(records)
         report["claim_holds"] = bool(report["lockstep_replay"]) and all(
