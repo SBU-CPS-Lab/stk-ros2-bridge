@@ -92,7 +92,8 @@ class TestLauncher:
     def test_a_quote_in_a_path_is_escaped_for_matlab(self, tmp_path):
         twin = tl.MatlabBatchTwin("C:/it's/r.json", "C:/logs",
                                   popen=lambda *a, **k: None)
-        assert "'C:/it''s/r.json'" in twin.argv[2]
+        # Absolute and normalised (os.path.abspath) since 88f90b9's fix.
+        assert r"'C:\it''s\r.json'" in twin.argv[2]
 
     def test_a_stop_file_stop(self, tmp_path):
         twin, _, killed, _ = _launcher(tmp_path, _Process(exits_after_polls=3))

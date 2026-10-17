@@ -12,16 +12,12 @@ when it is built, and RunConfig.resolved_log_dir() is absolute.
 
 import os
 
-import pytest
-
 from acav.twin_launcher import MatlabBatchTwin
 
 from test_deploy_run_cli import _config  # noqa: I100
 
-PENDING = pytest.mark.xfail(strict=True, reason="paths not absolute yet")
 
 
-@PENDING
 def test_the_matlab_command_has_only_absolute_paths(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     twin = MatlabBatchTwin("results\\X\\r.runconfig.json", "results\\X\\r.logs",
@@ -36,7 +32,6 @@ def test_the_matlab_command_has_only_absolute_paths(tmp_path, monkeypatch):
     assert os.path.join(expected_logs, "twin.stop") in call
 
 
-@PENDING
 def test_the_paths_stay_put_when_the_cwd_moves(tmp_path, monkeypatch):
     """Built in one folder, started from another (MATLAB's own cwd is
     src\\stk_matlab): nothing follows the move."""
@@ -59,7 +54,6 @@ def test_the_paths_stay_put_when_the_cwd_moves(tmp_path, monkeypatch):
     assert not (elsewhere / "out").exists()
 
 
-@PENDING
 def test_the_run_log_folder_is_absolute(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config = _config(tmp_path, output="results\\X\\r.json", log_dir="")

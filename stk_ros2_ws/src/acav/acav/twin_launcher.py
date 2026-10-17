@@ -90,6 +90,12 @@ class MatlabBatchTwin:
                  sleep: Callable[[float], None] = time.sleep,
                  clock: Callable[[], float] = time.monotonic,
                  matlab: str = "matlab", matlab_dir: str = ""):
+        # Absolute here, the one place paths are handed to MATLAB: it runs
+        # from src/stk_matlab, where a relative path means another file
+        # (live session on d0bf796: simulink_diagnostics.txt not writable,
+        # no matlab.log).
+        run_config = os.path.abspath(run_config)
+        log_dir = os.path.abspath(log_dir)
         self.log_dir = log_dir
         self.stop_file = os.path.join(log_dir, STOP_FILE)
         self.log_file = os.path.join(log_dir, MATLAB_LOG_FILE)

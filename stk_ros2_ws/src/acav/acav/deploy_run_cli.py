@@ -117,10 +117,11 @@ class RunConfig:
     mismatch_guard: str = ""
 
     def resolved_log_dir(self) -> str:
+        """Absolute, so no consumer depends on the process cwd."""
         if self.log_dir:
-            return self.log_dir
+            return os.path.abspath(self.log_dir)
         base, _ = os.path.splitext(self.output)
-        return f"{base}.logs"
+        return os.path.abspath(f"{base}.logs")
 
 
 @dataclass
