@@ -163,6 +163,9 @@ class Deps:
     #: () -> every running STK Desktop process, each with started_by
     #: (acav.stk_process.stk_processes).
     find_stk_processes: Callable[[], List[dict]] = None
+    #: () -> [(pid, image)] of running matlab.exe / libmwros2server.exe
+    #: (acav.twin_launcher.twin_processes_running).
+    find_twin_processes: Callable[[], List[Tuple[int, str]]] = None
 
     def __post_init__(self) -> None:
         if self.start_recorder is None:
@@ -186,6 +189,8 @@ class Deps:
             self.disable_quickedit = disable_quickedit
         if self.find_stk_processes is None:
             self.find_stk_processes = _find_stk_processes
+        if self.find_twin_processes is None:
+            self.find_twin_processes = _find_twin_processes
 
 
 @dataclass
@@ -242,6 +247,55 @@ def _probe_stk_processes() -> List[dict]:
 
 #: Deps' default; offline tests replace this hook (conftest.py).
 _find_stk_processes = _probe_stk_processes
+
+
+def _probe_twin_processes() -> List[Tuple[int, str]]:
+    from acav.twin_launcher import twin_processes_running
+    return twin_processes_running()
+
+
+#: Deps' default; offline tests replace this hook (conftest.py).
+_find_twin_processes = _probe_twin_processes
+
+#: How long a leftover libmwros2server.exe may take to end before the run
+#: is refused, and how often it is checked.
+ROS_SERVER_WAIT_S = 60.0
+ROS_SERVER_POLL_S = 2.0
+
+
+def _check_twin_leftovers(deps, summary: dict, record) -> bool:
+    """Before MATLAB starts: record leftover matlab.exe and
+    libmwros2server.exe; wait up to ROS_SERVER_WAIT_S for a ROS 2 server
+    to end, else refuse. Whether a leftover server is what stopped a
+    twin's ROS node from starting is not established; this only keeps
+    the run from starting beside one."""
+    found = deps.find_twin_processes()
+    summary["leftover_twin_processes"] = [[pid, name] for pid, name in found]
+
+    def servers(processes):
+        return [(pid, name) for pid, name in processes
+                if name.lower() == "libmwros2server.exe"]
+
+    waited = 0.0
+    while servers(found) and waited < ROS_SERVER_WAIT_S:
+        deps.sleep(ROS_SERVER_POLL_S)
+        waited += ROS_SERVER_POLL_S
+        found = deps.find_twin_processes()
+    left = servers(found)
+    if left:
+        record("twin_leftovers", False, "; ".join(
+            f"{name} (pid {pid}) still running after "
+            f"{ROS_SERVER_WAIT_S:.0f} s" for pid, name in left)
+            + ": a MATLAB ROS 2 server from an earlier session; end it "
+              "(Task Manager) and run again")
+        return False
+    names = ", ".join(f"{name} (pid {pid})" for pid, name in
+                      summary["leftover_twin_processes"]) or "none"
+    detail = f"before launch: {names}"
+    if waited:
+        detail += f"; the ROS 2 server ended after {waited:.0f} s"
+    record("twin_leftovers", True, detail)
+    return True
 
 
 def _check_graph_idle(prefix: str) -> None:
@@ -1144,6 +1198,8 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                 ack_timeout_s = AUTOMATED_TWIN_ACK_TIMEOUT_S
                 summary["twin_launch"] = config.twin_launch
                 summary["twin_ack_timeout_s"] = ack_timeout_s
+                if not _check_twin_leftovers(deps, summary, record):
+                    return EXIT_STEP_FAILED
                 twin_state["twin"] = deps.launch_twin(run_config, log_dir)
                 twin_state["twin"].start()
                 record("twin_launch", True,

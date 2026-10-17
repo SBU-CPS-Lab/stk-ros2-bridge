@@ -56,6 +56,14 @@ def _operator_started_stk(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_twin_leftovers(monkeypatch):
+    """Offline tests have no MATLAB: no leftover twin processes.
+    test_twin_leftovers.py injects its own through Deps."""
+    import acav.deploy_run_cli as deploy_run_cli
+    monkeypatch.setattr(deploy_run_cli, "_find_twin_processes", lambda: [])
+
+
+@pytest.fixture(autouse=True)
 def _graphics_off(monkeypatch):
     """Offline tests have no bridge to sample STK: report "off" (the
     default every run requires). test_graphics_mode_runner.py injects

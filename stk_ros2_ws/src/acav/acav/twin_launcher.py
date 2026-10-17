@@ -195,6 +195,29 @@ def processes_of(pids: Iterable[int]) -> List[Tuple[int, str]]:
     return found
 
 
+#: Every running MATLAB or MATLAB ROS 2 server, as "pid,name" lines. No
+#: double quotes: Windows PowerShell 5.1 strips them from arguments.
+TWIN_PROCESS_QUERY = (
+    "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "
+    "'matlab.exe' -or $_.Name -eq 'MATLAB.exe' -or $_.Name -eq "
+    "'libmwros2server.exe' } | ForEach-Object { '{0},{1}' -f "
+    "$_.ProcessId, $_.Name }")
+
+
+def twin_processes_running(run: Callable = subprocess.run
+                           ) -> List[Tuple[int, str]]:
+    """(pid, image) of every running matlab.exe / libmwros2server.exe."""
+    completed = run(["powershell", "-NoProfile", "-NonInteractive",
+                     "-Command", TWIN_PROCESS_QUERY],
+                    capture_output=True, text=True, check=False)
+    found = []
+    for line in (completed.stdout or "").splitlines():
+        pid, _, name = line.strip().partition(",")
+        if pid.isdigit() and name:
+            found.append((int(pid), name))
+    return found
+
+
 def session_pids(log_dir: str) -> List[int]:
     """The PIDs a run recorded for its twin session: the process the
     runner started (summary.json) and MATLAB's own (matlab_session.json)."""

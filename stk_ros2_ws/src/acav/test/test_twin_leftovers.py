@@ -24,7 +24,6 @@ from acav.run_record import Provenance, RunRecord, write_record
 from test_deploy_run_cli import FakeProcess, _config  # noqa: I100
 from test_twin_ack_exit import _Twin  # noqa: I100
 
-PENDING = pytest.mark.xfail(strict=True, reason="leftover check not written")
 
 
 def _run(tmp_path, polls, twin_launch="matlab-batch"):
@@ -70,7 +69,6 @@ def _step(summary):
     return found[0] if found else None
 
 
-@PENDING
 def test_nothing_left_is_recorded_and_the_run_goes_on(tmp_path):
     code, summary, _, slept, launched = _run(tmp_path, [[]])
     assert code == 0 and launched and slept == []
@@ -78,7 +76,6 @@ def test_nothing_left_is_recorded_and_the_run_goes_on(tmp_path):
     assert _step(summary)["ok"] is True
 
 
-@PENDING
 def test_a_leftover_matlab_is_recorded_not_refused(tmp_path):
     code, summary, _, slept, launched = _run(tmp_path,
                                              [[(5100, "MATLAB.exe")]])
@@ -86,7 +83,6 @@ def test_a_leftover_matlab_is_recorded_not_refused(tmp_path):
     assert summary["leftover_twin_processes"] == [[5100, "MATLAB.exe"]]
 
 
-@PENDING
 def test_a_ros_server_that_ends_is_waited_for(tmp_path):
     server = [(7200, "libmwros2server.exe")]
     code, summary, calls, slept, launched = _run(tmp_path,
@@ -98,7 +94,6 @@ def test_a_ros_server_that_ends_is_waited_for(tmp_path):
     assert "ended after" in _step(summary)["detail"]
 
 
-@PENDING
 def test_a_ros_server_that_stays_refuses_the_run(tmp_path):
     server = [(7200, "libmwros2server.exe")]
     code, summary, _, slept, launched = _run(tmp_path, [server])
@@ -111,14 +106,12 @@ def test_a_ros_server_that_stays_refuses_the_run(tmp_path):
         step["detail"]
 
 
-@PENDING
 def test_a_manual_twin_is_not_checked(tmp_path):
     code, summary, calls, _, _ = _run(tmp_path, [[(1, "matlab.exe")]],
                                       twin_launch="manual")
     assert calls == [] and _step(summary) is None
 
 
-@PENDING
 def test_the_default_finder_query_has_no_double_quotes():
     import inspect
 
