@@ -30,8 +30,6 @@ from acav.campaign_cli import main
 
 from test_e1_mismatch import _write  # noqa: I100
 
-PENDING = pytest.mark.xfail(strict=True,
-                            reason="time_offset cause not checked yet")
 TYPES = ("time_offset",)
 
 
@@ -81,7 +79,6 @@ def _cause(tmp_path, capsys):
     return stop["cause"]
 
 
-@PENDING
 def test_confirmed_on_the_runs_own_evidence(tmp_path, capsys):
     _setup(tmp_path)
     assert _cause(tmp_path, capsys) == (
@@ -90,7 +87,6 @@ def test_confirmed_on_the_runs_own_evidence(tmp_path, capsys):
         "published 2500 attitude samples; control arm acked in 108.0 s")
 
 
-@PENDING
 @pytest.mark.parametrize("change, missing", [
     ({"stopped": "matlab_exited", "exit_code": 1}, "MATLAB alive at timeout"),
     ({"running_at": ""}, "simulation running"),
@@ -109,7 +105,6 @@ def test_anything_missing_leaves_the_cause_unconfirmed(tmp_path, capsys,
     assert missing in cause
 
 
-@PENDING
 def test_without_a_control_ack_time_it_says_so(tmp_path, capsys):
     _setup(tmp_path, control_ack=None)
     assert _cause(tmp_path, capsys).startswith(
@@ -117,7 +112,6 @@ def test_without_a_control_ack_time_it_says_so(tmp_path, capsys):
         "not recorded)")
 
 
-@PENDING
 def test_a_control_slower_than_the_bound_does_not_confirm(tmp_path, capsys):
     _setup(tmp_path, control_ack=260.0)
     cause = _cause(tmp_path, capsys)

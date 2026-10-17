@@ -750,20 +750,23 @@ def _e1_arms(campaign: Campaign, records: List[RunRecord],
             entry["runs"] += 1
             entry["records"].append(record)
             continue
-        summary = None
+        summary, logs = None, ""
         for directory in directories:
-            summary = _read_summary(os.path.join(
-                directory, f"{run.run_id}.logs", "summary.json"))
+            logs = os.path.join(directory, f"{run.run_id}.logs")
+            summary = _read_summary(os.path.join(logs, "summary.json"))
             if summary is not None:
                 break
         if summary is None:
             missing.append(run.run_id)
             continue
         fail_stops.append(run.run_id)
-        entry["fail_stops"].append({
-            "run_id": run.run_id,
-            "failed_steps": [s["step"] for s in summary.get("steps", [])
-                             if not s.get("ok")]})
+        stop = {"run_id": run.run_id,
+                "failed_steps": [s["step"] for s in summary.get("steps", [])
+                                 if not s.get("ok")]}
+        if run.mismatch == "time_offset":
+            stop["cause"] = _time_offset_cause(
+                summary, logs, _control_ack_s(campaign, directories))
+        entry["fail_stops"].append(stop)
     for entry in arms.values():
         group = entry.pop("records")
         entry["capture_rate"] = _mean_of(capture_rate(r.result)
@@ -773,6 +776,64 @@ def _e1_arms(campaign: Campaign, records: List[RunRecord],
         entry["outcomes"] = _sum_counts(outcome_breakdown(r.result)
                                         for r in group)
     return arms, fail_stops, missing
+
+
+def _control_ack_s(campaign: Campaign, directories: List[str]
+                   ) -> Optional[float]:
+    """The control arm's recorded twin-ack wait (summary.json), or None."""
+    for run in campaign.runs:
+        if run.mismatch or run.attitude_provider:
+            continue
+        for directory in directories:
+            summary = _read_summary(os.path.join(
+                directory, f"{run.run_id}.logs", "summary.json"))
+            wait = (summary or {}).get("twin_ack_wait") or {}
+            if wait.get("stopped") == "acked" and wait.get("waited_s") \
+                    is not None:
+                return float(wait["waited_s"])
+    return None
+
+
+def _time_offset_cause(summary: dict, logs: str,
+                       control_ack: Optional[float]) -> str:
+    """Whether a time_offset fail-stop's own records show the twin alive
+    and never ready; a slow MATLAB start also ends in a timeout.
+
+    Read only from what the run recorded: summary.json (twin_ack_wait,
+    matlab_session, the bridge_connected step) and topics_summary.json.
+    """
+    wait = summary.get("twin_ack_wait") or {}
+    timeout = wait.get("timeout_s")
+    session = summary.get("matlab_session") or {}
+    steps = {s.get("step"): s.get("ok") for s in summary.get("steps", [])}
+    topics = _read_summary(os.path.join(logs, "topics_summary.json"))
+    counts = (topics or {}).get("received_messages") or {}
+    attitude = sum(n for topic, n in counts.items()
+                   if topic.startswith("/stk/") and topic.endswith("/attitude"))
+    checks = [
+        ("MATLAB alive at timeout", wait.get("stopped") == "timeout"
+         and wait.get("exit_code") is None),
+        ("simulation running", bool(session.get("running_at"))),
+        ("bridge connected", steps.get("bridge_connected") is True),
+        ("topics_summary.json", topics is not None),
+        ("no twin status", topics is not None
+         and counts.get("/acav/twin_status", 0) == 0),
+        ("no twin command", topics is not None
+         and counts.get("/stk/cmd/attitude", 0) == 0),
+        ("bridge published attitude", attitude > 0),
+        ("control acked within the bound", control_ack is not None
+         and timeout is not None and control_ack < float(timeout)),
+    ]
+    control = ("control arm ack time not recorded" if control_ack is None
+               else f"control arm acked in {control_ack:.1f} s")
+    missing = [name for name, ok in checks if not ok]
+    if missing:
+        return (f"timeout; cause not independently confirmed ({control}); "
+                f"missing: {', '.join(missing)}")
+    return (f"confirmed: MATLAB alive at the {float(timeout):.1f} s timeout "
+            f"and its simulation running, 0 twin statuses and 0 attitude "
+            f"commands while the bridge published {attitude} attitude "
+            f"samples; {control}")
 
 
 def _read_summary(path: str) -> Optional[dict]:

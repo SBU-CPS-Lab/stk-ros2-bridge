@@ -243,8 +243,12 @@ def test_report_counts_fail_stops_by_arm(tmp_path, capsys):
     out = capsys.readouterr().out
     report = json.loads(out[:out.rindex("}") + 1])
     arms = report["arms"]
-    assert arms["time_offset/on"]["fail_stops"] == [
-        {"run_id": runs[-1].run_id, "failed_steps": ["twin_acking"]}]
+    stop, = arms["time_offset/on"]["fail_stops"]
+    assert (stop["run_id"], stop["failed_steps"]) == (runs[-1].run_id,
+                                                      ["twin_acking"])
+    # This fixture records no twin_ack_wait or topic counts.
+    assert stop["cause"].startswith("timeout; cause not independently "
+                                    "confirmed")
     assert arms["frame_pairing/ablated"]["runs"] == 1
     assert arms["control"]["runs"] == 1
     assert report["missing_runs"] == []
