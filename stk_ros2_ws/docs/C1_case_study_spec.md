@@ -171,6 +171,23 @@ new ones injected only on the telemetry the bridge publishes,
 The table states expectations from offline reference checks
 (`test_e1_mismatch.py`), not results.
 
+**Limitations the paper text must respect.**
+
+- **MissionMode Stateflow chart: not executed.** `adcs.build_mission_chart`
+  builds it into the model and it is structurally checked (SAFE latches,
+  guard order), but it is not wired into the signal path
+  (`simulink/build_acav_twin.m`, comment at the chart). The mode is
+  decided by `+adcs/mission_mode.m`, called from `adcs.twin_step`. The
+  paper may show the chart as the specification of that logic; it must
+  not describe it as running in the loop. Not changed for the final runs
+  (wiring it changes the twin fingerprint).
+- **HPOP physical properties.** The builder selects HPOP
+  (`acav/scenario_builder.py:246`) but does not apply `mass_kg`
+  (`acav_scenario.yaml:47`, read at `acav/spec.py:183` and only printed)
+  or any drag/SRP area: HPOP uses STK's own defaults for them. The same
+  for every run and arm. The paper must not state that the orbit uses
+  the spacecraft's 8 kg mass.
+
 **Dropped and merged.** E4 (controller gain sweep) is dropped and its
 code removed; records labelled E4 still load. E5 (fault replay) is
 merged into E3; the E5 campaign builder still

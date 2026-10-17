@@ -407,3 +407,15 @@ Still open:
   with fewer repeats) are not supported by the matrix builder yet.
 - Repeat counts, the MissionMode decision, final runs and paper text as
   listed above.
+
+## Old open issues: state at the code freeze (recorded 2026-10-17)
+
+Not fixed: each fix would change the dynamics, the twin fingerprint or
+the determinism signature.
+
+| Issue | Current state | Affects E1/E2/E3/E6 results? | What the paper must say |
+|---|---|---|---|
+| `mass_kg` / A/m not applied to HPOP | `acav_scenario.yaml:47` mass is read (`acav/spec.py:183`) and only printed (`spec.py:392`); `scenario_builder.py:246` sets HPOP without mass or areas, so STK defaults apply | The same orbit model in every run and arm: no comparison is biased; absolute orbit and access times are those of STK's defaults | HPOP with STK default mass and areas, not the spacecraft's 8 kg |
+| Gains provenance | Gains are recorded as configured (`scheduler_node.py:200-205`, `:859`), not observed from the twin; nominal runs carry `{}`, meaning the twin defaults in `+adcs/config.m` (duplicated in `acav/twin_reference.py` `TwinConfig`) | No: every final run uses the nominal gains (no gain sweep; E4 removed) | The twin's gains are the nominal defaults (C3 section 3) |
+| 4 skipped tests | `test_conversions.py:20` (needs a sourced ROS 2 workspace), `test_qos_lockstep.py:4` (rclpy), `test_flake8.py:16`, `test_pep257.py:12` (ament linters): not run by the offline suite | No: conversions and QoS are exercised by every live run; the two others are style checks | Nothing; they are unverified in the offline suite, not in the live runs |
+| PropagatorName / rate groups | `scenario_builder.py:294` names the propagator in its SetState from the build report (`HPOP` unless the fallback applied); rate groups are `bridge_params_acav.yaml:120-123` (fast 10 Hz, medium 1 Hz, slow 0.1 Hz); the free-run pacer period is the fastest group's | No change between runs; the fallback would be visible in the build report | The step is 0.1 s; HPOP as built (check the build report of the final session) |
