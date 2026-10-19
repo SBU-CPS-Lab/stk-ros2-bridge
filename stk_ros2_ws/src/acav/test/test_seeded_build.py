@@ -214,3 +214,84 @@ def test_resume_refuses_seeded_records_from_other_code(tmp_path):
         run_campaign(campaign, lambda *a: None, RunnerOptions(
             output_dir=str(tmp_path), code_version=new,
             tree_of=lambda version: version))
+
+
+# --- seeded scenario files from the workspace, not the installed package -----------
+# Live check at eb69251: through `ros2 run` the package lives under
+# build\acav, where generated\acav_seed*.yaml does not exist, and
+# run-seeds failed before building anything.
+
+FIXED = pytest.mark.xfail(strict=True, reason="not fixed yet")
+
+
+def _workspace(tmp_path, seeds):
+    """A workspace whose src tree holds the seeded scenarios; the
+    package itself is elsewhere (the installed layout)."""
+    import os
+    import shutil
+
+    from test_paired_report import GENERATED
+    generated = tmp_path / "ws" / "src" / "acav" / "config" / "scenarios" \
+        / "generated"
+    generated.mkdir(parents=True)
+    for seed in seeds:
+        shutil.copy(os.path.join(GENERATED, f"acav_seed{seed}.yaml"),
+                    generated)
+    return tmp_path / "ws", generated
+
+
+class Recorder(Calls):
+    def __init__(self):
+        super().__init__()
+        self.built = []
+        self.runs = []
+
+    def build(self, scenario):
+        self.built.append(scenario)
+        return super().build(scenario)
+
+    def campaign(self, argv):
+        if argv[0] == "run":
+            self.runs.append(argv)
+        return super().campaign(argv)
+
+
+@FIXED
+def test_seeds_resolve_under_the_workspace_src_tree(tmp_path, monkeypatch):
+    import os
+
+    from acav.e2_seeds import run_seeds
+    workspace, generated = _workspace(tmp_path, (1, 2))
+    monkeypatch.chdir(workspace)
+    calls = Recorder()
+    assert run_seeds(seeds="1-2", tag="t1", results_dir="results",
+                     backend="com", twin_launch="matlab-batch",
+                     launch=["python", "x.py"], build=calls.build,
+                     campaign=calls.campaign) == 0
+    expected = [str(generated / f"acav_seed{k}.yaml") for k in (1, 2)]
+    assert calls.built[:2] == expected
+    for argv, path in zip(calls.runs, expected):
+        assert os.path.isabs(argv[argv.index("--scenario") + 1])
+        assert argv[argv.index("--scenario") + 1] == path
+
+
+@FIXED
+def test_missing_seed_files_fail_before_any_build(tmp_path, capsys):
+    from acav.e2_seeds import run_seeds
+    _, generated = _workspace(tmp_path, (1,))
+    calls = Recorder()
+    code = run_seeds(seeds="1-3", tag="t1", results_dir=str(tmp_path),
+                     backend="com", twin_launch="matlab-batch",
+                     launch=["python", "x.py"], build=calls.build,
+                     campaign=calls.campaign, scenario_dir=str(generated))
+    assert code != 0 and calls.log == []
+    err = capsys.readouterr().err
+    assert "acav_seed2.yaml" in err and "acav_seed3.yaml" in err
+
+
+@FIXED
+def test_the_verb_takes_a_scenario_dir():
+    from acav.campaign_cli import _parser
+    args = _parser().parse_args(["run-seeds", "--experiment", "E2",
+                                 "--output-dir", "r", "--scenario-dir", "d"])
+    assert args.scenario_dir == "d"
