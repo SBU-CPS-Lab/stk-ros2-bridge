@@ -223,6 +223,9 @@ def test_resume_refuses_seeded_records_from_other_code(tmp_path):
 # build\acav, where generated\acav_seed*.yaml does not exist, and
 # run-seeds failed before building anything.
 
+FIXED = pytest.mark.xfail(strict=True, reason="not fixed yet")
+
+
 def _workspace(tmp_path, seeds):
     """A workspace whose src tree holds the seeded scenarios; the
     package itself is elsewhere (the installed layout)."""
@@ -291,3 +294,68 @@ def test_the_verb_takes_a_scenario_dir():
     args = _parser().parse_args(["run-seeds", "--experiment", "E2",
                                  "--output-dir", "r", "--scenario-dir", "d"])
     assert args.scenario_dir == "d"
+
+
+# --- report finds the seeded scenarios in the workspace, not the package -------
+# E2 final, 91f36b9: the paired report through `ros2 run` looked for the
+# seed files next to the installed package and refused every record
+# ("not among the known scenario files").
+
+def _installed_report(tmp_path, monkeypatch, capsys, extra=(), seeds=(1, 2)):
+    from acav import scenarios
+    from acav.campaign_cli import main
+    from test_paired_report import _folders
+
+    workspace, _ = _workspace(tmp_path, seeds)
+    away = tmp_path / "build" / "acav" / "config" / "scenarios" / "generated"
+    away.mkdir(parents=True)                        # the installed copy
+    monkeypatch.setattr(scenarios, "GENERATED_DIR", str(away))
+    folders = _folders(tmp_path, {s: (10, 12) for s in seeds})
+    monkeypatch.chdir(workspace)
+    argv = ["report", "--experiment", "E2", "--no-figures",
+            "--output-dir", folders[0]] + list(extra)
+    for folder in folders[1:]:
+        argv += ["--include-dir", folder]
+    code = main(argv)
+    return code, capsys.readouterr()
+
+
+@FIXED
+def test_report_finds_seeds_under_the_workspace_src_tree(
+        tmp_path, monkeypatch, capsys):
+    code, out = _installed_report(tmp_path, monkeypatch, capsys)
+    assert code == 0, out.err
+    assert '"n_pairs": 2' in out.out
+
+
+@FIXED
+def test_report_takes_a_scenario_dir(tmp_path, monkeypatch, capsys):
+    workspace = tmp_path / "ws"
+    code, out = _installed_report(
+        tmp_path, monkeypatch, capsys,
+        ["--scenario-dir", str(workspace / "src" / "acav" / "config"
+                               / "scenarios" / "generated")])
+    assert code == 0, out.err
+
+
+@FIXED
+def test_an_unknown_digest_lists_where_it_looked(tmp_path, monkeypatch,
+                                                 capsys, caplog):
+    import shutil
+    from acav import scenarios
+    from acav.campaign_cli import main
+    from test_paired_report import _folders
+
+    away = tmp_path / "empty"
+    away.mkdir()
+    monkeypatch.setattr(scenarios, "GENERATED_DIR", str(away))
+    folders = _folders(tmp_path, {1: (10, 12), 2: (10, 12)})
+    monkeypatch.chdir(tmp_path)
+    code = main(["report", "--experiment", "E2", "--no-figures",
+                 "--output-dir", folders[0], "--include-dir", folders[1]])
+    assert code == 1
+    text = caplog.text + capsys.readouterr().err
+    assert str(tmp_path / "src" / "acav" / "config" / "scenarios"
+               / "generated") in text
+    assert "--scenario-dir" in text
+    shutil.rmtree(away)
