@@ -223,9 +223,6 @@ def test_resume_refuses_seeded_records_from_other_code(tmp_path):
 # build\acav, where generated\acav_seed*.yaml does not exist, and
 # run-seeds failed before building anything.
 
-FIXED = pytest.mark.xfail(strict=True, reason="not fixed yet")
-
-
 def _workspace(tmp_path, seeds):
     """A workspace whose src tree holds the seeded scenarios; the
     package itself is elsewhere (the installed layout)."""
@@ -320,7 +317,6 @@ def _installed_report(tmp_path, monkeypatch, capsys, extra=(), seeds=(1, 2)):
     return code, capsys.readouterr()
 
 
-@FIXED
 def test_report_finds_seeds_under_the_workspace_src_tree(
         tmp_path, monkeypatch, capsys):
     code, out = _installed_report(tmp_path, monkeypatch, capsys)
@@ -328,7 +324,6 @@ def test_report_finds_seeds_under_the_workspace_src_tree(
     assert '"n_pairs": 2' in out.out
 
 
-@FIXED
 def test_report_takes_a_scenario_dir(tmp_path, monkeypatch, capsys):
     workspace = tmp_path / "ws"
     code, out = _installed_report(
@@ -338,7 +333,6 @@ def test_report_takes_a_scenario_dir(tmp_path, monkeypatch, capsys):
     assert code == 0, out.err
 
 
-@FIXED
 def test_an_unknown_digest_lists_where_it_looked(tmp_path, monkeypatch,
                                                  capsys, caplog):
     import shutil

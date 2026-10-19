@@ -375,7 +375,7 @@ def _parser() -> argparse.ArgumentParser:
                         help="E5: Monte Carlo seeds (default 100); "
                              "run-seeds: the seeded scenarios, e.g. 1-10")
     parser.add_argument("--scenario-dir", default="", metavar="DIR",
-                        help="run-seeds: folder of acav_seed<k>.yaml "
+                        help="run-seeds and report: folder of acav_seed<k>.yaml "
                              "(default: src/acav/config/scenarios/"
                              "generated under the current directory)")
     parser.add_argument("--commit-tag", default="", metavar="TAG",
@@ -787,24 +787,33 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
 
     # Each record against its own scenario, found by digest among the
     # reference, the generated scenarios and --scenario.
-    from acav.scenarios import known_scenarios, scenario_of
+    from acav.scenarios import known_scenarios, scenario_dirs, scenario_of
 
-    known = known_scenarios([args.scenario] if args.scenario else [])
-    uncovered, used = {}, {}
+    scenario_dir = getattr(args, "scenario_dir", "")
+    known = known_scenarios([args.scenario] if args.scenario else [],
+                            scenario_dir)
+    uncovered, used, unknown = {}, {}, {}
     for r in records:
         scenario = scenario_of(r, known)
         if scenario is None:
             named = r.provenance.scenario_sha256 or "none"
-            uncovered[r.result.run_id] = [
-                f"names scenario {named[:12]}..., which is not among the "
-                f"known scenario files (the reference, "
-                f"config/scenarios/generated, --scenario)"]
+            unknown.setdefault(named, []).append(r.result.run_id)
             continue
         used.setdefault(scenario.sha256, (scenario, []))[1].append(
             r.result.run_id)
         problems = target_coverage_problems(r, scenario)
         if problems:
             uncovered[r.result.run_id] = problems
+    if unknown:
+        LOGGER.error(
+            "refusing to report: these records name a scenario that is not "
+            "among the known scenario files. Searched:the reference (%s), --scenario, and "
+            "the YAML files in %s. Give the folder that holds them with "
+            "--scenario-dir. Unknown: %s",
+            AcavSpec.locate(), ", ".join(scenario_dirs(scenario_dir)),
+            "; ".join(f"{digest[:12]}... ({', '.join(sorted(ids))})"
+                      for digest, ids in sorted(unknown.items())))
+        return 1
     if uncovered:
         LOGGER.error(
             "refusing to report: these records do not cover exactly the "
