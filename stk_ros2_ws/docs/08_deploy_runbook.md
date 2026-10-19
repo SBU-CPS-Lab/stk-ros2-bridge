@@ -48,26 +48,25 @@ Before the first run of a session, in this order:
 
 ## 3. Build and verify the scenario
 
-Reference scenario (the default for E1, E3, E6 and E2's reference arm):
+Reference scenario (E1, E3, E6):
 
 ```powershell
-python src\acav\scripts\build_acav_scenario.py --backend com --verify
+python srccav\scriptsuild_acav_scenario.py --backend com --verify
 ```
 
-A seeded scenario (E2), e.g. seed 1:
+`--scenario <yaml>` builds a seeded scenario instead; for E2 the
+`run-seeds` verb does all the building itself (section 8.4).
 
-```powershell
-python src\acav\scripts\build_acav_scenario.py --backend com --verify `
-    --scenario src\acav\config\scenarios\generated\acav_seed1.yaml
-```
-
-Both build into the STK you opened and fail if none is running;
-`--start-stk` would start one through COM, which runs then refuse.
-Exit code 0 means built and verified. To switch back to the reference,
-build the reference again; every run must be given the same
-`--scenario` as the scenario open in STK (the runner checks the file,
-not STK). Building the 22-target seeded scenario takes several minutes
-(not timed precisely; measure it in your session).
+The build attaches to the STK you opened and fails if none is running
+(it never starts STK; `--start-stk` would, and runs then refuse it). If
+a scenario is open, it is closed first (logged as "closed the open
+scenario"; the build fails if it stays open). After a successful build
+and verify, every 2D/3D Graphics window is closed and STK is minimised,
+then the state is read back with the run guard's rule: exit 1 with "STK
+graphics is not off after the build" otherwise (`--leave-graphics`
+skips this). Exit code 0 means built, verified and graphics off. Every
+run must be given the same `--scenario` as the scenario open in STK
+(the runner checks the file, not STK).
 
 ## 4. The experiments
 
@@ -449,42 +448,32 @@ ros2 run acav run_acav_campaign run --experiment E3 --output-dir $outE3final --r
 ros2 run acav run_acav_campaign report --experiment E3 --output-dir $outE3final --repeats 5 --fault-seeds 5 --repeats-lockstep 3 --repeats-rtf05 3
 ```
 
-### 8.4 E2: the reference arm first, then seeds 1..10
+### 8.4 E2: seeds 1..10, then the reference arm, in one command
 
-The reference scenario must be the one open in STK (section 3). Then,
-per seed, the scenario is rebuilt in STK before its runs.
+Open STK and do nothing else; the command builds every scenario itself.
+The tree must be clean; folders are suffixed with HEAD's short hash
+(`--commit-tag` may name it, and must then match HEAD).
 
 ```powershell
-$outE2ref = Join-Path (Get-Location) 'results\E2_final_ref_<commit>'
-ros2 run acav run_acav_campaign run --experiment E2 --output-dir $outE2ref --twin-launch matlab-batch -- `
-    python src\acav\scripts\run_acav_run.py `
+$results = Join-Path (Get-Location) 'results'
+ros2 run acav run_acav_campaign run-seeds --experiment E2 --output-dir $results --seeds 1-10 --twin-launch matlab-batch -- `
+    python srccav\scriptsun_acav_run.py `
         --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
         --execution-mode '{execution_mode}' --seed '{seed}' --output '{output}' `
         --scenario '{scenario}' --backend '{backend}' --attitude-provider '{attitude_provider}' `
         --run-config '{run_config}' --gains-json '{gains_json}' --fault-json '{fault_json}' `
         --mismatch '{mismatch}' --mismatch-guard '{mismatch_guard}' --real-time-factor '{real_time_factor}' `
-        --bridge-config src\acav\config\bridge_params_acav.yaml
-
-foreach ($k in 1..10) {
-    $scenario = Join-Path (Get-Location) "src\acav\config\scenarios\generated\acav_seed$k.yaml"
-    python src\acav\scripts\build_acav_scenario.py --backend com --verify --scenario $scenario
-    $outE2seed = Join-Path (Get-Location) "results\E2_final_seed${k}_<commit>"
-    ros2 run acav run_acav_campaign run --experiment E2 --output-dir $outE2seed --scenario $scenario --twin-launch matlab-batch -- `
-        python src\acav\scripts\run_acav_run.py `
-            --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
-            --execution-mode '{execution_mode}' --seed '{seed}' --output '{output}' `
-            --scenario '{scenario}' --backend '{backend}' --attitude-provider '{attitude_provider}' `
-            --run-config '{run_config}' --gains-json '{gains_json}' --fault-json '{fault_json}' `
-            --mismatch '{mismatch}' --mismatch-guard '{mismatch_guard}' --real-time-factor '{real_time_factor}' `
-            --bridge-config src\acav\config\bridge_params_acav.yaml
-}
-
-python src\acav\scripts\build_acav_scenario.py --backend com --verify
-ros2 run acav run_acav_campaign report --experiment E2 --output-dir $outE2ref
-$seeds = 1..10 | ForEach-Object { '--include-dir'; Join-Path (Get-Location) "results\E2_final_seed${_}_<commit>" }
-ros2 run acav run_acav_campaign report --experiment E2 --output-dir (Join-Path (Get-Location) 'results\E2_final_seed1_<commit>') @($seeds | Select-Object -Skip 2)
+        --bridge-config srccav\configridge_params_acav.yaml
 ```
 
-The last command analyses the ten seeds as pairs; the reference arm is
-reported on its own (a record not from a seeded scenario is refused by
-the paired analysis).
+Per seed k: build and verify `acav_seed<k>.yaml` (section 3; graphics
+checked off), then run E2 into `results\E2_final_seed<k>_<commit>`. A
+non-zero build stops that seed only. A seed whose folder already holds a
+usable record for both runs from this commit is skipped; records from
+another commit are refused, not resumed. Then the reference is rebuilt,
+its arm runs into `results\E2_final_ref_<commit>`, and two reports are
+produced: the reference arm on its own, and the ten seeds as pairs
+(`--include-dir`; the paired analysis refuses non-seeded records). The
+summary lists, per seed and for the reference: build, run, usable/
+requested runs and folder, plus both report exit codes. The exit code
+is non-zero if anything failed; rerunning the same command resumes.
