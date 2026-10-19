@@ -6,7 +6,7 @@ figures the paper needs, via one command: `run_acav_campaign report`.
 ## 1. Why this is thin
 
 Every real computation — capture rate, coverage rate, the determinism
-signature, the gain surface, the latency breakdown — already lives in
+signature, the latency breakdown — already lives in
 `acav/metrics.py` and `acav/campaign.py`, built and tested during C5.
 C6 does not re-derive any of them. `acav/report_figures.py` takes the
 *same* aggregation dict `run_acav_campaign report`'s JSON output prints
@@ -25,8 +25,9 @@ acav/campaign_cli.py: analyse()     -- picks the right aggregation
 acav/report_figures.py              -- lays the SAME dict out as a
         |                              Figure, one function per experiment
         v
-run_acav_campaign report            -- writes JSON + figures/ next
-                                        to the records it read
+run_acav_campaign report            -- prints the JSON (to a file with
+                                        --json) and, for one folder,
+                                        writes figures/ next to its records
 ```
 
 ## 2. Running it
@@ -35,11 +36,19 @@ run_acav_campaign report            -- writes JSON + figures/ next
 run_acav_campaign report --experiment E2 --output-dir results/<E2 folder>
 ```
 
-Prints the JSON report (same as C5), and — unless `--no-figures` is
-given — writes `<E2 folder>/figures/E2_*.{pdf,svg,png}`. Needs no STK,
-no MATLAB, no ROS: this is meant to run wherever the analysis actually
-happens, which per this project's own environment notes is this dev
-machine, not the Windows deploy box.
+Prints the JSON report (same as C5; also written to a file with
+`--json PATH`), and — unless `--no-figures` is given — writes
+`<E2 folder>/figures/E2_*.{pdf,svg,png}`. The E2 paired report
+(`--include-dir`, section 8) writes no figures. Needs no STK, no
+MATLAB, no ROS: it runs wherever the records are (the final reports
+ran on the deploy host).
+
+The three E2 paper figures (paired capture/coverage, paired wheel
+resources, outcome breakdown) are made by
+`src/acav/scripts/make_e2_paper_figures.py`, run from `stk_ros2_ws`: it
+reads the ten `E2_final_seed<k>_91f36b9` folders and
+`E2_final_paired_91f36b9/paired_report.json` and recomputes no
+statistic (p values, medians and n come from the JSON).
 
 **matplotlib is not a hard dependency** of the `acav` package —
 `pip install 'acav[figures]'` if it is not already present.
@@ -152,7 +161,7 @@ reads each run's record and its `<run>.logs` folder (the topic captures,
 `<folder>/_coupling` (or `--out`):
 
 ```
-python src\acav\scripts\analyze_coupling.py results\E3_P9_rtf1_9fed085 [more folders]
+python src\acav\scripts\analyze_coupling.py results\<folder> [more folders]
 ```
 
 What each quantity means (`acav/coupling_analysis.py`):
@@ -180,7 +189,13 @@ dynamics-aware run). `report --experiment E2 --output-dir <seed folder>
 --include-dir <seed folder> ...` analyses them together as pairs
 (`acav/paired_analysis.py`, statistics in `acav/paired_stats.py`): one
 pair per scenario seed, difference = dynamics-aware minus kinematic,
-incomplete pairs dropped and listed by name.
+incomplete pairs dropped and listed by name. Each record's scenario is
+found by digest among the reference, `--scenario`, and the YAML files in
+`--scenario-dir` (default `src/acav/config/scenarios/generated` under
+the current directory) and next to the package
+(`acav/scenarios.py` `scenario_dirs`); an unknown digest is refused with
+the folders searched. The output is printed, and written to a file only
+with `--json PATH`; no figures.
 
 - Metrics: the records' own `coverage_rate`, `capture_rate`,
   `wheel_energy_J`, `wheel_saturation_events` (`over_promise_gap` is
@@ -200,5 +215,6 @@ incomplete pairs dropped and listed by name.
   unreportable record; two records for one seed and scheduler; plus all
   the refusals of section 6.
 
-No paired result exists yet; see [09_live_runs_and_results.md](09_live_runs_and_results.md)
-for what has been run.
+The final paired result is `results/E2_final_paired_91f36b9/paired_report.json`
+(10 seeds, records on 91f36b9); see
+[09_live_runs_and_results.md](09_live_runs_and_results.md).

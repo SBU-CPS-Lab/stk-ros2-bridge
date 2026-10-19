@@ -1,20 +1,78 @@
-# Current evidence
+# Live runs and results
 
-The live runs that remain at the top of `results/` after the
-2026-10-16 reorganisation, one table per experiment. Every number below
-is read from the run's record (`<run>.json`) and `summary.json` by
-`results/_analysis/p11/evidence_table.py` (gitignored; rerun it to
-reproduce this page). Superseded runs are in `results/_archive/<group>`
-with their own index (`results/_archive/README.md`); the engineering
-history behind them is in [dev/](dev/).
+The final runs first (facts about the records, no results), then the
+earlier live evidence, kept as history. Superseded runs are in
+`results/_archive/<group>` with their own index
+(`results/_archive/README.md`); the engineering history behind them is
+in [dev/](dev/).
 
-None of these are final paper runs: the final runs are made on the final
-commit, with repeat counts still to be decided
-([dev/phase3_backlog.md](dev/phase3_backlog.md)). All runs: deploy host
-(2 cores), STK 12.6 COM backend, dynamics-aware scheduler, graphics off
-unless stated, every record reportable.
+## Final runs (2026-10-19)
 
-## The reference signature
+Configuration and commands: [08_deploy_runbook.md](08_deploy_runbook.md)
+section 8. Deploy host, STK 12.6 COM backend, operator-started STK,
+automated twin (`--twin-launch matlab-batch`), each campaign from a
+clean tree. Requested runs from each folder's `campaign.json`; records
+are the `<run>.json` files, each read with `acav.run_record.read_record`.
+
+| Experiment | Folder(s) under `results/` | Commit | Requested | Records (all reportable) |
+|---|---|---|---:|---:|
+| E6 | `E6_final_db7cfb6` | db7cfb6 | 5 | 5 |
+| E1 | `E1_final_db7cfb6` | db7cfb6 | 24 | 12 |
+| E3 | `E3_final_db7cfb6` | db7cfb6 | 66 | 66 |
+| E2 | `E2_final_seed{1..10}_91f36b9` (2 each), `E2_final_ref_91f36b9` (2) | 91f36b9 | 22 | 22 |
+
+**E1.** 24 runs requested: 3 repeats x (the control, frame_pairing
+guard on and guard ablated, five other types guard on). 12 have a record: the control,
+angle_rate_units, distance_units and the frame_pairing read-back
+ablation (`readbackEcfAttitudeQuaternions`), 3 each. The other 12 ended
+without a record; each one's outcome, as `acav/run_outcome.py`
+`classify` gives it from its `<run_id>.logs/summary.json`:
+
+| Arm (3 repeats each, seeds 0-2) | Outcome | Evidence |
+|---|---|---|
+| quaternion_order, guard on | guard_fail_stop (`adcs:simulink_step:AttitudeMismatch`, quaternion residual 1.41421) | `E1-dynamics_aware-lockstep-seed{0,1,2}-mismatchQuaternionOrder.logs/summary.json` |
+| quaternion_conjugate, guard on | guard_fail_stop (residual 1.41118) | `...-mismatchQuaternionConjugate.logs/summary.json` |
+| frame_pairing, guard on | guard_fail_stop (residual 0.412327) | `...-readbackEcfAttitudeQuaternions-guardon.logs/summary.json` |
+| time_offset, guard on | fail_stop (failed step `twin_acking`) | `...-mismatchTimeOffset.logs/summary.json` |
+
+None was classified interrupted or infrastructure_failure.
+
+**Signature checks.**
+- All five E6_final records have the determinism signature of
+  `results/E6_smoke/E6-smoke-1.json`.
+- The commits between db7cfb6 and 91f36b9 (89c3c7e..91f36b9) change
+  scenario building and orchestration only (`git diff --stat
+  db7cfb6 91f36b9`: build_cli, campaign_cli, campaign_runner's resume
+  guard, e2_seeds, scenario_builder, the backends' `set_graphics_off`,
+  tests, the runbook). Where records at both commits are comparable, the
+  signatures are identical: both arms of the E2 reference
+  (`E2_final_ref_91f36b9` against
+  `results/_archive/20261019_results_cleanup/E2_superseded_db7cfb6/E2_final_ref_db7cfb6`)
+  and both arms of seed 1 (`E2_final_seed1_*`, same pair of folders).
+
+**E2 paired report and figures.** `results/E2_final_paired_91f36b9`:
+`paired_report.json` and `paired_report.txt` (the paired report over
+the ten seed folders, runbook section 8.4), and `figures/`, made by
+`src/acav/scripts/make_e2_paper_figures.py` (three figures as PDF, SVG
+and PNG, plus `E2_figure_data.json`). The reference arm is reported on
+its own (exit 0).
+
+**Moved on 2026-10-19:** the pilot and verification folders to
+`results/_archive/20261019_results_cleanup/pilots/`, the E2 attempts on
+db7cfb6 to `.../E2_superseded_db7cfb6/`, the operator's E2 attempt
+logs (`E2_all_seeds_*.log`) to `.../E2_operator_attempts/`.
+
+## Earlier live evidence (history)
+
+All the folders named in this section are in
+`results/_archive/20261019_results_cleanup/pilots/` (incidents: in
+`results/_archive/incidents/`). Numbers were read from each run's record
+and `summary.json` by `results/_analysis/p11/evidence_table.py`
+(gitignored). All runs: deploy host (2 cores), STK 12.6 COM backend,
+dynamics-aware scheduler, graphics off unless stated, every record
+reportable. None of them is a final run.
+
+### The reference signature
 
 results/E6_smoke/E6-smoke-1.json (code c291dfa, manual twin) is the
 lockstep determinism signature every later change is checked against:
@@ -22,7 +80,7 @@ lockstep determinism signature every later change is checked against:
 events, no SAFE. A lockstep run on the reference scenario with no fault
 must reproduce it exactly.
 
-## E6: loop cost
+### E6: loop cost
 
 Lockstep, reference scenario, automated twin. Per-step means from the
 bridge (BridgeStatus, weighted over the run), in ms:
@@ -45,7 +103,7 @@ bridge (BridgeStatus, weighted over the run), in ms:
 - E6_P9 seed1's wall time (22.0 min) includes an 11.5 min console stall
   (QuickEdit); its per-step means are not affected.
 
-## E3: lockstep against free-run
+### E3: lockstep against free-run
 
 Free-run, reference scenario. Lockstep reproduces the reference
 signature (E6 above); free-run signatures differ from it, as expected.
@@ -56,12 +114,13 @@ signature (E6 above); free-run signatures differ from it, as expected.
 | E3_P6_rtf05_8345551 | 8345551 | 0.5 | manual | 5/5 | 208.9 | 125.5 | 45.0 |
 | E3_P9_rtf1_9fed085 | 9fed085 | 1.0 | automated | 5/5 | 118.6 | 105.7 | 119.8 |
 
-One run per folder; the spread across repeats is not measured yet.
+One run per folder here; the final E3 (above) has repeats in every
+cell (lockstep 3, free-run rtf 1.0 5, rtf 0.5 3).
 Barrier wait is 0 in free-run (there is none). The start-gate wait is
 mostly MATLAB starting (manual: the operator; automated: launch, build
 and simulation start).
 
-## E3: fault replay (seed 4)
+### E3: fault replay (seed 4)
 
 Seeded saturation fault on wheel x at t = 218.375 s (`plan_fault(4)`),
 reference scenario, automated twin:
@@ -85,7 +144,7 @@ reference scenario, automated twin:
   the run itself does not record which STK process it used (recording
   started with 24b5eeb), so that is not verified from the record.
 
-## E2: scheduler comparison
+### E2: scheduler comparison
 
 | Folder | Code | Scenario | Scheduler | Attempted / targets | Captured | Saturation events |
 |---|---|---|---|---|---|---:|
@@ -93,15 +152,15 @@ reference scenario, automated twin:
 
 A check that generator version 2 scenarios run end to end (T10, T13,
 T16, T17 declined), not an E2 result: there is no kinematic arm. The E1
-and E2 runs on 5723028 are in results/_archive/old_code_E1_E2 and are
-to be re-run on the final commit.
+and E2 runs on 5723028 are in results/_archive/old_code_E1_E2; the
+final runs (above) replace them.
 
-## E1: convention mismatch
+### E1: convention mismatch
 
-No E1 run on current code; the earlier pair is in
-results/_archive/old_code_E1_E2 (5723028).
+Before the final runs, the only E1 pair was on 5723028, in
+results/_archive/old_code_E1_E2; the final E1 is above.
 
-## Incidents kept as evidence
+### Incidents kept as evidence
 
 results/_archive/incidents: E2_P10_seed1_d97800c (the twin stopped at
 its first step: a uint32/double class mismatch, fixed in 3186642) and
@@ -109,11 +168,12 @@ E5_P10_free1_3186642 (the bridge was still in convention validation
 when the runner's 90 s bound expired, on a COM-started STK; the bound is
 now 180 s and every startup phase is recorded).
 
-## Live verification session (d0bf796, 2026-10-17)
+### Live verification session (d0bf796, 2026-10-17)
 
 Operator-started STK (pid 21316, `stk_process` step), automated twin.
-Folders: results\LIVE_E6_d0bf796 (the E6 and E1 runs, in one folder by
-mistake) and results\LIVE_E3_d0bf796. Read with
+Folders: LIVE_E6_d0bf796 (the E6 and E1 runs, in one folder by
+mistake) and LIVE_E3_d0bf796, both now in
+results/_archive/20261019_results_cleanup/pilots/. Read with
 `results/_analysis/live_check/summarize_live_check.py`. Earlier attempts
 of each run are kept as `*.superseded-*`.
 
@@ -127,5 +187,7 @@ of each run are kept as `*.superseded-*`.
 
 What this does not show: the cause of the twin's "Server failed to
 start" (not established); a guard-on quaternion_order result in its
-latest attempt (to be retried); anything about repeat-to-repeat spread
-(one run per cell).
+latest attempt; anything about repeat-to-repeat spread (one run per
+cell). Since then the final E1 (above) classifies all three guard-on
+quaternion_order runs as guard_fail_stop, and the final runs have
+repeats per cell.

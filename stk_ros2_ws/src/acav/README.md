@@ -24,13 +24,14 @@ behind each one.
 | C2 | Build and verify the STK scenario; seeded scenarios | `scenario_builder.py`, `scenario_verifier.py`, `ground_track.py`, `stk_queries.py`, `scenario_generator.py`, `scenarios.py` |
 | C3 | The ADCS twin: a tested Python reference plus the MATLAB/Simulink model built from it | `attitude.py`, `twin_reference.py`, `twin_fixtures.py`, `../stk_matlab/+adcs/`, `../stk_matlab/simulink/build_acav_twin.m` |
 | C4 | The target scheduler (kinematic vs. dynamics-aware) as a ROS 2 node | `scheduling.py`, `capture_tracking.py`, `scheduler_node.py` |
-| C5 | The experiment harness: provenance, seeded faults, run matrices, the run orchestrator, the campaign CLI | `run_record.py`, `fault_injection.py`, `campaign.py`, `campaign_runner.py`, `campaign_cli.py`, `deploy_run_cli.py`, `twin_launcher.py`, `stk_process.py`, `console.py` |
+| C5 | The experiment harness: provenance, seeded faults, run matrices, the run orchestrator, the campaign CLI | `run_record.py`, `fault_injection.py`, `campaign.py`, `campaign_runner.py`, `campaign_cli.py`, `e2_seeds.py`, `deploy_run_cli.py`, `twin_launcher.py`, `stk_process.py`, `console.py` |
 | C6 | Analysis and figures from a campaign directory | `report_figures.py`, `report_style.py`, wired into `campaign_cli.py`'s `report` verb |
 
 All six are implemented and offline-tested. The experiments are E1, E2,
 E3 (lockstep against free-run, with the seeded fault replay) and E6
 ([`../../docs/C1_case_study_spec.md`](../../docs/C1_case_study_spec.md)
-section 9). Live evidence so far, none of it final:
+section 9). The final runs (E1, E3, E6 on db7cfb6; E2 on 91f36b9) and
+the earlier live evidence:
 [`../../docs/09_live_runs_and_results.md`](../../docs/09_live_runs_and_results.md).
 How to run each experiment:
 [`../../docs/08_deploy_runbook.md`](../../docs/08_deploy_runbook.md).
@@ -100,9 +101,14 @@ ros2 run acav run_acav_campaign report --experiment E6 --output-dir <folder> --r
 The run command is `scripts/run_acav_run.py` with the campaign's
 `{placeholders}`; the exact, checked commands for each experiment are in
 [`../../docs/08_deploy_runbook.md`](../../docs/08_deploy_runbook.md)
-section 4. `report` needs no STK, no MATLAB and no ROS, and writes
-`<folder>/figures/*.{pdf,svg,png}` unless `--no-figures` is given (it
-degrades to JSON-only if `matplotlib` is not installed).
+section 4. `report` needs no STK, no MATLAB and no ROS. A single-folder
+report writes `<folder>/figures/*.{pdf,svg,png}` unless `--no-figures`
+is given (it degrades to JSON-only if `matplotlib` is not installed);
+the E2 paired report (`--include-dir`) writes no figures. The JSON is
+printed, and written to a file only with `--json PATH`. E2 over the
+seeded scenarios runs in one command, `run_acav_campaign run-seeds`
+(runbook section 8.4); the E2 paper figures come from
+`scripts/make_e2_paper_figures.py`.
 
 ## Optional dependencies
 

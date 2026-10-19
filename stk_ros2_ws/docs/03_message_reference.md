@@ -94,7 +94,8 @@ capture hold window on `max_boresight_error_since_last_rad`
 is published, so both fields equal what the other fields already show,
 and lockstep results are unchanged (golden trace and the E6 signature).
 The free-run fault re-run on 3186642 counted the T3 blip at
-t = 127.235 s through this field (results/E5_P10_free2_3186642).
+t = 127.235 s through this field
+(results/_archive/20261019_results_cleanup/pilots/E5_P10_free2_3186642).
 
 ## Absence, not defaults
 

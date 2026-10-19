@@ -313,8 +313,8 @@ the per-step sequences are in sections 4 and 5.
 - **Terminal-epoch NO DATA.** At t = 720 s, the scenario's stop time,
   `Attitude Segment Quaternions` returns no data: the body-rate sample
   for that step is not published, the twin cannot acknowledge it, and
-  the bridge logs the missing sample (E6_P9 seed 0 `bridge.log`,
-  lines 284-290). The scheduler has written its record before then;
+  the bridge logs the missing sample (E6_P9_9fed085 seed 0 `bridge.log`,
+  lines 284-290, in results/_archive/20261019_results_cleanup/pilots/). The scheduler has written its record before then;
   results are not affected.
 - **PowerShell 5.1 quote stripping.** Windows PowerShell 5.1 removes
   embedded double quotes from arguments passed to native programs, so

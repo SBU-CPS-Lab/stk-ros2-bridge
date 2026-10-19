@@ -161,20 +161,22 @@ the fault made no difference rather than that the run was reproduced.
 |---|---|---:|---|
 | `build_e1_matrix` | E1 | `--repeats` x (1 + 2 + 5) | control, frame_pairing guard on and ablated, five more guard-on mismatch types (`--e1-types`), lockstep |
 | `build_e2_scheduler_comparison` | E2 | 2 | kinematic and dynamics-aware, lockstep, on `--scenario` (reference by default) |
-| `build_e3_matrix` | E3 | (1 + `--fault-seeds`) x (2 + 2 x `--repeats`) | per fault cell (none, seeds 0..K-1): lockstep x 2, free-run rtf 1.0 and 0.5 x `--repeats`; `build_e3_determinism` remains for the older two-mode form |
+| `build_e3_matrix` | E3 | (1 + `--fault-seeds`) x (L + R1 + R05) | per fault cell (none, seeds 0..K-1): lockstep x L (`--repeats-lockstep`, default 2), free-run rtf 1.0 x R1 (`--repeats`), free-run rtf 0.5 x R05 (`--repeats-rtf05`, default `--repeats`); `build_e3_determinism` remains for the older two-mode form |
 | `build_e5_fault_campaign` | E5 | `--seeds` | one seeded wheel fault per seed, lockstep |
 | `build_e6_latency` | E6 | `--repeats` | identical lockstep runs |
 
-The real-time factor is not part of a matrix: it is passed to every run
-through the launch command (`--real-time-factor 0.5` after `--`), and
-recorded per run. E3 at rtf 0.5 is therefore its own campaign directory.
+The real-time factor is part of the E3 matrix (`RunSpec.real_time_factor`):
+the campaign substitutes it into each run's command through
+`{real_time_factor}` and checks it against the record, so all three
+modes share one E3 campaign directory. Outside a campaign it is given
+to a single run as `--real-time-factor`.
 
 **E3's fault replay** is part of the E3 matrix: every mode gets the same
 seeded faults, and the rate reaches each run through `{real_time_factor}`
 (`RunSpec.real_time_factor`, checked against the record). The plan emits
 every run's exact command (`campaign_runner.planned_commands`). The
-earlier free-run fault runs (results/E5_P9d_free1,
-results/E5_P10_free2_3186642) predate it and were started by an analysis
+earlier free-run fault runs (E5_P9d_free1, E5_P10_free2_3186642, now in
+results/_archive/20261019_results_cleanup/pilots/) predate it and were started by an analysis
 script; the E5 builder still plans lockstep fault runs for old folders.
 
 E3 sets the same seeds on both sides so that an identical free-run batch
@@ -229,19 +231,30 @@ graphics mode, real-time factor, MATLAB version, STK process.
 
 ## 6. The campaign runner
 
-`run_acav_campaign {plan,run,report}` (`acav/campaign_cli.py`,
-`acav/campaign_runner.py`):
+`run_acav_campaign {plan,run,report,run-seeds}` (`acav/campaign_cli.py`,
+`acav/campaign_runner.py`, `acav/e2_seeds.py`):
 
 - **plan** writes `campaign.json` and lists the runs; launches nothing.
 - **run** executes the matrix with the launch command after `--`
   (`CommandLauncher` placeholders: `{run_id}`, `{experiment}`,
   `{scheduler}`, `{execution_mode}`, `{seed}`, `{output}`,
   `{scenario}`, `{backend}`, `{attitude_provider}`, `{run_config}`,
-  `{gains_json}`, `{fault_json}`, `{twin_launch}`). Arguments are passed
+  `{gains_json}`, `{fault_json}`, `{mismatch}`, `{mismatch_guard}`,
+  `{real_time_factor}`, `{twin_launch}`). Arguments are passed
   as a list, so a value with spaces or quotes reaches the run intact.
   With `--twin-launch matlab-batch` the runner appends
   `--twin-launch matlab-batch` to each run's command.
 - **report** reads the directory; it needs no STK and no MATLAB.
+- **run-seeds** (E2 only) runs E2 over seeded scenarios and the
+  reference in one command: per seed it builds and verifies the scenario
+  (closing any open scenario first, leaving graphics off and checking
+  it), skips a seed whose records are complete on this commit, and runs
+  E2 into `E2_final_seed<k>_<tag>`; then it rebuilds the reference, runs
+  its arm into `E2_final_ref_<tag>` and makes the reference and paired
+  reports. It refuses a dirty tree, and a `--commit-tag` that is not
+  HEAD (default: HEAD's short hash); seed files come from
+  `--scenario-dir` (default `src/acav/config/scenarios/generated` under
+  the current directory) and are checked before anything is built.
 
 **Resume rules.** A run whose record exists, is readable, matches the
 requested run (seed, fault, scheduler, gains, scenario targets) and
@@ -271,7 +284,9 @@ attempted target; access computed over a written attitude. `report`
 exits 1 and names any unreportable record.
 
 **Target coverage.** Each record must name a known scenario by digest
-(the reference, a committed generated seed, or `--scenario`) and contain
+(the reference, `--scenario`, or a generated scenario in `--scenario-dir`,
+in `src/acav/config/scenarios/generated` under the current directory, or
+next to the package) and contain
 exactly that scenario's targets (`run_record.target_coverage_problems`;
 legacy digests via `LEGACY_SCENARIO_DIGESTS`).
 

@@ -419,3 +419,35 @@ the determinism signature.
 | Gains provenance | Gains are recorded as configured (`scheduler_node.py:200-205`, `:859`), not observed from the twin; nominal runs carry `{}`, meaning the twin defaults in `+adcs/config.m` (duplicated in `acav/twin_reference.py` `TwinConfig`) | No: every final run uses the nominal gains (no gain sweep; E4 removed) | The twin's gains are the nominal defaults (C3 section 3) |
 | 4 skipped tests | `test_conversions.py:20` (needs a sourced ROS 2 workspace), `test_qos_lockstep.py:4` (rclpy), `test_flake8.py:16`, `test_pep257.py:12` (ament linters): not run by the offline suite | No: conversions and QoS are exercised by every live run; the two others are style checks | Nothing; they are unverified in the offline suite, not in the live runs |
 | PropagatorName / rate groups | `scenario_builder.py:294` names the propagator in its SetState from the build report (`HPOP` unless the fallback applied); rate groups are `bridge_params_acav.yaml:120-123` (fast 10 Hz, medium 1 Hz, slow 0.1 Hz); the free-run pacer period is the fastest group's | No change between runs; the fallback would be visible in the build report | The step is 0.1 s; HPOP as built (check the build report of the final session) |
+
+## State at c78a6de (recorded 2026-10-19)
+
+The sections above are kept as written. Closed since:
+
+| Item (where listed above) | State | Evidence |
+|---|---|---|
+| Repeat counts (2026-10-17 sections) | Decided: E6 5; E1 3 repeats; E3 lockstep 3, rtf 1.0 5, rtf 0.5 3, 5 fault seeds; E2 seeds 1-10 plus the reference | docs/08_deploy_runbook.md section 8 |
+| Per-rate repeats for E3 | Supported: `--repeats-lockstep`, `--repeats-rtf05` | 4972adb (tests), 56f2e18 |
+| Free-run rtf 0.5 wall time with an automated twin | Measured, 27.3 min from one run; the plan uses it | 57dbbfd; `acav/campaign.py` `MEASURED_WALL_MIN` |
+| MissionMode chart | Decided: not wired; kept as the specification of `adcs.mission_mode` | docs/C1_case_study_spec.md section 9, limitations |
+| One folder per experiment | Done | docs/08_deploy_runbook.md sections 4 and 8 |
+| Final runs | Done: E1, E3, E6 on db7cfb6; E2 on 91f36b9 | docs/09_live_runs_and_results.md, Final runs |
+| E2 seeds one after another | `run_acav_campaign run-seeds` (closes the open scenario, leaves graphics off and checks it, skips complete seeds on the same commit, refuses records from another commit) | 89c3c7e (tests), 8e416e4; seed paths from the workspace: d52b730 (tests), 499e4bc |
+| Report's lookup of seeded scenarios through `ros2 run` | Searches the workspace `src` tree and `--scenario-dir` | 2e6be6e (tests), 53004a3 |
+| The E2 paper figure script | In the repo: `src/acav/scripts/make_e2_paper_figures.py` | 2aeb988 (test), c78a6de |
+
+Line references above are to their own commits. Since 8e416e4 the HPOP
+selection is at `scenario_builder.py:268` (was `:246`) and the
+SetState propagator name at `:316` (was `:294`).
+
+Still open:
+- **E1 quaternion_order retry** (2026-10-17). In the final E1
+  (results/E1_final_db7cfb6) `acav/run_outcome.py` classifies all three
+  guard-on quaternion_order runs as guard_fail_stop, from their
+  `summary.json`.
+- **The cause of "Server failed to start. Details: Transport
+  stopped."**: not established. No final E1 run was classified
+  infrastructure_failure.
+- **Paper text** from the final records only.
+- **The E4 comments** in the scenario YAMLs, `+adcs/config.m` and
+  `build_acav_twin.m`: unchanged (no fingerprint change since).

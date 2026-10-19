@@ -132,14 +132,17 @@ the paper makes no claim about it; seeded scenarios omit it.
 
 ## 8. Compute budget (measured)
 
-A lockstep step costs about 60 ms on the deploy host (E6, graphics off,
-operator-started STK; [09_live_runs_and_results.md](09_live_runs_and_results.md)).
-Measured wall time per automated run, including MATLAB start and build:
+A lockstep step costs about 60 ms on the deploy host (E6 pilot runs,
+graphics off, operator-started STK; [09_live_runs_and_results.md](09_live_runs_and_results.md)).
+Measured wall time per automated run, including MATLAB start and build,
+from the pilot runs now in `results/_archive/20261019_results_cleanup/pilots/`
+(the values the plan uses, `acav/campaign.py` `MEASURED_WALL_MIN`):
 
 | Run kind | Wall time per run | Source |
 |---|---|---|
 | Lockstep, rtf n/a | 9.5-11.4 min | E5_P9d_lock1/2, E6_P9 seed0/2, E2_P10_seed1 |
 | Free-run, rtf 1.0 | 15.3-16.2 min | E3_P9_rtf1, E5_P9d_free1, E5_P10_free2 |
+| Free-run, rtf 0.5 | 27.3 min (one run, automated twin) | LIVE_E3_d0bf796 |
 | Free-run, rtf 0.5 | 37.6 min (one run, manual twin) | E3_P6_rtf05_8345551 |
 
 Commitments: the scenario is one 12-minute window, not a full orbit;
@@ -182,7 +185,7 @@ The table states expectations from offline reference checks
   not describe it as running in the loop. Not changed for the final runs
   (wiring it changes the twin fingerprint).
 - **HPOP physical properties.** The builder selects HPOP
-  (`acav/scenario_builder.py:246`) but does not apply `mass_kg`
+  (`acav/scenario_builder.py:268`) but does not apply `mass_kg`
   (`acav_scenario.yaml:47`, read at `acav/spec.py:183` and only printed)
   or any drag/SRP area: HPOP uses STK's own defaults for them. The same
   for every run and arm. The paper must not state that the orbit uses
@@ -194,9 +197,11 @@ merged into E3; the E5 campaign builder still
 plans the seeded lockstep fault runs (`run_acav_campaign --experiment
 E5`). Candidate studies not yet decided (a communication-step study, an
 offline file-exchange baseline) are in
-[dev/phase3_backlog.md](dev/phase3_backlog.md), not here. Repeat
-counts for the final runs are not fixed yet; the runbook writes them as
-parameters ([08_deploy_runbook.md](08_deploy_runbook.md)).
+[dev/phase3_backlog.md](dev/phase3_backlog.md), not here. The repeat
+counts for the final runs, and the final runs themselves (E1, E3, E6 on
+db7cfb6; E2 on 91f36b9), are in
+[08_deploy_runbook.md](08_deploy_runbook.md) section 8 and
+[09_live_runs_and_results.md](09_live_runs_and_results.md).
 
 ## 10. Executable contracts
 

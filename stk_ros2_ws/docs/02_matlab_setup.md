@@ -79,7 +79,7 @@ The runner waits up to 252.6 s for the first ack
 start plus build plus simulation start, at least 180 s). Across the 11
 automated runs with a clean stop up to 2026-10-17, launch to first ack
 took 103.4-113.2 s, and 152.2 s in one run whose MATLAB was slower in
-every phase (results/E5_P10_free2_3186642). Stopping writes the stop
+every phase (results/_archive/20261019_results_cleanup/pilots/E5_P10_free2_3186642). Stopping writes the stop
 file and waits up to 120 s; if MATLAB has not exited, the runner kills
 the process tree it started, by its own PID only.
 

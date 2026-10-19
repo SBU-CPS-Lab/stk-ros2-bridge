@@ -50,7 +50,10 @@ colcon build --symlink-install
 . install\local_setup.ps1               # this workspace
 ```
 
-After any change to a `.msg` file, rebuild with colcon **and**
+After any code change, rebuild (`colcon build --symlink-install`) and
+source `install\local_setup.ps1` again before the next `ros2 run`:
+`ros2 run` executes the installed package, so a new module or entry
+point is not seen until then. After a change to a `.msg` file, also
 regenerate MATLAB's message types
 ([02_matlab_setup.md](02_matlab_setup.md) section 3).
 

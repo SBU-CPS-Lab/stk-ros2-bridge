@@ -70,7 +70,8 @@ state, republishes it every 2 s, and opens the gate when every barrier
 participant has acked; the clock then runs from t = 0. The wait is
 recorded in `startup_gate.json` and in summary.json
 (`free_run_start_gate.wait_s`; e.g. 176.5 s in
-results/E5_P10_free2_3186642, most of it MATLAB starting and building).
+results/_archive/20261019_results_cleanup/pilots/E5_P10_free2_3186642,
+most of it MATLAB starting and building).
 Without the gate the window ran on through MATLAB's start.
 
 **Pacer** (`core/free_run_pacer.py`). Cycles are scheduled at
@@ -115,7 +116,8 @@ and makes the record unreportable ([C4_scheduler.md](C4_scheduler.md)).
 ## 3. Rates and costs
 
 On the deploy host (2 cores) a lockstep step costs about 60 ms in E6
-with graphics off and an operator-started STK (E6_P9_9fed085: 60.0,
+with graphics off and an operator-started STK (E6_P9_9fed085, in
+results/_archive/20261019_results_cleanup/pilots/: 60.0,
 61.1 and 60.2 ms; sense 34.3-34.6 ms), so the 7200 steps of the 720 s
 window take about 7 minutes of stepping, plus startup. Sensing
 dominates. See

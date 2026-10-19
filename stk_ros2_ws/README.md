@@ -36,7 +36,9 @@ python -m pytest src/acav/test src/stk_bridge/test -q -p no:cacheprovider -rs
 ```
 
 The offline suite needs no ROS, STK or MATLAB; four tests are skipped
-outside a sourced ROS 2 workspace. Then
+outside a sourced ROS 2 workspace. After any code change, repeat the
+`colcon build --symlink-install` and `. install\local_setup.ps1` lines
+before the next `ros2 run`. Then
 [01_installation_windows.md](docs/01_installation_windows.md) for STK,
 [02_matlab_setup.md](docs/02_matlab_setup.md) for MATLAB, and
 [08_deploy_runbook.md](docs/08_deploy_runbook.md) to run experiments.
@@ -61,7 +63,7 @@ outside a sourced ROS 2 workspace. Then
 | [06_troubleshooting.md](docs/06_troubleshooting.md) | Failed run steps and what to do; STK 12.6 findings from bring-up |
 | [07_extending_backends.md](docs/07_extending_backends.md) | Adding a backend or capability without breaking the layering |
 | [08_deploy_runbook.md](docs/08_deploy_runbook.md) | Operator manual: checklist, scenario build, one section per experiment |
-| [09_live_runs_and_results.md](docs/09_live_runs_and_results.md) | Current evidence, one table per experiment, numbers from the records |
+| [09_live_runs_and_results.md](docs/09_live_runs_and_results.md) | The final runs (folders, commits, record counts, checks), then the earlier live evidence as history |
 | [C1_case_study_spec.md](docs/C1_case_study_spec.md) | The ACAV claim, vehicle, scenarios, capture criterion, experiments |
 | [C3_adcs_twin.md](docs/C3_adcs_twin.md) | The twin: reference and MATLAB, modes, how it runs in each mode, tests |
 | [C4_scheduler.md](docs/C4_scheduler.md) | The two scheduling policies, access deferral, scoring |
