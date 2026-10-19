@@ -59,7 +59,6 @@ def _workspace(root):
     return out / "figures"
 
 
-@pytest.mark.xfail(strict=True, reason="script not in the repo yet")
 def test_the_three_figures_are_written(tmp_path):
     figures = _workspace(tmp_path)
     env = dict(os.environ, PYTHONPATH=PACKAGE, MPLBACKEND="Agg")
