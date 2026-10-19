@@ -374,6 +374,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seeds", dest="seeds_range", default="100",
                         help="E5: Monte Carlo seeds (default 100); "
                              "run-seeds: the seeded scenarios, e.g. 1-10")
+    parser.add_argument("--scenario-dir", default="", metavar="DIR",
+                        help="run-seeds: folder of acav_seed<k>.yaml "
+                             "(default: src/acav/config/scenarios/"
+                             "generated under the current directory)")
     parser.add_argument("--commit-tag", default="", metavar="TAG",
                         help="run-seeds: folder suffix (default: HEAD's "
                              "short hash; a given tag must match HEAD)")
@@ -505,7 +509,8 @@ def _run_seeds(args) -> int:
         return run_seeds(seeds=args.seeds_range, tag=tag,
                          results_dir=args.output_dir, backend=args.backend,
                          twin_launch=args.twin_launch, launch=args.launch,
-                         build=build, campaign=_main, version=version)
+                         build=build, campaign=_main, version=version,
+                         scenario_dir=args.scenario_dir)
     except ValueError as error:
         LOGGER.error("%s", error)
         return 2

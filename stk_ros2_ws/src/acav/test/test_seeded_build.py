@@ -221,9 +221,6 @@ def test_resume_refuses_seeded_records_from_other_code(tmp_path):
 # build\acav, where generated\acav_seed*.yaml does not exist, and
 # run-seeds failed before building anything.
 
-FIXED = pytest.mark.xfail(strict=True, reason="not fixed yet")
-
-
 def _workspace(tmp_path, seeds):
     """A workspace whose src tree holds the seeded scenarios; the
     package itself is elsewhere (the installed layout)."""
@@ -256,7 +253,6 @@ class Recorder(Calls):
         return super().campaign(argv)
 
 
-@FIXED
 def test_seeds_resolve_under_the_workspace_src_tree(tmp_path, monkeypatch):
     import os
 
@@ -275,7 +271,6 @@ def test_seeds_resolve_under_the_workspace_src_tree(tmp_path, monkeypatch):
         assert argv[argv.index("--scenario") + 1] == path
 
 
-@FIXED
 def test_missing_seed_files_fail_before_any_build(tmp_path, capsys):
     from acav.e2_seeds import run_seeds
     _, generated = _workspace(tmp_path, (1,))
@@ -289,7 +284,6 @@ def test_missing_seed_files_fail_before_any_build(tmp_path, capsys):
     assert "acav_seed2.yaml" in err and "acav_seed3.yaml" in err
 
 
-@FIXED
 def test_the_verb_takes_a_scenario_dir():
     from acav.campaign_cli import _parser
     args = _parser().parse_args(["run-seeds", "--experiment", "E2",

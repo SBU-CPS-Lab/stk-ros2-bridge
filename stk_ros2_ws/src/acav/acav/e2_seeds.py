@@ -20,11 +20,14 @@ tree is clean and that the tag is HEAD's before calling it.
 from __future__ import annotations
 
 import os
+import sys
 from typing import Callable, Dict, List, Optional, Sequence
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-GENERATED = os.path.join(os.path.dirname(HERE), "config", "scenarios",
-                         "generated")
+#: The seeded scenarios, relative to the workspace (the current
+#: directory): through `ros2 run` this package is the installed copy,
+#: which has no generated scenarios beside it.
+SCENARIO_DIR = os.path.join("src", "acav", "config", "scenarios",
+                            "generated")
 
 
 def parse_seeds(text: str) -> List[int]:
@@ -44,8 +47,11 @@ def parse_seeds(text: str) -> List[int]:
     return seeds
 
 
-def seed_scenario(seed: int) -> str:
-    return os.path.join(GENERATED, f"acav_seed{seed}.yaml")
+def seed_scenario(seed: int, scenario_dir: str = "") -> str:
+    """Absolute path of seed's scenario: the same path goes to the
+    builder, to the campaign (--scenario) and so to {scenario}."""
+    return os.path.join(os.path.abspath(scenario_dir or SCENARIO_DIR),
+                        f"acav_seed{seed}.yaml")
 
 
 def usable_runs(out: str, scenario: str, version: Optional[str] = None
@@ -73,8 +79,17 @@ def run_seeds(seeds: str, tag: str, results_dir: str, backend: str,
               build: Callable[[str], int],
               campaign: Callable[[List[str]], int],
               is_complete: Optional[Callable[[str, str], bool]] = None,
-              version: Optional[str] = None) -> int:
+              version: Optional[str] = None,
+              scenario_dir: str = "") -> int:
     results_dir = os.path.abspath(results_dir)
+    seed_list = parse_seeds(seeds)
+    missing = [seed_scenario(s, scenario_dir) for s in seed_list
+               if not os.path.isfile(seed_scenario(s, scenario_dir))]
+    if missing:
+        print("run-seeds: seeded scenario file(s) not found (run from the "
+              "workspace root, or give --scenario-dir); nothing was "
+              "built:\n  " + "\n  ".join(missing), file=sys.stderr)
+        return 2
 
     def complete(out, scenario):
         if is_complete is not None:
@@ -92,8 +107,8 @@ def run_seeds(seeds: str, tag: str, results_dir: str, backend: str,
     rows: List[Dict] = []
     failed = False
     seed_folders: List[str] = []
-    for seed in parse_seeds(seeds):
-        scenario = seed_scenario(seed)
+    for seed in seed_list:
+        scenario = seed_scenario(seed, scenario_dir)
         out = os.path.join(results_dir, f"E2_final_seed{seed}_{tag}")
         seed_folders.append(out)
         row = {"arm": f"seed {seed}", "folder": out, "build": "skipped",
@@ -136,7 +151,7 @@ def run_seeds(seeds: str, tag: str, results_dir: str, backend: str,
 
     print("\nE2 run-seeds summary:")
     for row in rows:
-        scenario = (seed_scenario(int(row["arm"].split()[1]))
+        scenario = (seed_scenario(int(row["arm"].split()[1]), scenario_dir)
                     if row["arm"].startswith("seed") else "")
         try:
             usable, requested = usable_runs(row["folder"], scenario or
