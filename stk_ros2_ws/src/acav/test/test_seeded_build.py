@@ -147,11 +147,13 @@ class Calls:
 
 def _run_seeds(tmp_path, calls, seeds="1-3"):
     from acav.e2_seeds import run_seeds
+    from test_paired_report import GENERATED
     return run_seeds(seeds="1-3" if seeds is None else seeds, tag="t1",
                      results_dir=str(tmp_path), backend="com",
                      twin_launch="matlab-batch", launch=["python", "x.py"],
                      build=calls.build, campaign=calls.campaign,
-                     is_complete=calls.is_complete)
+                     is_complete=calls.is_complete,
+                     scenario_dir=GENERATED)
 
 
 def test_a_failed_build_stops_that_seed_only(tmp_path):
