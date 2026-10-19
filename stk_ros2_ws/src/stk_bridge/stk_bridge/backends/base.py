@@ -472,6 +472,13 @@ class StkBackend(abc.ABC):
         """
         return None
 
+    def set_graphics_off(self) -> None:
+        """Close STK Desktop's 2D/3D Graphics windows and minimise it.
+
+        The write-side counterpart of :meth:`graphics_state`, called only
+        by the scenario builder; a no-op where there are no windows.
+        """
+
     @abc.abstractmethod
     def list_objects(self) -> List[ObjectInfo]: ...
 

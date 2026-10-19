@@ -502,6 +502,27 @@ class ComBackend(StkBackend):
         return {"windows_2d": windows_2d, "windows_3d": windows_3d,
                 "main_window": state, "visible": bool(self._stk.Visible)}
 
+    def set_graphics_off(self) -> None:
+        """Close every 2D/3D Graphics window and minimise STK Desktop.
+
+        Called only by the scenario builder after a build (never during
+        a run); the caller reads :meth:`graphics_state` back to check.
+        IAgUiWindow.Close and IAgUiApplication.WindowState (agi.stk12
+        uicore.py / uiapplication.py).
+        """
+        if self._stk is None:
+            return
+        from agi.stk12.uicore import AgEWindowService, AgEWindowState
+
+        graphics = [window for window in self._stk.Windows
+                    if window.GetServiceByType(
+                        AgEWindowService.eWindowService2DWindow) is not None
+                    or window.GetServiceByType(
+                        AgEWindowService.eWindowService3DWindow) is not None]
+        for window in graphics:
+            window.Close()
+        self._stk.WindowState = AgEWindowState.eWindowStateMinimized
+
     def get_scenario_stop_time(self) -> StkTime:
         self.require_connected()
         scenario = self._root.CurrentScenario

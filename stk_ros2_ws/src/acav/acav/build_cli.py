@@ -112,6 +112,9 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--verify", action="store_true",
                         help="run verify_acav_scenario's checks in the same "
                              "process once the build finishes")
+    parser.add_argument("--leave-graphics", action="store_true",
+                        help="do not close STK's 2D/3D Graphics windows and "
+                             "minimise it after a successful build")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -145,6 +148,9 @@ def main(argv: Optional[list] = None) -> int:
             if not verification.ok:
                 exit_code = 1
 
+        if exit_code == 0 and not args.leave_graphics:
+            exit_code = leave_graphics_off(backend)
+
         if args.save:
             try:
                 backend.save_scenario(args.save)
@@ -159,6 +165,27 @@ def main(argv: Optional[list] = None) -> int:
         backend.disconnect()
 
     return exit_code
+
+
+def leave_graphics_off(backend) -> int:
+    """Close the 2D/3D windows and minimise STK; 1 unless then 'off'.
+
+    'off' is the run guard's own rule (stk_bridge.core.graphics_state).
+    A backend without STK Desktop windows (mock, Connect) is skipped.
+    """
+    from stk_bridge.core import graphics_state
+
+    if backend.graphics_state() is None:
+        return 0
+    backend.set_graphics_off()
+    state = backend.graphics_state()
+    if graphics_state.classify(state) == graphics_state.OFF:
+        print("STK graphics left off (2D/3D windows closed, minimised)")
+        return 0
+    print(f"STK graphics is not off after the build: {state}; close the "
+          "2D/3D Graphics windows and minimise STK by hand",
+          file=sys.stderr)
+    return 1
 
 
 def _build_payload(report) -> dict:

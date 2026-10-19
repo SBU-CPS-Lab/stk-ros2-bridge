@@ -343,7 +343,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="run_acav_campaign",
         description="Plan, run and report the ACAV experiment campaigns.")
-    parser.add_argument("verb", choices=("plan", "run", "report"))
+    parser.add_argument("verb", choices=("plan", "run", "report", "run-seeds"))
     parser.add_argument("--experiment", required=True, choices=EXPERIMENTS)
     parser.add_argument("--output-dir", required=True, metavar="DIR")
     parser.add_argument("--scenario", default="", metavar="PATH",
@@ -371,8 +371,12 @@ def _parser() -> argparse.ArgumentParser:
                         metavar="T1,T2,...",
                         help="E1: comma-separated mismatch types (default "
                              "all six: " + ", ".join(E1_MISMATCH_TYPES) + ")")
-    parser.add_argument("--seeds", type=int, default=100,
-                        help="E5: Monte Carlo seeds (default 100)")
+    parser.add_argument("--seeds", dest="seeds_range", default="100",
+                        help="E5: Monte Carlo seeds (default 100); "
+                             "run-seeds: the seeded scenarios, e.g. 1-10")
+    parser.add_argument("--commit-tag", default="", metavar="TAG",
+                        help="run-seeds: folder suffix (default: HEAD's "
+                             "short hash; a given tag must match HEAD)")
     parser.add_argument("--no-resume", action="store_true",
                         help="re-run everything, including completed runs")
     parser.add_argument("--resume-across-code-versions", action="store_true",
@@ -410,6 +414,11 @@ def main(argv: Optional[list] = None) -> int:
     from acav.console import configure_console_logging
     configure_console_logging(
         logging.INFO, "%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+    return _main(argv)
+
+
+def _main(argv: Optional[list] = None) -> int:
+    """main without the logging set-up (run-seeds calls it per arm)."""
     # Split on -- by hand rather than with argparse.REMAINDER, which
     # grabs everything after the first positional -- including this
     # command's own options -- and reports them as missing.
@@ -421,6 +430,8 @@ def main(argv: Optional[list] = None) -> int:
 
     args = _parser().parse_args(argv)
     args.launch = launch
+    if args.verb == "run-seeds":
+        return _run_seeds(args)
 
     try:
         spec = AcavSpec.load(args.scenario or None)
@@ -433,7 +444,8 @@ def main(argv: Optional[list] = None) -> int:
         e1_types = tuple(t.strip() for t in args.e1_types.split(",")
                          if t.strip())
         campaign = build_campaign(args.experiment, spec, scenario_path,
-                                  args.backend, args.repeats, args.seeds,
+                                  args.backend, args.repeats,
+                                  int(args.seeds_range),
                                   e1_types, args.fault_seeds,
                                   args.repeats_lockstep, args.repeats_rtf05)
     except ValueError as error:
@@ -445,6 +457,58 @@ def main(argv: Optional[list] = None) -> int:
     if args.verb == "run":
         return _run(campaign, args)
     return _report(campaign, args, len(spec.targets))
+
+
+def _run_seeds(args) -> int:
+    """E2 over seeded scenarios and the reference (acav/e2_seeds.py).
+
+    Refused unless the checkout is a clean commit and the tag names it:
+    the paired analysis refuses records from different code, so every
+    seed and the reference arm must come from this one commit.
+    """
+    from acav import build_cli, code_version
+    from acav.e2_seeds import run_seeds
+
+    if args.experiment != "E2":
+        LOGGER.error("run-seeds is for --experiment E2 only")
+        return 2
+    if args.scenario:
+        LOGGER.error("run-seeds chooses the scenarios itself; drop "
+                     "--scenario")
+        return 2
+    if not args.launch:
+        LOGGER.error("run-seeds needs the per-run command after --")
+        return 2
+    version = code_version.describe(prefer_env=False)
+    if not code_version.is_clean(version):
+        LOGGER.error("run-seeds refused: the checkout is not a clean "
+                     "commit (%s); commit or stash first", version)
+        return 2
+    tag = args.commit_tag or version[:7]
+    if not (len(tag) >= 7 and version.startswith(tag)):
+        LOGGER.error("run-seeds refused: --commit-tag %s is not HEAD "
+                     "(%s)", tag, version[:7])
+        return 2
+
+    def build(scenario: str) -> int:
+        argv = ["--backend", args.backend, "--verify"]
+        if scenario:
+            argv += ["--scenario", scenario]
+        try:
+            return build_cli.main(argv)
+        except SystemExit as exit_:
+            return int(exit_.code or 0) or 2
+
+    LOGGER.info("run-seeds: seeds %s, commit %s, folders *_%s",
+                args.seeds_range, version, tag)
+    try:
+        return run_seeds(seeds=args.seeds_range, tag=tag,
+                         results_dir=args.output_dir, backend=args.backend,
+                         twin_launch=args.twin_launch, launch=args.launch,
+                         build=build, campaign=_main, version=version)
+    except ValueError as error:
+        LOGGER.error("%s", error)
+        return 2
 
 
 def _plan(campaign: Campaign, args) -> int:

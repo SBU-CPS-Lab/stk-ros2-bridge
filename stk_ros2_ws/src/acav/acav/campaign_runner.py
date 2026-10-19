@@ -308,9 +308,12 @@ def _refuse_resume_across_code(campaign: Campaign,
         return
     tree_of = options.tree_of or code_version.tree_of
     conflicts = []
+    # Checked against the campaign's own scenario: against the reference,
+    # every seeded record "does not match" and would escape this check.
+    scenario = scenario_targets(campaign.scenario_path)
     for run in campaign.runs:
         record = _load_if_usable(
-            run, os.path.join(options.output_dir, run.output_name))
+            run, os.path.join(options.output_dir, run.output_name), scenario)
         if record is None:
             continue
         recorded = record.provenance.code_version

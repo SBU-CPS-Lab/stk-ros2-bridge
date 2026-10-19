@@ -26,9 +26,6 @@ from acav.scenario_builder import AcavScenarioBuilder
 from acav.spec import AcavSpec
 from stk_bridge.backends.mock_backend import MockBackend
 
-PENDING = pytest.mark.xfail(strict=True, reason="not implemented yet")
-
-
 class Spy(MockBackend):
     def __init__(self, keep_open=False):
         super().__init__()
@@ -49,7 +46,6 @@ def _spy(open_first, keep_open=False):
     return backend
 
 
-@PENDING
 def test_an_open_scenario_is_closed_then_built():
     backend = _spy(open_first=True)
     report = AcavScenarioBuilder(backend, AcavSpec.load()).build()
@@ -66,7 +62,6 @@ def test_with_no_scenario_open_nothing_is_closed():
     assert report.ok, report.errors
 
 
-@PENDING
 def test_a_scenario_that_will_not_close_fails_the_build():
     backend = _spy(open_first=True, keep_open=True)
     report = AcavScenarioBuilder(backend, AcavSpec.load()).build()
@@ -102,7 +97,6 @@ def _build(monkeypatch, backend, extra=()):
     return build_cli.main(["--backend", "com", "--verify"] + list(extra))
 
 
-@PENDING
 def test_the_build_leaves_graphics_off(monkeypatch):
     backend = Desktop()
     assert _build(monkeypatch, backend) == 0
@@ -110,7 +104,6 @@ def test_the_build_leaves_graphics_off(monkeypatch):
     assert backend.state["main_window"] == "minimized"
 
 
-@PENDING
 def test_graphics_that_stay_on_fail_the_build(monkeypatch, capsys):
     backend = Desktop(obeys=False)
     assert _build(monkeypatch, backend) == 1
@@ -118,7 +111,6 @@ def test_graphics_that_stay_on_fail_the_build(monkeypatch, capsys):
         capsys.readouterr().err
 
 
-@PENDING
 def test_leave_graphics_skips_it(monkeypatch):
     backend = Desktop(obeys=False)
     assert _build(monkeypatch, backend, ["--leave-graphics"]) == 0
@@ -162,7 +154,6 @@ def _run_seeds(tmp_path, calls, seeds="1-3"):
                      is_complete=calls.is_complete)
 
 
-@PENDING
 def test_a_failed_build_stops_that_seed_only(tmp_path):
     calls = Calls(failing_builds={"2"})
     code = _run_seeds(tmp_path, calls)
@@ -172,7 +163,6 @@ def test_a_failed_build_stops_that_seed_only(tmp_path):
     assert ("run", "E2_final_seed3_t1") in calls.log
 
 
-@PENDING
 def test_a_complete_seed_is_neither_built_nor_run(tmp_path):
     calls = Calls(complete={"1"})
     assert _run_seeds(tmp_path, calls) == 0
@@ -180,7 +170,6 @@ def test_a_complete_seed_is_neither_built_nor_run(tmp_path):
     assert ("run", "E2_final_seed1_t1") not in calls.log
 
 
-@PENDING
 def test_the_reference_is_rebuilt_before_the_reports(tmp_path):
     calls = Calls()
     assert _run_seeds(tmp_path, calls) == 0
@@ -191,12 +180,10 @@ def test_the_reference_is_rebuilt_before_the_reports(tmp_path):
     assert calls.log.index(("run", "E2_final_ref_t1")) > rebuilt
 
 
-@PENDING
 def test_a_failed_run_makes_the_exit_non_zero(tmp_path):
     assert _run_seeds(tmp_path, Calls(failing_runs={"3"})) != 0
 
 
-@PENDING
 def test_the_verb_parses():
     from acav.campaign_cli import _parser
     args = _parser().parse_args(["run-seeds", "--experiment", "E2",
@@ -208,7 +195,6 @@ def test_the_verb_parses():
 
 # --- resume across code versions on a seeded scenario -----------------------------
 
-@PENDING
 def test_resume_refuses_seeded_records_from_other_code(tmp_path):
     import os
 

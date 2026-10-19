@@ -183,6 +183,9 @@ class AcavScenarioBuilder:
         because continuing would produce a scenario that looks fine and
         measures the wrong thing."""
         try:
+            self._close_open_scenario()
+            if not self._report.ok:
+                return self._report
             self._create_scenario()
             self._create_satellite()
             if not self._report.ok:
@@ -200,6 +203,25 @@ class AcavScenarioBuilder:
         return self._report
 
     # -- scenario ----------------------------------------------------------
+
+    def _close_open_scenario(self) -> None:
+        """Close the scenario open in the attached STK, if any.
+
+        Every scenario, reference and seeded, is named alike, so a new
+        one cannot be created next to it. STK itself is never started.
+        """
+        name = self._backend.get_current_scenario_name()
+        if not name:
+            return
+        self._backend.close_scenario()
+        still = self._backend.get_current_scenario_name()
+        if still:
+            self._report.errors.append(
+                f"scenario {still!r} still open after CloseScenario; "
+                "close it in STK and build again")
+            return
+        self._report.warnings.append(f"closed the open scenario {name!r}")
+        LOGGER.info("closed the open scenario %r", name)
 
     def _create_scenario(self) -> None:
         spec = self._spec
