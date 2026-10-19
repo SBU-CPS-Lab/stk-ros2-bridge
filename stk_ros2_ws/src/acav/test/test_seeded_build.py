@@ -1,0 +1,230 @@
+"""Building seeded scenarios one after another, and running E2 over them.
+
+E2 final runs, 2026-10-19:
+1. build_acav_scenario into an STK that already holds ACAV_SSS1 failed
+   ("NewScenario ... Already exists"): every scenario, reference and
+   seeded, is named ACAV_SSS1. The builder now closes an open scenario
+   (logged, and verified closed) before creating the new one; it never
+   starts STK.
+2. A failed build went unnoticed by the shell loop, and seed 1's campaign
+   ran against the still-open reference scenario. run-seeds stops a seed
+   on any non-zero build result.
+3. A successful build left 2D/3D windows open and STK maximised, which
+   the run's graphics guard refuses. After build and verify, the build
+   closes them and minimises STK, reads the state back and fails unless
+   it is "off" (--leave-graphics skips this).
+Also the resume code-version guard checked seeded records against the
+reference scenario, so it skipped them (a spurious "does not match"
+warning, and resuming over other code was not refused).
+
+Mock backend and fakes only.
+"""
+
+import pytest
+
+from acav.scenario_builder import AcavScenarioBuilder
+from acav.spec import AcavSpec
+from stk_bridge.backends.mock_backend import MockBackend
+
+PENDING = pytest.mark.xfail(strict=True, reason="not implemented yet")
+
+
+class Spy(MockBackend):
+    def __init__(self, keep_open=False):
+        super().__init__()
+        self.closed = 0
+        self.keep_open = keep_open
+
+    def close_scenario(self):
+        self.closed += 1
+        if not self.keep_open:
+            super().close_scenario()
+
+
+def _spy(open_first, keep_open=False):
+    backend = Spy(keep_open)
+    backend.connect()
+    if open_first:
+        backend.new_scenario("ACAV_SSS1")
+    return backend
+
+
+@PENDING
+def test_an_open_scenario_is_closed_then_built():
+    backend = _spy(open_first=True)
+    report = AcavScenarioBuilder(backend, AcavSpec.load()).build()
+    assert backend.closed == 1
+    assert report.ok, report.errors
+    assert any("closed the open scenario 'ACAV_SSS1'" in w
+               for w in report.warnings)
+
+
+def test_with_no_scenario_open_nothing_is_closed():
+    backend = _spy(open_first=False)
+    report = AcavScenarioBuilder(backend, AcavSpec.load()).build()
+    assert backend.closed == 0
+    assert report.ok, report.errors
+
+
+@PENDING
+def test_a_scenario_that_will_not_close_fails_the_build():
+    backend = _spy(open_first=True, keep_open=True)
+    report = AcavScenarioBuilder(backend, AcavSpec.load()).build()
+    assert not report.ok
+    assert any("still open after CloseScenario" in e for e in report.errors)
+
+
+# --- graphics left 'off' ------------------------------------------------------
+
+class Desktop(MockBackend):
+    """A mock with STK Desktop's graphics state."""
+
+    def __init__(self, obeys=True):
+        super().__init__()
+        self.state = {"windows_2d": 1, "windows_3d": 1,
+                      "main_window": "maximized", "visible": True}
+        self.obeys = obeys
+        self.set_calls = 0
+
+    def graphics_state(self):
+        return dict(self.state)
+
+    def set_graphics_off(self):
+        self.set_calls += 1
+        if self.obeys:
+            self.state.update(windows_2d=0, windows_3d=0,
+                              main_window="minimized")
+
+
+def _build(monkeypatch, backend, extra=()):
+    from acav import build_cli
+    monkeypatch.setattr(build_cli, "create_backend", lambda config: backend)
+    return build_cli.main(["--backend", "com", "--verify"] + list(extra))
+
+
+@PENDING
+def test_the_build_leaves_graphics_off(monkeypatch):
+    backend = Desktop()
+    assert _build(monkeypatch, backend) == 0
+    assert backend.set_calls == 1
+    assert backend.state["main_window"] == "minimized"
+
+
+@PENDING
+def test_graphics_that_stay_on_fail_the_build(monkeypatch, capsys):
+    backend = Desktop(obeys=False)
+    assert _build(monkeypatch, backend) == 1
+    assert "STK graphics is not off after the build" in \
+        capsys.readouterr().err
+
+
+@PENDING
+def test_leave_graphics_skips_it(monkeypatch):
+    backend = Desktop(obeys=False)
+    assert _build(monkeypatch, backend, ["--leave-graphics"]) == 0
+    assert backend.set_calls == 0
+
+
+# --- run-seeds --------------------------------------------------------------------
+
+class Calls:
+    def __init__(self, failing_builds=(), complete=(), failing_runs=()):
+        self.log = []
+        self.failing_builds = set(failing_builds)
+        self.complete = set(complete)
+        self.failing_runs = set(failing_runs)
+
+    def build(self, scenario):
+        name = "reference" if not scenario else scenario.rsplit("seed", 1)[
+            1].split(".")[0]
+        self.log.append(("build", name))
+        return 1 if name in self.failing_builds else 0
+
+    def campaign(self, argv):
+        verb = argv[0]
+        out = argv[argv.index("--output-dir") + 1]
+        self.log.append((verb, out.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]))
+        if verb == "run" and any(f"seed{s}_" in out
+                                 for s in self.failing_runs):
+            return 1
+        return 0
+
+    def is_complete(self, out, scenario):
+        return any(f"seed{s}_" in out for s in self.complete)
+
+
+def _run_seeds(tmp_path, calls, seeds="1-3"):
+    from acav.e2_seeds import run_seeds
+    return run_seeds(seeds="1-3" if seeds is None else seeds, tag="t1",
+                     results_dir=str(tmp_path), backend="com",
+                     twin_launch="matlab-batch", launch=["python", "x.py"],
+                     build=calls.build, campaign=calls.campaign,
+                     is_complete=calls.is_complete)
+
+
+@PENDING
+def test_a_failed_build_stops_that_seed_only(tmp_path):
+    calls = Calls(failing_builds={"2"})
+    code = _run_seeds(tmp_path, calls)
+    assert code != 0
+    assert ("run", "E2_final_seed2_t1") not in calls.log
+    assert ("run", "E2_final_seed1_t1") in calls.log
+    assert ("run", "E2_final_seed3_t1") in calls.log
+
+
+@PENDING
+def test_a_complete_seed_is_neither_built_nor_run(tmp_path):
+    calls = Calls(complete={"1"})
+    assert _run_seeds(tmp_path, calls) == 0
+    assert ("build", "1") not in calls.log
+    assert ("run", "E2_final_seed1_t1") not in calls.log
+
+
+@PENDING
+def test_the_reference_is_rebuilt_before_the_reports(tmp_path):
+    calls = Calls()
+    assert _run_seeds(tmp_path, calls) == 0
+    rebuilt = calls.log.index(("build", "reference"))
+    reports = [i for i, c in enumerate(calls.log) if c[0] == "report"]
+    assert len(reports) == 2 and min(reports) > rebuilt
+    assert ("run", "E2_final_ref_t1") in calls.log
+    assert calls.log.index(("run", "E2_final_ref_t1")) > rebuilt
+
+
+@PENDING
+def test_a_failed_run_makes_the_exit_non_zero(tmp_path):
+    assert _run_seeds(tmp_path, Calls(failing_runs={"3"})) != 0
+
+
+@PENDING
+def test_the_verb_parses():
+    from acav.campaign_cli import _parser
+    args = _parser().parse_args(["run-seeds", "--experiment", "E2",
+                                 "--output-dir", "results", "--seeds",
+                                 "1-10", "--commit-tag", "abc1234"])
+    assert (args.verb, args.seeds_range, args.commit_tag) == (
+        "run-seeds", "1-10", "abc1234")
+
+
+# --- resume across code versions on a seeded scenario -----------------------------
+
+@PENDING
+def test_resume_refuses_seeded_records_from_other_code(tmp_path):
+    import os
+
+    from acav.campaign import build_e2_scheduler_comparison
+    from acav.campaign_runner import (CampaignRefused, RunnerOptions,
+                                      run_campaign)
+    from acav.run_record import write_record
+    from test_paired_report import GENERATED, _record
+
+    scenario = os.path.join(GENERATED, "acav_seed1.yaml")
+    campaign = build_e2_scheduler_comparison(scenario, "com")
+    old, new = "a" * 40, "b" * 40          # two clean commits
+    for run in campaign.runs:
+        record = _record(1, run.scheduler, 10, code_version=old)
+        write_record(str(tmp_path / run.output_name), record)
+    with pytest.raises(CampaignRefused, match="completed run"):
+        run_campaign(campaign, lambda *a: None, RunnerOptions(
+            output_dir=str(tmp_path), code_version=new,
+            tree_of=lambda version: version))
