@@ -30,7 +30,8 @@ behind each one.
 All six are implemented and offline-tested. The experiments are E1, E2,
 E3 (lockstep against free-run, with the seeded fault replay) and E6
 ([`../../docs/C1_case_study_spec.md`](../../docs/C1_case_study_spec.md)
-section 9). The final runs (E1, E3, E6 on db7cfb6; E2 on 91f36b9) and
+section 9). The final runs (E1, E3, E6 on 6c32287 (db7cfb6); E2 on 81bc202 (91f36b9); old hashes:
+[`../../docs/commit_map.md`](../../docs/commit_map.md)) and
 the earlier live evidence:
 [`../../docs/09_live_runs_and_results.md`](../../docs/09_live_runs_and_results.md).
 How to run each experiment:

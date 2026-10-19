@@ -216,5 +216,5 @@ with `--json PATH`; no figures.
   the refusals of section 6.
 
 The final paired result is `results/E2_final_paired_91f36b9/paired_report.json`
-(10 seeds, records on 91f36b9); see
+(10 seeds, records on 81bc202 (91f36b9)); see
 [09_live_runs_and_results.md](09_live_runs_and_results.md).

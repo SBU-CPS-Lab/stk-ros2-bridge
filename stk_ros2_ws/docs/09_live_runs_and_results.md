@@ -16,10 +16,10 @@ are the `<run>.json` files, each read with `acav.run_record.read_record`.
 
 | Experiment | Folder(s) under `results/` | Commit | Requested | Records (all reportable) |
 |---|---|---|---:|---:|
-| E6 | `E6_final_db7cfb6` | db7cfb6 | 5 | 5 |
-| E1 | `E1_final_db7cfb6` | db7cfb6 | 24 | 12 |
-| E3 | `E3_final_db7cfb6` | db7cfb6 | 66 | 66 |
-| E2 | `E2_final_seed{1..10}_91f36b9` (2 each), `E2_final_ref_91f36b9` (2) | 91f36b9 | 22 | 22 |
+| E6 | `E6_final_db7cfb6` | 6c32287 (db7cfb6) | 5 | 5 |
+| E1 | `E1_final_db7cfb6` | 6c32287 (db7cfb6) | 24 | 12 |
+| E3 | `E3_final_db7cfb6` | 6c32287 (db7cfb6) | 66 | 66 |
+| E2 | `E2_final_seed{1..10}_91f36b9` (2 each), `E2_final_ref_91f36b9` (2) | 81bc202 (91f36b9) | 22 | 22 |
 
 **E1.** 24 runs requested: 3 repeats x (the control, frame_pairing
 guard on and guard ablated, five other types guard on). 12 have a record: the control,
@@ -40,9 +40,10 @@ None was classified interrupted or infrastructure_failure.
 **Signature checks.**
 - All five E6_final records have the determinism signature of
   `results/E6_smoke/E6-smoke-1.json`.
-- The commits between db7cfb6 and 91f36b9 (89c3c7e..91f36b9) change
+- The commits between 6c32287 (db7cfb6) and 81bc202 (91f36b9) (2bea0b9..81bc202, old
+  89c3c7e..91f36b9) change
   scenario building and orchestration only (`git diff --stat
-  db7cfb6 91f36b9`: build_cli, campaign_cli, campaign_runner's resume
+  6c32287 81bc202`: build_cli, campaign_cli, campaign_runner's resume
   guard, e2_seeds, scenario_builder, the backends' `set_graphics_off`,
   tests, the runbook). Where records at both commits are comparable, the
   signatures are identical: both arms of the E2 reference

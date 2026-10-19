@@ -69,6 +69,7 @@ before the next `ros2 run`. Then
 | [C4_scheduler.md](docs/C4_scheduler.md) | The two scheduling policies, access deferral, scoring |
 | [C5_experiment_harness.md](docs/C5_experiment_harness.md) | Provenance, faults, matrices, run orchestrator, campaigns, pooling rules |
 | [C6_analysis.md](docs/C6_analysis.md) | Reports, figures, E6 latency, coupling analysis |
+| [commit_map.md](docs/commit_map.md) | Old -> new commit hashes after the 2026-10-19 message cleanup (trees identical); results and docs written earlier cite old hashes |
 | [dev/](docs/dev/) | Engineering history and the open backlog |
 
 There is no C2 document: building and verifying the STK scenario is

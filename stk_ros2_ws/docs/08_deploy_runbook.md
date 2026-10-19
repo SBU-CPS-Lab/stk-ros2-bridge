@@ -382,18 +382,18 @@ clean tree:
 
 | Experiment | Commit | Folder(s) under `results\` |
 |---|---|---|
-| E6 | db7cfb6 | `E6_final_db7cfb6` |
-| E1 | db7cfb6 | `E1_final_db7cfb6` |
-| E3 | db7cfb6 | `E3_final_db7cfb6` |
-| E2 | 91f36b9 | `E2_final_seed{1..10}_91f36b9`, `E2_final_ref_91f36b9`, `E2_final_paired_91f36b9` |
+| E6 | 6c32287 (db7cfb6) | `E6_final_db7cfb6` |
+| E1 | 6c32287 (db7cfb6) | `E1_final_db7cfb6` |
+| E3 | 6c32287 (db7cfb6) | `E3_final_db7cfb6` |
+| E2 | 81bc202 (91f36b9) | `E2_final_seed{1..10}_91f36b9`, `E2_final_ref_91f36b9`, `E2_final_paired_91f36b9` |
 
-E2 was re-run on 91f36b9: on db7cfb6 a seeded build failed against the
+E2 was re-run on 81bc202 (91f36b9): on 6c32287 (db7cfb6) a seeded build failed against the
 reference scenario still open in STK, unnoticed by the shell loop then
 used (`src/acav/test/test_seeded_build.py`, module docstring); those
 folders are in `results/_archive/20261019_results_cleanup/E2_superseded_db7cfb6`.
-The commits between the two (89c3c7e..91f36b9) change only scenario
+The commits between the two (2bea0b9..81bc202, old 89c3c7e..91f36b9) change only scenario
 building and orchestration, and the paired analysis refuses records from
-different commits, so all E2 arms were re-run on 91f36b9. Records, counts and checks:
+different commits, so all E2 arms were re-run on 81bc202 (91f36b9). Records, counts and checks:
 [09_live_runs_and_results.md](09_live_runs_and_results.md). The blocks
 below are kept as the commands that were run.
 
@@ -511,9 +511,9 @@ summary lists, per seed and for the reference: build, run, usable/
 requested runs and folder, plus both report exit codes. The exit code
 is non-zero if anything failed; rerunning the same command resumes.
 
-On 91f36b9 the reference report succeeded and the paired report inside
+On 81bc202 (91f36b9) the reference report succeeded and the paired report inside
 `run-seeds` was refused: it looked for the seed files next to the
-installed package (fixed in 53004a3, `--scenario-dir`). The paired
+installed package (fixed in 2244a06 (53004a3), `--scenario-dir`). The paired
 report was then made separately, into its own folder (the seed folders
 are only read):
 

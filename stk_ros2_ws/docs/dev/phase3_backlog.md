@@ -431,7 +431,7 @@ The sections above are kept as written. Closed since:
 | Free-run rtf 0.5 wall time with an automated twin | Measured, 27.3 min from one run; the plan uses it | 57dbbfd; `acav/campaign.py` `MEASURED_WALL_MIN` |
 | MissionMode chart | Decided: not wired; kept as the specification of `adcs.mission_mode` | docs/C1_case_study_spec.md section 9, limitations |
 | One folder per experiment | Done | docs/08_deploy_runbook.md sections 4 and 8 |
-| Final runs | Done: E1, E3, E6 on db7cfb6; E2 on 91f36b9 | docs/09_live_runs_and_results.md, Final runs |
+| Final runs | Done: E1, E3, E6 on 6c32287 (db7cfb6); E2 on 81bc202 (91f36b9) | docs/09_live_runs_and_results.md, Final runs |
 | E2 seeds one after another | `run_acav_campaign run-seeds` (closes the open scenario, leaves graphics off and checks it, skips complete seeds on the same commit, refuses records from another commit) | 89c3c7e (tests), 8e416e4; seed paths from the workspace: d52b730 (tests), 499e4bc |
 | Report's lookup of seeded scenarios through `ros2 run` | Searches the workspace `src` tree and `--scenario-dir` | 2e6be6e (tests), 53004a3 |
 | The E2 paper figure script | In the repo: `src/acav/scripts/make_e2_paper_figures.py` | 2aeb988 (test), c78a6de |
