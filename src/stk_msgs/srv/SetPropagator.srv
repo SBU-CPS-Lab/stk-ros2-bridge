@@ -1,10 +1,9 @@
 # Switches a satellite's propagator. Setting REALTIME activates the
 # real-time orbit propagator that PositionCommand.msg feeds via
-# SetPosition; it does NOT by itself switch attitude -- attitude's
-# real-time channel is activated independently via `SetAttitude Standard`,
-# performed automatically by core/actuation.py the first time an
-# AttitudeCommand arrives for an object, so callers of this service do not
-# need to sequence the two.
+# SetPosition. It does not change attitude: core/actuation.py activates the
+# real-time attitude profile (`SetAttitude Standard`) when the first
+# AttitudeCommand for an object arrives. Switching to REALTIME discards
+# any analytic ephemeris the object had.
 
 string object_path
 

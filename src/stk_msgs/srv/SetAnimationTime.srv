@@ -1,7 +1,6 @@
-# Direct scenario clock control. Only valid in PACED or non-LOCKSTEP modes
-# -- in LOCKSTEP mode the clock is advanced exclusively by
-# nodes/clock_node.py's step loop and this service returns success=false
-# with an explanatory message rather than fighting the step loop.
+# Direct scenario clock control. Not available in LOCKSTEP mode, where
+# only the bridge's step loop advances the clock; the service then returns
+# success=false with an explanation.
 
 builtin_interfaces/Time target_time
 ---

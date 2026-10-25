@@ -1,9 +1,8 @@
 # Deliberate escape hatch: send a raw Connect command string and return the
 # raw response. Bypasses all typed message validation -- use only for
 # capability not yet wrapped by a typed service, and treat the response as
-# untrusted text your own caller must parse. Logged at WARN level by
-# interfaces/ros_services.py precisely because it's an easy way to
-# reintroduce the fragility this whole bridge exists to avoid.
+# untrusted text the caller must parse. Every call is logged at WARNING
+# level by interfaces/ros_services.py.
 
 string command
 float64 timeout_s   # 0.0 => use backend default

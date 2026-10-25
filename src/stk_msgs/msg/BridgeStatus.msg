@@ -22,24 +22,20 @@ uint32 command_queue_capacity
 float64 last_backend_round_trip_ms
 string last_error
 
-# E6's latency breakdown, mean over the second since the last publish
-# (BridgeStatus is always 1 Hz -- see this message's own top comment).
-# step_samples is how many step-loop iterations fed that mean; a
-# consumer must check it before trusting a phase's number, because 0.0
-# means EITHER "fast" or "never measured this run" -- free-run has no
-# barrier wait at all, and a run that has not started stepping yet has
-# neither. See stk_bridge/core/step_timing.py for why this is windowed
-# rather than a lifetime average.
+# Step-loop latency breakdown: mean of each phase over the window since
+# the previous BridgeStatus (core/step_timing.py). step_samples is the
+# number of step iterations in that window. A phase mean of 0.0 can mean
+# "fast" or "not measured" (free-run has no barrier wait), so consumers
+# should check step_samples before using the means.
 float64 mean_sense_ms
 float64 mean_actuate_ms
 float64 mean_barrier_wait_ms
 uint32 step_samples
 
-# The attitude read-back provider sensing actually uses, and whether it
-# was forced by sensing.force_attitude_provider (E1's treatment) rather
-# than chosen by startup validation. Empty until sensing is configured.
-# A consumer recording provenance must take these from here, not from
-# its own launch parameters: a forced provider left in a bridge YAML
-# would otherwise turn a nominal run into an E1 treatment unrecorded.
+# The attitude read-back provider that sensing uses, and whether it was
+# forced by sensing.force_attitude_provider instead of being selected by
+# startup validation. Empty until sensing is configured. Consumers that
+# record provenance should take the provider from here rather than from
+# their own launch parameters.
 string attitude_provider
 bool attitude_provider_forced

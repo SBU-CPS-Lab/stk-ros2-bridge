@@ -1,7 +1,7 @@
 # Body angular velocity of a vehicle.
 #
-# Units: rad/s (REP-103). STK's AddAttitude AngVels Connect command and the
-# Object Model both natively use degrees/second -- converted once at the
+# Units: rad/s (REP-103). STK reports body rates in its own angle-rate
+# unit; the backend measures that scale at startup and converts at the
 # backend boundary.
 
 std_msgs/Header header

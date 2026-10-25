@@ -5,9 +5,9 @@
 # AttitudeCommand -- see core/actuation.py for the shared monotonicity
 # guard applied before either command is issued.
 #
-# Note: satellites using the Real-time propagator are NOT included in STK
-# Coverage analysis (see docs/00_architecture.md Known Gotchas). Use
-# EphemerisSegment + StkExternal if coverage must account for this vehicle.
+# Satellites on the real-time propagator are excluded from STK Coverage
+# analysis. Use EphemerisSegment and the StkExternal propagator when
+# coverage must include the vehicle.
 
 std_msgs/Header header
 

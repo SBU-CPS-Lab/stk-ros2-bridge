@@ -17,15 +17,10 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 
-# ---------------------------------------------------------------------------
-# NOTE for the MATLAB / Windows side (see docs/02_matlab_setup.md):
-#   `ros2genmsg` on Windows requires an MSVC toolchain to be discoverable by
-#   MATLAB (Visual Studio Build Tools, "Desktop development with C++"
-#   workload). MATLAB does NOT reuse this colcon build; it recompiles these
-#   same .msg/.srv/.action files against its own client libraries. Keep this
-#   file and the msg/srv/action directories as the single source of truth for
-#   both toolchains -- do not hand-edit generated code on either side.
-# ---------------------------------------------------------------------------
+# MATLAB does not reuse this build: ros2genmsg compiles the same interface
+# files against MATLAB's own client libraries (on Windows it needs the MSVC
+# "Desktop development with C++" workload; see docs/installation.md). These
+# directories are the single source of truth for both toolchains.
 
 set(msg_files
   "msg/OrbitState.msg"

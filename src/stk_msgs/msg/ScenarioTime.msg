@@ -1,7 +1,6 @@
-# Published alongside /clock by nodes/clock_node.py -- richer than
-# rosgraph_msgs/Clock because it also carries STK scenario epoch context
-# and the bridge's current execution mode, so consumers can distinguish
-# "simulation is paused" from "simulation is behind".
+# Published alongside /clock. Unlike rosgraph_msgs/Clock it also carries
+# the scenario epoch and the bridge's execution mode, so consumers can
+# tell "simulation is paused" from "simulation is behind".
 
 builtin_interfaces/Time sim_time
 builtin_interfaces/Time scenario_epoch     # STK scenario's analysis start

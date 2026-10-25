@@ -1,6 +1,5 @@
-# Static geometric description of a sensor's field of view. Published once
-# at bridge startup and on-demand via QueryDataProvider, not on a rate group
-# -- this rarely changes during a run.
+# Static geometric description of a sensor's field of view. Published at
+# bridge startup rather than on a rate group, since it rarely changes.
 
 string sensor_path
 

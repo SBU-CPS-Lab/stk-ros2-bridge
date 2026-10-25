@@ -1,18 +1,11 @@
 # Guidance target for a closed-loop ADCS twin.
 #
-# Published by an application-level scheduler (e.g. the ACAV case
-# study's acav_scheduler node) on an application topic such as
-# /acav/setpoint -- this is NOT part of the bridge's own command
-# surface. Contrast stk_msgs/PositionCommand, which IS realized via
-# STK's SetPosition on a named object; nothing here is ever sent to
-# STK directly. The twin subscribes to this to know WHERE to point;
-# the guidance law that turns a target position into a commanded body
-# attitude quaternion (accounting for the vehicle's own boresight axis
-# and a roll reference such as the velocity direction) lives entirely
-# in the twin, not here. Keeping this message data-only -- a position,
-# not an attitude -- is what lets the scheduler differ from a
-# kinematic to a dynamics-aware policy purely by WHEN it switches
-# targets, without duplicating the twin's own guidance math.
+# Published by an application-level scheduler (for example the ACAV
+# case study's acav_scheduler on /acav/setpoint). It is not part of the
+# bridge's command surface and is never sent to STK. The twin turns the
+# target position into a commanded attitude with its own guidance law;
+# the message carries a position, not an attitude, so schedulers differ
+# only in when they switch targets.
 
 std_msgs/Header header
 

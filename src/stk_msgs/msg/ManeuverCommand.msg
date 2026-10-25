@@ -1,8 +1,6 @@
 # Command consumed by the ExecuteManeuver action (Astrogator segment
-# mutation + RunMCS). Requires the Astrogator capability to be licensed --
-# core/scenario_manager.py checks this at startup and the action server
-# rejects goals with a clear error if it is not available, rather than
-# failing deep inside a Connect call.
+# mutation + RunMCS). Requires an Astrogator licence; the action server
+# rejects the goal with an explicit message when it is not available.
 
 string object_path
 

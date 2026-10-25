@@ -2,9 +2,9 @@
 <package format="3">
   <name>stk_msgs</name>
   <version>0.1.0</version>
-  <description>ROS 2 interfaces for the STK digital twin bridge.</description>
-  <maintainer email="you@example.org">Your Name</maintainer>
-  <license>Apache-2.0</license>
+  <description>ROS 2 interfaces (messages, services, actions) of the STK to ROS 2 bridge.</description>
+  <maintainer email="mohammada.alizadeh@mail.sbu.ac.ir">Mohammadamin Alizadeh</maintainer>
+  <license>MIT</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
   <depend>std_msgs</depend>

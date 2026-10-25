@@ -1,6 +1,6 @@
 # Runs the scenario from the current sim time to a target time, reporting
-# progress. In LOCKSTEP mode this drives the step loop directly rather than
-# competing with it; in other modes it drives STK's Animate command.
+# progress. In LOCKSTEP mode it drives the bridge's step loop; in other
+# modes it drives STK's animation.
 
 builtin_interfaces/Time target_time
 float64 max_wall_time_s   # abort if exceeded, 0.0 = no limit

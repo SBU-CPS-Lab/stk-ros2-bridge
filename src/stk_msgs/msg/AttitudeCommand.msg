@@ -1,19 +1,15 @@
 # Live, per-sample attitude command consumed by core/actuation.py.
 #
-# Realized in STK via the Real-Time Standard attitude type: the bridge
-# issues `SetAttitude Standard` once to activate the real-time profile (if
-# not already active), then streams samples with `AddAttitude CBFQuat` (or
-# `AddAttitude Quat` for inertial-referenced input, selected by
-# use_inertial_frame below). This is STK's native per-sample append
-# mechanism for attitude -- the direct analogue of SetPosition for orbit
-# state. There is NO file buffering/rewrite involved.
+# Realized in STK through the real-time attitude profile: the bridge
+# activates it once per object (`SetAttitude Standard`) and then appends
+# one sample per message with `AddAttitude CBFQuat` (Earth-fixed) or
+# `AddAttitude Quat` (inertial), selected by use_inertial_frame. Samples
+# are appended in place; no ephemeris file is written.
 #
-# IMPORTANT constraint inherited from the underlying Connect command:
-# samples MUST arrive with strictly increasing stamp values per object_path.
-# A sample with stamp <= the last accepted stamp is silently dropped by STK
-# (not NACKed) -- core/actuation.py logs and counts these as
-# BridgeStatus.dropped_attitude_samples rather than relying on STK to
-# report the problem.
+# Samples must arrive with strictly increasing stamps per object_path.
+# STK rejects a sample that is not newer than the last accepted one;
+# core/actuation.py checks this before sending and counts rejected samples
+# in BridgeStatus.dropped_attitude_samples.
 
 std_msgs/Header header
 

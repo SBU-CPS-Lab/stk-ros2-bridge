@@ -1,10 +1,7 @@
 # Runs an STK Coverage analysis (asset x grid over a time span), which can
-# take from seconds to minutes depending on grid resolution -- hence an
-# action rather than a service. NOTE: assets using the Real-time propagator
-# are excluded from STK Coverage analysis (see PositionCommand.msg); the
-# goal is rejected up front with a clear message if the requested asset is
-# currently on that propagator, rather than silently returning empty
-# results.
+# take from seconds to minutes depending on grid resolution, hence an
+# action. STK excludes assets on the real-time propagator from Coverage;
+# such goals are rejected with an explicit message.
 
 string[] asset_object_paths
 string coverage_definition_name   # must already exist in the scenario

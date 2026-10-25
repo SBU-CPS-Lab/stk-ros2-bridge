@@ -1,52 +1,37 @@
-# Diagnostic status streamed by a closed-loop ADCS twin back to whatever
-# is scheduling it (e.g. the ACAV case study's acav_scheduler node) on
-# an application topic such as /acav/twin_status.
+# Status streamed by a closed-loop ADCS twin to its scheduler (for
+# example the ACAV case study's acav_scheduler on /acav/twin_status).
 #
-# boresight_error_rad is the twin's OWN internally-computed angle
-# between its achieved boresight direction and the line of sight to
-# its current commanded target (see stk_msgs/TargetSetpoint) -- the
-# same quantity the twin's mission-mode chart uses for its
-# SETTLE -> IMAGE transition. A consumer scoring captures should
-# prefer this over re-deriving the angle independently from raw
-# telemetry: the twin already has the freshest target + own-state pair
-# at the instant it computes this, and a second, independently-written
-# implementation of the same angle is exactly the kind of duplication
-# that has previously made a result measure a discrepancy between two
-# models instead of the effect under study (see acav/metrics.py).
+# boresight_error_rad is the twin's own angle between its achieved
+# boresight and the line of sight to the commanded target
+# (stk_msgs/TargetSetpoint), the quantity its mode logic uses for the
+# SETTLE -> IMAGE transition. Consumers scoring captures use this value
+# instead of recomputing the angle, so that one implementation defines it.
 
 std_msgs/Header header
 
-# Stateflow mode name: NADIR | SLEW | SETTLE | IMAGE | SAFE.
+# Mission mode: NADIR | SLEW | SETTLE | IMAGE | SAFE.
 string mode
 
 float64 boresight_error_rad
 
-# Reaction wheel state, for E5's fault campaign and for the run-level
-# quantities acav/metrics.py's RunResult reports.
-#
-# Momentum is published in its physical unit rather than as a fraction
-# of capacity: normalising it here would bake a configuration value into
-# telemetry, and a consumer that disagreed with the twin about the
-# capacity would then silently disagree about how close to saturation
-# the vehicle was. The fraction is derived by whoever has the spec.
+# Reaction wheel state. Momentum is published in N m s rather than as a
+# fraction of capacity, so telemetry does not depend on a configuration
+# value; consumers derive the fraction from their own specification.
 geometry_msgs/Vector3 wheel_momentum_nms
 
 # True on any step where a wheel clamped, in torque or in momentum.
 bool wheels_saturated
 
-# Cumulative integral of |tau . omega| since the run began, joules --
-# a proxy for slew cost. Accumulated by the twin rather than integrated
-# by a consumer, because the twin is the only party that holds both the
+# Cumulative integral of |tau . omega| since the run began, in joules, as
+# a proxy for slew cost. The twin accumulates it because it holds the
 # delivered torque and the body rate at the same instant, and a running
-# total survives a dropped telemetry sample where a consumer-side
-# integration would silently lose that step's contribution.
+# total is unaffected by a dropped telemetry sample.
 float64 wheel_energy_j
 
-# What happened between two statuses. In free-run the twin integrates
-# several steps per published status, so a brief event between two
-# publishes was invisible to the scheduler (E3 free-run, seed-4 fault:
-# 0 saturation events where lockstep recorded 1). In lockstep every step
-# is published, so these equal what the published fields already show.
+# Events between two statuses. In free-run the twin may integrate
+# several steps per published status, so short events would otherwise be
+# missed; in lockstep every step is published and these fields add
+# nothing.
 #
 # Cumulative count of steps at which wheels_saturated rose from false to
 # true, counted by the twin at every integration step.

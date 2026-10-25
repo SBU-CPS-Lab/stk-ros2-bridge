@@ -15,4 +15,4 @@ string agi_stk_wheel_version   # parsed from bin/AgPythonAPI, "unknown" if not f
 
 float64 mean_data_provider_latency_ms
 float64 mean_command_latency_ms
-uint32 com_apartment_thread_id   # diagnostic only -- see core/com_thread.py
+uint32 com_apartment_thread_id   # diagnostic only, low 32 bits; see core/com_thread.py
