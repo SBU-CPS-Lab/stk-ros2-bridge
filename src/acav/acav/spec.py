@@ -2,8 +2,8 @@
 
 Parses ``config/acav_scenario.yaml`` into typed dataclasses, recomputes
 every value the YAML marks ``[DERIVED]``, and cross-checks the
-duplicated quantities. Downstream phases construct one :class:`AcavSpec`
-and read from it; none of them parse the YAML themselves.
+duplicated quantities. Every consumer constructs one :class:`AcavSpec`
+and reads from it; none of them parse the YAML themselves.
 
 Why the cross-checks exist
 --------------------------
@@ -11,11 +11,10 @@ A few quantities appear in more than one place in the YAML because two
 different consumers need them in two different sections
 (``pointing.settle_hold_s`` and ``scheduling.hold_before_image_s`` are
 the same physical quantity, needed by the twin and the scheduler
-respectively). Duplication is the lesser evil compared to a scheduler
-reaching into a "pointing" section it otherwise has no business
-reading -- but silently diverging duplicates would make E2's comparison
-meaningless. So they are checked at load time and a mismatch is a hard
-error, not a warning.
+respectively). Duplication is preferred to a scheduler reaching into a
+"pointing" section it otherwise has no reason to read, but diverging
+duplicates would make E2's comparison meaningless, so they are checked
+at load time and a mismatch is an error.
 
 The same applies to the derived actuator limits: the YAML comments give
 them for the reader's benefit, and this module recomputes them from
@@ -277,10 +276,9 @@ class AcavSpec:
         """Per-target planning estimates, in scheduled order.
 
         Informational: what a dynamics-aware scheduler would compute
-        before any simulation runs. C6 reports this alongside measured
-        outcomes so the reader can see which targets were *predicted*
-        marginal versus which actually failed -- a disagreement between
-        the two is itself interesting and must not be hidden.
+        before any simulation runs. Reports show this alongside measured
+        outcomes, so a reader can compare which targets were *predicted*
+        marginal with which actually failed.
         """
         ordered = sorted(self.targets, key=lambda t: t.t_image_s)
         rows: List[Dict] = []
@@ -367,7 +365,7 @@ class AcavSpec:
 
         # Sensing must be fast enough to resolve the hold window. A hold
         # window shorter than a few sensing periods cannot be evaluated
-        # meaningfully, and would silently make capture a coin flip.
+        # meaningfully.
         fast_hz = float((self.bridge.get("rate_groups") or {}).get("fast", 10.0))
         samples_in_hold = self.pointing.settle_hold_s * fast_hz
         if samples_in_hold < 5:

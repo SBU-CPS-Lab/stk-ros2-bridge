@@ -1,39 +1,34 @@
-"""Executing a campaign -- the thin half of C5.
+"""Executing a campaign: the thin half of the experiment harness.
 
 :mod:`acav.campaign` decides what runs to do and what the results mean.
-This drives them, and deliberately knows as little as possible: it does
-not know how to start STK, a bridge or MATLAB. Launching a run is a
-callable supplied by the caller, which is what lets the whole loop --
-resume, validation, aggregation -- be tested here without either.
+This module drives them and knows as little as possible: it does not
+know how to start STK, a bridge or MATLAB. Launching a run is a callable
+supplied by the caller, so the whole loop (resume, validation,
+aggregation) can be tested without either.
 
-That boundary is also honest about where the real thing runs. The launch
-topology (bridge with the right backend and execution mode, the Simulink
-twin, the scheduler, shutdown in the right order) belongs to the Windows
-machine that has STK on it. Encoding a guess at it here would produce a
-supervisor that looks finished, cannot be exercised anywhere it is
-written, and fails at 2 am in the middle of a hundred-run campaign.
-:class:`CommandLauncher` therefore runs whatever command the operator
-gives it, per run, with the run's configuration substituted in.
+The launch topology (bridge with the right backend and execution mode,
+the Simulink twin, the scheduler, shutdown in the right order) belongs
+to the machine that has STK on it. :class:`CommandLauncher` therefore
+runs whatever command the user gives it, per run, with the run's
+configuration substituted in; ``scripts/run_acav_run.py`` is the
+standard command.
 
-What this layer is actually responsible for
--------------------------------------------
-* **Resuming.** A 100-run E5 campaign that dies at run 73 must not start
-  over. Output names are a function of the run's configuration (see
+What this layer is responsible for
+----------------------------------
+* **Resuming.** A long campaign that dies part-way must not start over.
+  Output names are a function of the run's configuration (see
   ``RunSpec.run_id``), so a completed run is identifiable on disk.
-* **Refusing to accept a result that does not match the run.** A record
-  whose seed or fault differs from the run that was requested is a
-  harness fault, and it is the specific harness fault that would make
-  E5 report reproduction of something other than what it replayed. It
-  is reported as a failure, not merged into the campaign.
+* **Refusing a result that does not match the run.** A record whose
+  seed or fault differs from the run that was requested is a harness
+  fault (it would make a replay report reproduction of something else);
+  it is reported as a failure, not merged into the campaign.
 * **Never treating a missing file as an empty result.** A launcher that
   exits cleanly without writing anything is a failure; scoring it as a
-  run that captured nothing would put launch problems into the study's
-  headline metric.
+  run that captured nothing would put launch problems into the results.
 * **Never resuming over records made by other code.** When the caller
   says which code is running (``RunnerOptions.code_version``), a record
   that would be resumed over must come from the same code; otherwise the
-  campaign is refused before anything runs, unless the operator
-  explicitly allows the mixture.
+  campaign is refused before anything runs, unless explicitly allowed.
 """
 
 from __future__ import annotations
@@ -124,8 +119,8 @@ class RunnerOptions:
     #: Skip runs whose output is already on disk and readable.
     resume: bool = True
     #: Stop the campaign at the first failure instead of carrying on.
-    #: Off by default: one launch failure in a hundred-run overnight
-    #: campaign should cost one run, not the night.
+    #: Off by default: one launch failure in a long campaign should cost
+    #: one run, not the campaign.
     stop_on_error: bool = False
     #: Write the manifest and report what would run, launching nothing.
     dry_run: bool = False
@@ -276,8 +271,8 @@ def _supersede_previous_attempt(output_path: str) -> None:
 def _refuse_unclean_code(options: RunnerOptions) -> None:
     """Refuse to start from modified or unidentifiable code.
 
-    Every record of such a campaign would carry that version, and a
-    campaign that cannot be attributed to one commit cannot be cited.
+    Every record of such a campaign would carry that version, and the
+    campaign could not be attributed to one commit.
     """
     from acav.code_version import is_clean
 
@@ -377,16 +372,14 @@ def run_config_payload_for(run: RunSpec) -> dict:
 def write_run_config(run: RunSpec, output_path: str) -> str:
     """Write the per-run gain and fault overrides beside the result.
 
-    These are the two things a campaign varies about the *twin* rather
-    than about the scenario -- per-run gains and E5's fault -- and the twin
-    is MATLAB, so they have to cross a process boundary. A file beats
-    stuffing JSON through a shell argument: it survives quoting, it is
-    inspectable afterwards next to the record it produced, and the
-    operator's launch script only has to pass a path along.
+    These are what a campaign varies about the *twin* rather than about
+    the scenario (per-run gains and an injected wheel fault), and the
+    twin is MATLAB, so they cross a process boundary. A file survives
+    quoting, can be inspected next to the record it produced, and the
+    launch script only passes a path along.
 
     Field names are the run record's, so one spelling travels from the
-    campaign through the twin and back into the record. Two spellings
-    for one quantity is how a gain sweep ends up flat.
+    campaign through the twin and back into the record.
     """
     import json
 
@@ -470,10 +463,10 @@ def check_record(run: RunSpec, record: RunRecord,
 
     Empty means the record describes the run asked for. Every check here
     is one that would otherwise corrupt an experiment silently: a wrong
-    seed or fault breaks E5's replay claim, a wrong scheduler breaks
-    E2's comparison, and wrong gains break any run that sets them. A record whose
-    targets are not exactly its scenario's (``scenario``, by default the
-    installed one) has every count short or padded.
+    seed or fault breaks a replay, a wrong scheduler breaks E2's
+    comparison, and wrong gains break any run that sets them. A record
+    whose targets are not exactly its scenario's (``scenario``, by
+    default the installed one) has every count short or padded.
 
     Execution mode is NOT checked here. A bridge that fell back from
     lockstep to free-run has produced a real run in the mode it reports,
@@ -544,10 +537,8 @@ def write_manifest(campaign: Campaign, output_dir: str,
                    twin_launch: str = "manual") -> str:
     """Write the campaign definition next to its results.
 
-    So a directory of records is self-describing months later: what was
-    asked for, in what order, with which seeds and faults. Reconstructing
-    that from the filenames afterwards is possible and is exactly the
-    kind of reconstruction that produces a confident wrong answer.
+    So a directory of records is self-describing: what was asked for, in
+    what order, with which seeds and faults.
     """
     import json
 
@@ -562,7 +553,7 @@ def write_manifest(campaign: Campaign, output_dir: str,
     return path
 
 
-#: The run command every campaign in docs/08_deploy_runbook.md uses, as
+#: The run command every campaign in docs/acav/running_campaigns.md uses, as
 #: an argument list (the campaign substitutes the placeholders in Python;
 #: no shell, so a JSON value or a path with spaces arrives intact).
 STANDARD_RUN_TEMPLATE = (
@@ -593,8 +584,8 @@ def planned_commands(campaign: Campaign, output_dir: str,
 class CommandLauncher:
     """Run an external command per run, with the run's config substituted.
 
-    The command is the operator's, because the launch topology belongs
-    to the machine with STK on it. Placeholders available in the
+    The command is the user's, because the launch topology belongs to
+    the machine with STK on it. Placeholders available in the
     template: ``{run_id}``, ``{experiment}``, ``{scheduler}``,
     ``{execution_mode}``, ``{seed}``, ``{output}``, ``{scenario}``,
     ``{backend}``, ``{attitude_provider}``, ``{mismatch}``,
@@ -608,10 +599,9 @@ class CommandLauncher:
     ``adcs.config``. The ``_json`` placeholders carry the same values
     inline for the scheduler's own parameters.
 
-    Passed as a list of arguments rather than a shell string: a
-    scenario path with a space in it is otherwise an injection waiting
-    to happen, and the operator writing this template is not thinking
-    about quoting at the time.
+    Passed as a list of arguments rather than a shell string, so a
+    path with spaces or a JSON value arrives intact and nothing is
+    interpreted by a shell.
     """
 
     def __init__(self, argv: Sequence[str], timeout_s: Optional[float] = None,

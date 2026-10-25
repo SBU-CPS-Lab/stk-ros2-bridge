@@ -30,10 +30,10 @@ setup(
     # JSON-only output with a clear message if it is missing.
     extras_require={"figures": ["matplotlib>=3.5"]},
     zip_safe=True,
-    maintainer="Your Name",
-    maintainer_email="you@example.org",
+    maintainer="Mohammadamin Alizadeh",
+    maintainer_email="mohammada.alizadeh@mail.sbu.ac.ir",
     description="Attitude-Coupled Access Verification case study.",
-    license="Apache-2.0",
+    license="MIT",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [

@@ -14,8 +14,8 @@ costs minutes.
 What the exit code means
 ------------------------
 0  every check passed or warned. Warnings are real: they mean the study
-   runs in a degraded form the paper must describe honestly (an
-   elevation mask instead of terrain, say). Read them.
+   runs in a degraded form that must be described as such (an
+   elevation constraint instead of terrain, say). Read them.
 1  at least one check FAILED. The scenario would silently measure
    something other than what was designed. Do not run experiments
    against it.

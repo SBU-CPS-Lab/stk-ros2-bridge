@@ -2,10 +2,10 @@
 
     python scripts/inspect_hpop_force_model.py --output force_model.txt
 
-Answers one question for the orbit-batching analysis
-(``docs/dev/phase1_e6_impact_analysis.md`` section 4): can any force in
-the satellite's HPOP model depend on its attitude? The repository never
-configures the force model, so the answer lives only in the open STK
+Answers one question that orbit batching depends on
+(``stk_bridge/core/orbit_batch.py``): can any force in the satellite's
+HPOP model depend on its attitude? The scenario builder does not
+configure the force model, so the answer lives only in the open STK
 scenario and has to be read from it.
 
 Strictly read-only. It attaches to an already running STK Desktop

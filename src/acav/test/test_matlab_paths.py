@@ -1,13 +1,9 @@
 """Every path handed to MATLAB is absolute.
 
-Live session on d0bf796 (results\\LIVE_E6_d0bf796, E6 attempt superseded
-at 20261017T175407, matlab_console.log:23): with --output-dir
-results\\..., the stop file and log paths given to `matlab -batch` were
-relative; MATLAB runs from src\\stk_matlab, so run_twin_session could not
-open simulink_diagnostics.txt ("Could not open the file ... for
-writing") and matlab.log was never created. MatlabBatchTwin now makes
-the run config, the log folder, the stop file and -logfile absolute
-when it is built, and RunConfig.resolved_log_dir() is absolute.
+MATLAB runs from src/stk_matlab, so a relative stop-file or log path
+given to `matlab -batch` would name another file there. MatlabBatchTwin
+makes the run config, the log folder, the stop file and -logfile
+absolute when it is built, and RunConfig.resolved_log_dir() is absolute.
 """
 
 import os
@@ -20,7 +16,8 @@ from test_deploy_run_cli import _config  # noqa: I100
 
 def test_the_matlab_command_has_only_absolute_paths(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    twin = MatlabBatchTwin("results\\X\\r.runconfig.json", "results\\X\\r.logs",
+    twin = MatlabBatchTwin(os.path.join("results", "X", "r.runconfig.json"),
+                           os.path.join("results", "X", "r.logs"),
                            matlab_dir=str(tmp_path))
     expected_logs = os.path.join(str(tmp_path), "results", "X", "r.logs")
     assert twin.log_dir == expected_logs
@@ -34,7 +31,7 @@ def test_the_matlab_command_has_only_absolute_paths(tmp_path, monkeypatch):
 
 def test_the_paths_stay_put_when_the_cwd_moves(tmp_path, monkeypatch):
     """Built in one folder, started from another (MATLAB's own cwd is
-    src\\stk_matlab): nothing follows the move."""
+    src/stk_matlab): nothing follows the move."""
     monkeypatch.chdir(tmp_path)
     started = {}
 
@@ -42,7 +39,8 @@ def test_the_paths_stay_put_when_the_cwd_moves(tmp_path, monkeypatch):
         started.update(argv=argv, cwd=cwd)
         return None
 
-    twin = MatlabBatchTwin("r.runconfig.json", "out\\r.logs", popen=popen,
+    twin = MatlabBatchTwin("r.runconfig.json", os.path.join("out", "r.logs"),
+                           popen=popen,
                            matlab_dir=str(tmp_path))
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
@@ -56,7 +54,8 @@ def test_the_paths_stay_put_when_the_cwd_moves(tmp_path, monkeypatch):
 
 def test_the_run_log_folder_is_absolute(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    config = _config(tmp_path, output="results\\X\\r.json", log_dir="")
+    config = _config(tmp_path, output=os.path.join("results", "X", "r.json"),
+                     log_dir="")
     assert config.resolved_log_dir() == os.path.join(
         str(tmp_path), "results", "X", "r.logs")
 

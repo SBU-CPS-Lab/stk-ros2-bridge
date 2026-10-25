@@ -1,11 +1,11 @@
-"""The ACAV scheduler: a ROS 2 node driving one closed-loop E2 run.
+"""The ACAV scheduler: a ROS 2 node driving one closed-loop run.
 
     ros2 run acav acav_scheduler --ros-args \\
         -p scheduler_type:=dynamics_aware \\
         -p output_json:=/tmp/run_dynamics_aware.json
 
 This node is the "target scheduler" half of the ACAV architecture
-(``docs/C1_case_study_spec.md``): it decides WHICH target the vehicle
+(``docs/acav/case_study.md``): it decides WHICH target the vehicle
 should be pointed at and WHEN (``acav/scheduling.py``, entirely offline
 logic), tells the twin via ``/acav/setpoint``, and scores what actually
 happened against ``acav/metrics.py``'s capture criterion using the
@@ -25,10 +25,8 @@ Design decisions worth being explicit about
 ``/acav/twin_status`` -- not this node, independently, from raw
 telemetry. The twin already has the freshest (satellite state, target
 position) pair at the instant it computes ``boresight_error_rad``, and
-a second, independently-written implementation of the same angle here
-would risk exactly the failure C1 warns about for the slew model: two
-models measuring their own disagreement instead of the effect under
-study.
+a second implementation of the same angle here could disagree with it,
+and the results would then measure that disagreement.
 
 **Who supplies target geometry.** This node queries each attempted
 target's Cartesian Position (ICRF) from the bridge's own
@@ -103,10 +101,9 @@ DEFAULT_ACCESS_QUERY_DELAY_S = 0.2
 
 #: How long past the window's own end to keep waiting for outstanding
 #: access answers before finalising the run anyway (see ``_finish_run``).
-#: WALL seconds, not simulation seconds: the STK scenario ends at the
+#: Wall seconds, not simulation seconds: the STK scenario ends at the
 #: window's end, so the bridge cannot step past it, and a grace period
-#: counted in simulation time never expires -- the first live run waited
-#: for step 7201, never got it, and wrote no record at all.
+#: counted in simulation time would never expire.
 FINALIZE_GRACE_WALL_S = 15.0
 
 #: A TwinStatus stamped further than this from the scenario's current
@@ -132,9 +129,7 @@ def _execution_mode_name(value: int) -> str:
     """ScenarioTime.execution_mode as a name, via the bridge's own enum.
 
     Routed through ``core/time_sync.ExecutionMode`` rather than a local
-    table so there is one mapping from those constants in the codebase.
-    A second copy is exactly how a renamed mode ends up recorded
-    correctly in one place and wrongly in another.
+    table, so there is one mapping from those constants in the codebase.
     """
     try:
         from stk_bridge.core.time_sync import ExecutionMode
@@ -154,10 +149,9 @@ def _parse_json_value(text: str, what: str):
     """Parse a JSON argument, or warn and record nothing.
 
     Warns rather than raises: a malformed ``--fault_json`` should not
-    destroy a run that has already executed against live STK. It is
+    destroy a run that has already executed against STK. It is
     recorded as absent, and the runner's own check then reports the
-    record as not matching the run it asked for -- which is the right
-    place for that to surface.
+    record as not matching the run it asked for.
     """
     if not text:
         return None
@@ -190,12 +184,11 @@ class SchedulerOptions:
     auto_shutdown: bool = True
     run_id: str = "run"
     seed: Optional[int] = None
-    #: Which experiment this run belongs to, e.g. "E5". Recorded so a
-    #: directory of results says what it is without a spreadsheet.
+    #: Which experiment this run belongs to, e.g. "E2". Recorded so a
+    #: directory of results is self-describing.
     experiment: str = ""
     #: Path to the scenario as loaded, hashed into the run's provenance.
-    #: Two runs claiming to be the same experiment while reading
-    #: different scenarios is a contradiction worth being able to detect.
+    #: Lets two runs that read different scenarios be told apart.
     scenario_path: str = ""
     #: Controller gains and injected fault in force for this run, as
     #: JSON, supplied by whatever launched it. These are recorded as
@@ -205,7 +198,7 @@ class SchedulerOptions:
     gains_json: str = ""
     fault_json: str = ""
     #: E1's treatment, recorded so a mis-paired run is identifiable in
-    #: the results rather than only in the launch command's history.
+    #: the results.
     attitude_provider: str = ""
     #: The twin identity the run orchestrator accepted, for the record.
     twin_identity: str = ""
@@ -216,11 +209,11 @@ class SchedulerNode:
 
     Constructed with an already-created ``node`` (dependency injection,
     matching ``nodes/clock_node.py``'s convention) so the class itself
-    never imports ``rclpy``/``stk_msgs`` at module scope -- only lazily,
-    inside methods -- and so a future test could hand it a fake node
-    without a sourced ROS environment. The substantial logic it calls
-    into (``acav.scheduling``, ``acav.capture_tracking``) already is
-    tested that way, in ``test_scheduling.py`` / ``test_capture_tracking.py``.
+    never imports ``rclpy``/``stk_msgs`` at module scope, only lazily
+    inside methods, so tests can use it without a sourced ROS
+    environment. The substantial logic it calls into
+    (``acav.scheduling``, ``acav.capture_tracking``) is tested offline in
+    ``test_scheduling.py`` / ``test_capture_tracking.py``.
     """
 
     def __init__(self, node, spec: AcavSpec, options: SchedulerOptions):
@@ -263,16 +256,14 @@ class SchedulerNode:
         self._misstamped_twin_status = 0
 
         # Observed from the bridge rather than assumed from the launch
-        # configuration. C1 section 8 commits the paper to reporting
-        # nothing the mock produced, and a run that was configured for
-        # COM but fell back to the mock must not be indistinguishable
-        # from a real one in the record.
+        # configuration: a run configured for COM that fell back to the
+        # mock must be distinguishable from a real one in the record.
         self._backend_type = "unknown"
         self._stk_version = ""
         self._execution_mode = "unknown"
         # The same for E1's knob: which read-back provider the bridge
         # actually used, and whether it was forced. None until a status
-        # carries one (an older bridge never does).
+        # carries one.
         self._readback_provider = ""
         self._readback_forced: Optional[bool] = None
         self._started_utc = _utc_now()
@@ -285,10 +276,9 @@ class SchedulerNode:
         # IS the closed-loop step time: the barrier does not release
         # until every participant has acked, so tick-to-tick here spans
         # a whole sense/actuate/barrier cycle. Measured from this node's
-        # vantage, so it includes its own scheduling jitter -- E6 should
-        # report it as an achieved step rate, not as a bridge-internal
-        # latency breakdown, which is a different measurement the bridge
-        # would have to publish itself.
+        # vantage, so it includes its own scheduling jitter: it is an
+        # achieved step rate, not the bridge's latency breakdown (which
+        # the bridge publishes itself).
         self._last_tick_wall_s: Optional[float] = None
         self._tick_intervals_ms: List[float] = []
 
@@ -343,7 +333,7 @@ class SchedulerNode:
     def _observe_attitude_provider(self, message) -> None:
         provider = (getattr(message, "attitude_provider", "") or "").strip()
         if not provider:
-            return              # sensing not configured yet, or an old bridge
+            return              # sensing not configured yet
         forced = bool(getattr(message, "attitude_provider_forced", False))
         if (provider, forced) != (self._readback_provider,
                                   self._readback_forced):
@@ -386,11 +376,9 @@ class SchedulerNode:
         self._stk_version = message.stk_version_string or ""
         self._observe_attitude_provider(message)
 
-        # E6's breakdown. Observed unconditionally, on every status
-        # message, not just during a designated "E6 run" -- it costs
-        # nothing to accumulate and means a campaign never has to be
-        # re-run just because someone later wants the latency figure for
-        # a run that was launched for a different experiment.
+        # The latency breakdown, observed on every status message in
+        # every experiment: it costs nothing to accumulate, and any run
+        # can then report it.
         self._latency.observe(
             message.mean_sense_ms, message.mean_actuate_ms,
             message.mean_barrier_wait_ms, message.step_samples)
@@ -457,9 +445,9 @@ class SchedulerNode:
             # active but its position query has not resolved yet -- the
             # latter is possible only in the first fraction of a second
             # of the run, while the start-of-run queries are still in
-            # flight. Holding at nadir is the honest answer in both
-            # cases: pointing at (0, 0, 0) would be worse than pointing
-            # at nothing.
+            # flight. Holding at nadir is the answer in both cases:
+            # pointing at (0, 0, 0) would be worse than pointing at
+            # nothing.
             message.target_id = ""
             message.has_target = False
 
@@ -493,20 +481,19 @@ class SchedulerNode:
             self._aggregate.observe(sample)
         except ValueError as exc:
             # Out-of-order telemetry is a harness/transport problem, not
-            # something to crash the node over mid-run; log loudly and
-            # keep going; that target's window may end up short a
-            # sample, which evaluate_capture will notice on its own.
+            # something to crash the node over mid-run: log it and keep
+            # going; that target's window may end up short a sample,
+            # which evaluate_capture notices on its own.
             LOGGER.error("twin_status out of order: %s", exc)
 
     def _check_twin_stamp(self, time_s: float) -> None:
         """Say so, loudly, when the twin is stamping on the wrong clock.
 
         Every hold-window lookup uses the TwinStatus stamp as the
-        sample's time. A twin stamping with wall-clock time (the first
-        live run did) produces samples ~73 million seconds after the
-        epoch: none can ever fall in a hold window, every target fails
-        to finalise, and each failure message on its own reads like a
-        sampling-rate problem rather than a clock problem.
+        sample's time. A twin stamping with wall-clock time produces
+        samples years after the epoch: none can fall in a hold window,
+        every target fails to finalise, and each failure on its own
+        reads like a sampling problem rather than a clock problem.
         """
         if self._last_sim_time_s is None:
             return
@@ -818,12 +805,11 @@ class SchedulerNode:
         return result
 
     def _write_output(self, result: RunResult) -> None:
-        """Write the run as a C5 record: the result plus its provenance.
+        """Write the run record: the result plus its provenance.
 
-        The provenance is what decides whether the numbers may be
-        published at all, so it is assembled here, in the process that
-        watched the run happen, rather than reconstructed afterwards
-        from launch arguments and memory.
+        The provenance decides whether the numbers may be reported, so it
+        is assembled here, in the process that watched the run happen,
+        rather than reconstructed afterwards from launch arguments.
         """
         if not self._options.output_json:
             return
@@ -835,9 +821,8 @@ class SchedulerNode:
         )
 
         scenario = {"scenario_sha256": ""}
-        # The file the spec was actually loaded from: the default one when
-        # no path was given -- which is how every campaign so far ran, and
-        # why their records carry no scenario fingerprint at all.
+        # The file the spec was actually loaded from, the default one when
+        # no path was given.
         scenario_file = self._options.scenario_path or "(default)"
         try:
             from acav.scenarios import scenario_provenance
@@ -892,10 +877,8 @@ def target_object_path(target_id: str) -> str:
     """The STK object path a scenario target id resolves to.
 
     Matches the convention ``scenario_builder.py`` creates targets
-    under (``Target`` objects named by their scenario id) -- this is
-    the ONE place that convention is assumed on the scheduler side, so
-    a future change to it needs changing in one place, not wherever a
-    target path gets built.
+    under (``Target`` objects named by their scenario id); the one
+    place that convention is assumed on the scheduler side.
     """
     return f"*/Target/{target_id}"
 

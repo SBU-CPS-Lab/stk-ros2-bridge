@@ -35,9 +35,7 @@ give the same attempt/decline verdicts (checked in
 scenario with a different target set could make them disagree.
 
 Nothing here touches ROS or STK. It is pure arithmetic over
-``AcavSpec``, exercised entirely offline -- consistent with C1 section 8
-point 3: development and the scheduler's own feasibility reasoning need
-neither STK nor the mock backend, only the shared model.
+``AcavSpec``, exercised entirely offline.
 """
 
 from __future__ import annotations
@@ -176,9 +174,9 @@ def plan_kinematic(spec: AcavSpec) -> SchedulePlan:
 
     "need" and "have" are still computed and attached to each entry --
     the kinematic policy does not USE them to decide anything, but
-    reporting them is what lets E2's analysis show, for a target that
-    failed, whether the real vehicle was ever going to make it (the
-    story the paper wants) rather than just a bare pass/fail.
+    reporting them lets E2's analysis show, for a target that failed,
+    whether the vehicle could have made it, not just a bare
+    pass/fail.
     """
     attempted: List[ScheduleEntry] = []
     previous_cross_track_km = 0.0     # start at nadir

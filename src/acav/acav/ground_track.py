@@ -1,15 +1,14 @@
 """Ground-track geodesy for target placement.
 
 Targets in this study are defined **relative to the ground track**, not
-as fixed lat/lon (see docs/C1_case_study_spec.md section 5). Hardcoded
-coordinates break the moment the epoch shifts: the satellite is no
-longer over them, every access list comes back empty, and the failure
-looks like a bridge problem rather than a scenario problem.
+as fixed lat/lon (see docs/acav/case_study.md). Hardcoded coordinates
+break the moment the epoch shifts: the satellite is no longer over them
+and every access list comes back empty.
 
-So C2 asks STK where the satellite actually is, derives the ground-track
-heading, and offsets perpendicular by the requested cross-track
-distance. This module is the geometry half of that -- pure functions, no
-STK dependency, fully testable offline.
+The scenario builder therefore asks STK where the satellite actually is,
+derives the ground-track heading, and offsets perpendicular by the
+requested cross-track distance. This module is the geometry half of
+that: pure functions, no STK dependency, testable offline.
 
 Spherical, not WGS84
 --------------------
@@ -194,10 +193,10 @@ def verify_placement(sub_satellite: GeoPoint, next_sub_satellite: GeoPoint,
 
     This exists because the failure mode of getting the perpendicular
     sign or the bearing convention wrong is a target placed 2x the
-    intended distance away, or on the wrong side -- both of which yield
-    a *plausible* scenario that silently tests something other than what
-    was designed. The builder calls this on every target and refuses to
-    continue if it disagrees.
+    intended distance away, or on the wrong side, both plausible
+    scenarios that test something other than what was designed. The
+    builder calls this on every target and refuses to continue if it
+    disagrees.
     """
     actual_m = great_circle_distance_m(sub_satellite, placed)
     actual_km = actual_m / 1000.0
@@ -217,9 +216,8 @@ def side_of_track(sub_satellite: GeoPoint, next_sub_satellite: GeoPoint,
     """
     # A point coincident with the sub-satellite point has no bearing
     # from it, and initial_bearing_rad rightly refuses to invent one.
-    # Here it is not an error, though: it is the on-track case this
-    # function documents a 0 return for, and it is reachable in practice
-    # -- the ground station is configured at cross_track_km = 0.0.
+    # Here it is not an error: it is the on-track case this function
+    # documents a 0 return for (e.g. an object at cross_track_km = 0.0).
     if great_circle_distance_m(sub_satellite, point) < 1e-6:
         return 0
 

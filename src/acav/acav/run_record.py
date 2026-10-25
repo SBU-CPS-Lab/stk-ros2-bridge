@@ -1,42 +1,34 @@
-"""Run provenance and serialisation -- the C5/C6 contract.
+"""Run provenance and serialisation: the record every analysis reads.
 
 A :class:`~acav.metrics.RunResult` says what happened. It does not say
-*where it came from*, and for this study that second question decides
-whether a number may be published at all: C1 section 8 commits the paper
-to reporting nothing the mock backend produced. A result file that
-records only outcomes puts the burden of remembering which backend ran
-on whoever assembles the figures, months later, across several hundred
-files. That is not a burden a person can carry reliably, so it is
-carried here instead.
+*where it came from*, and that decides whether a number may be reported
+at all: nothing the mock backend produced is reportable. Recording the
+provenance with the result means it never has to be remembered.
 
-So every run is stored as a :class:`RunRecord`: the result, plus the
-provenance needed to decide whether it counts, plus the determinism
-signature E3 compares. C6 reads these and nothing else.
+Every run is therefore stored as a :class:`RunRecord`: the result, the
+provenance needed to decide whether it counts, and the determinism
+signature that E3 compares. The report reads these and nothing else.
 
 Three properties this module is responsible for
 -----------------------------------------------
 1. **The backend is observed, not assumed.** ``backend_type`` is
    whatever the bridge reported on ``BridgeStatus``, not what the
-   campaign intended to launch. A run configured for COM that silently
-   fell back to the mock must not be indistinguishable from a real one
-   in the record, because that is precisely the confusion C1 section 8
-   exists to prevent.
+   campaign intended to launch, so a run configured for COM that fell
+   back to the mock is distinguishable from a real one.
 2. **Reportability is derived, never stored.** :attr:`RunRecord.
-   reportable` is computed from the backend every time it is asked. A
-   stored flag can be edited, copied from a neighbouring file, or go
-   stale when a record is regenerated; a derived one cannot.
+   reportable` is computed every time it is asked. A stored flag could
+   be edited, copied from a neighbouring file, or go stale.
 3. **The signature is verified on read.** It is written into the file
-   for readability, and recomputed from the result on load. If the two
-   disagree the file has been hand-edited or truncated, and this module
-   raises rather than letting a corrupted run into a campaign that then
-   reports a determinism result about it.
+   for readability and recomputed from the result on load. If the two
+   disagree the file has been edited or truncated, and this module
+   raises rather than letting it into a determinism result.
 
 On NaN
 ------
 ``error_at_image_deg`` is legitimately NaN for a target nothing was
 attempted against. ``json.dump`` writes that as a bare ``NaN`` token,
-which is not valid JSON and which stricter readers -- including MATLAB's
-``jsondecode`` -- reject. Floats are therefore written as ``null`` and
+which is not valid JSON and which stricter readers (including MATLAB's
+``jsondecode``) reject. Floats are therefore written as ``null`` and
 read back as NaN, which is valid JSON and round-trips exactly.
 """
 
@@ -54,15 +46,13 @@ from acav.metrics import (
     determinism_signature,
 )
 
-#: Backends whose numbers may appear in the paper. The mock is missing
-#: from this set on purpose and must stay missing: it is an in-process
-#: Python object with no STK in it, and C1 section 8 commits the study
-#: to reporting nothing it produced.
+#: Backends whose numbers may be reported. The mock is missing from this
+#: set on purpose: it is an in-process Python model with no STK in it.
 REPORTABLE_BACKENDS = frozenset({"com", "engine", "connect"})
 
 #: Schema version of the record format itself. Bumped when the meaning
-#: of a field changes, so C6 can refuse a campaign written by an older
-#: harness rather than silently misreading it.
+#: of a field changes, so the report can refuse a campaign written by an
+#: older harness rather than misreading it.
 RECORD_VERSION = 1
 
 
@@ -90,8 +80,8 @@ class Provenance:
     #: E3's independent variable, so it is recorded rather than inferred.
     execution_mode: str = "unknown"
     #: SHA-256 of the scenario YAML as loaded. Two runs claiming to be
-    #: the same experiment while reading different scenarios is the kind
-    #: of error that produces a publishable-looking contradiction.
+    #: the same experiment while reading different scenarios would produce
+    #: a plausible contradiction.
     scenario_sha256: str = ""
     #: For a generated scenario (acav.scenario_generator): its seed and
     #: the generator version, from the file's header; None and "" for the
@@ -103,59 +93,50 @@ class Provenance:
     #: The injected fault for this run, if any (see acav.fault_injection).
     fault: Optional[Dict[str, Any]] = None
     #: E1's treatment: the attitude read-back provider forced for this
-    #: run, empty for the validated pairing every other run uses. Added
-    #: after RECORD_VERSION 1 without a bump, because its absence in an
-    #: older record has exactly one correct reading -- the validated
-    #: pairing -- so nothing can be misinterpreted.
+    #: run, empty for the validated pairing every other run uses. Its
+    #: absence has one reading, the validated pairing.
     attitude_provider: str = ""
     #: The read-back provider the bridge reported using
     #: (BridgeStatus.attitude_provider), forced or validated; empty when
-    #: no status carried one -- every record written before it was
-    #: observed. ``attitude_provider`` above is derived from the same
-    #: observation when there is one. No RECORD_VERSION bump: absence
-    #: reads as "not observed" and changes nothing else in the record.
+    #: no status carried one. ``attitude_provider`` above is derived from
+    #: the same observation when there is one.
     attitude_readback_provider: str = ""
     #: E1's mismatch type and guard arm (acav.campaign.E1_MISMATCH_TYPES;
     #: "on" or "ablated"), written by the run orchestrator from the run.
-    #: Empty for every other run and in records written before they
-    #: existed; acav.campaign.e1_arm reads an old forced-provider record
-    #: as frame_pairing, guard ablated. Not part of the determinism
-    #: signature, like attitude_provider. No RECORD_VERSION bump.
+    #: Empty for every other run; acav.campaign.e1_arm reads a
+    #: forced-provider record without them as frame_pairing, guard ablated.
+    #: Not part of the determinism signature, like attitude_provider.
     mismatch: str = ""
     mismatch_guard: str = ""
     #: The code that produced the run (see acav.code_version): a git
-    #: commit, ``<commit>+dirty``, or ``unknown (...)``. Empty in records
-    #: written before it was recorded -- added without a RECORD_VERSION
-    #: bump for the same reason as attitude_provider: absence has one
-    #: reading ("not recorded") and changes nothing else in the record.
+    #: commit, ``<commit>+dirty``, or ``unknown (...)``; empty when not
+    #: recorded.
     code_version: str = ""
     #: The twin identity the run orchestrator checked and accepted
     #: ("v3 <run-config sha256> <build fp> <runtime fp> <polling>"; "v2"
     #: before the fingerprint ignored line endings, "v1" before the
-    #: polling rate was recorded; see
-    #: acav.twin_identity); empty when not checked -- every record written
-    #: before the check existed. No RECORD_VERSION bump, as above.
+    #: polling rate was recorded; see acav.twin_identity); empty when not
+    #: checked.
     twin_identity: str = ""
     #: STK's graphics state for the whole run, written by the run
     #: orchestrator from the bridge's samples: "off", "on", "mixed" or
     #: "unverified" (stk_bridge/core/graphics_state.py). It changes the
-    #: step time, so timing is never pooled across values; empty in
-    #: records written before it was recorded. No RECORD_VERSION bump.
+    #: step time, so timing is never pooled across values; empty when not
+    #: recorded.
     graphics_mode: str = ""
     #: The bridge's time.real_time_factor for this run, written by the
-    #: run orchestrator; None in records written before it was recorded
+    #: run orchestrator; None when not recorded
     #: (campaign_cli.effective_real_time_factors says how those count).
     real_time_factor: Optional[float] = None
     #: MATLAB's version() in the session that ran the twin, when the run
     #: orchestrator started it (--twin-launch matlab-batch); empty for a
-    #: twin started by hand and in records written before it existed.
+    #: twin started by hand.
     matlab_version: str = ""
     #: The STK Desktop process a COM run used (acav/stk_process.py),
     #: written by the run orchestrator: pid, started_at, command_line,
     #: parent, uptime_s and started_by ("operator", "com" or "unknown").
-    #: None for other backends and in records written before it existed.
-    #: An STK started through COM ran E6 slower (P10), so timing is never
-    #: pooled across started_by values. No RECORD_VERSION bump.
+    #: None for other backends. An STK started through COM steps slower,
+    #: so timing is never pooled across started_by values.
     stk_process: Optional[Dict[str, Any]] = None
     started_utc: str = ""
     finished_utc: str = ""
@@ -239,11 +220,11 @@ class RunRecord:
 
     @property
     def reportable(self) -> bool:
-        """May this run's numbers appear in the paper?
+        """May this run's numbers be reported?
 
         Derived from the observed backend and the result on every access
         rather than stored, so it cannot be inherited from a copied file
-        or left behind by a regeneration. C6 asserts on this.
+        or left behind by a regeneration. The report asserts on this.
         """
         return not self.unreportable_reasons
 
@@ -251,7 +232,7 @@ class RunRecord:
     def unreportable_reasons(self) -> List[str]:
         """Why this run may not be reported; empty when it may.
 
-        - The backend is not a real STK one (C1 section 8).
+        - The backend is not a real STK one.
         - A lockstep run has a target with no twin telemetry in its hold
           window: the barrier makes the twin report every step, so the
           harness failed. (In free-run that is a coupling outcome.)
@@ -364,8 +345,7 @@ def _target_to_dict(t: TargetResult) -> Dict[str, Any]:
         "slew_magnitude_deg": _num(t.slew_magnitude_deg),
         "slew_duration_s": _num(t.slew_duration_s),
     }
-    # Only when there is one, so a scored target is written exactly as
-    # before the field existed.
+    # Only when there is one, so a scored target carries no empty field.
     if t.reason:
         entry["reason"] = t.reason
     for key in ("access_wait_s", "access_wait_wall_s"):
@@ -447,23 +427,19 @@ def read_records(paths: Sequence[str]) -> List[RunRecord]:
 
 
 def unreportable(records: Sequence[RunRecord]) -> List[RunRecord]:
-    """Records whose numbers must not reach the paper.
+    """Records whose numbers must not be reported.
 
-    C6 calls this and refuses to plot if it returns anything. Offered as
-    a list rather than a bool so the failure names the offending runs --
-    "some run in this campaign used the mock" is not actionable at 3 am
-    with two hundred files.
+    The report calls this and refuses to plot if it returns anything.
+    A list rather than a bool, so the failure names the offending runs.
     """
     return [r for r in records if not r.reportable]
 
 
-#: Raw scenario digests written before the digest ignored line endings,
-#: mapped to the line-ending-free digest of the same file. Every record
-#: up to 8345551 names the scenario by the first: the sha256 of
-#: acav_scenario.yaml as checked out with CRLF line endings
-#: (core.autocrlf), whose LF-normalised sha256 is the second. Computed
-#: once from that file; target_coverage_problems accepts a legacy digest
-#: that maps to the current scenario's.
+#: Raw scenario digests from before the digest ignored line endings,
+#: mapped to the line-ending-free digest of the same file: the sha256 of
+#: acav_scenario.yaml checked out with CRLF line endings
+#: (core.autocrlf), and its LF-normalised sha256. target_coverage_problems
+#: accepts a legacy digest that maps to the current scenario's.
 LEGACY_SCENARIO_DIGESTS = {
     "c8825803c3073f744ec76f25e3e889606a4c09fcb040aba985cb7e2371706ba9":
         "c294ae8024093e02b174817e8dcb9ee38fb45dbb783fc60b2cd8cc610e45b28e",

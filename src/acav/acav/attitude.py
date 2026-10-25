@@ -1,13 +1,10 @@
 """Quaternion algebra and attitude kinematics for the ACAV twin.
 
-The conventions here are the ones the whole study runs on, and every one
-of them is **pinned by a test that asserts a physical outcome** rather
-than by a comment. That is deliberate: a sign or ordering error in this
-file produces a twin that flies smoothly to the wrong attitude, STK
-dutifully reports no access, and the result looks like a control-design
-finding instead of a bug. The bridge's own bring-up lost a cycle to
-exactly this (an ECF-commanded attitude read back against an inertial
-provider, wrong by the Earth-rotation angle, entirely plausible).
+Every convention here is pinned by a test that asserts a physical
+outcome rather than by a comment, because a sign or ordering error in
+this file produces a twin that steers smoothly to the wrong attitude
+while STK reports no access, which looks like a control-design result
+rather than a bug.
 
 Conventions
 -----------
@@ -32,12 +29,10 @@ inertial, expressed in **body** axes, rad/s. The kinematics are then
 
 Why not a library
 -----------------
-A dependency would have to be installed on the Windows deploy machine
-and matched by an equivalent in MATLAB, and the MATLAB side has to be
-hand-written regardless. Two hand-written implementations that must
-agree is the risk this module exists to manage, so it is small, exact,
-and cross-checked against the MATLAB twin through exported fixtures
-(``scripts/export_twin_fixtures.py``).
+A dependency would have to be installed on the STK host and matched by
+an equivalent in MATLAB, whose side is hand-written regardless. The
+module is therefore small and exact, and cross-checked against the
+MATLAB twin through exported fixtures (``scripts/export_twin_fixtures.py``).
 """
 
 from __future__ import annotations
@@ -135,8 +130,7 @@ def axis_angle_from_quat(q: Sequence[float]) -> Tuple[Vector3, float]:
 
     The sign flip matters: ``q`` and ``-q`` are the same attitude, and
     without it a controller fed the long-way-round error would slew
-    350 degrees to reach a 10 degree target. That failure is silent --
-    the vehicle does arrive.
+    350 degrees to reach a 10 degree target.
     """
     q = quat_normalize(q)
     if q[3] < 0.0:
@@ -209,11 +203,10 @@ def boresight_error_rad(q: Sequence[float], q_reference: Sequence[float],
     """
     achieved = rotate_to_inertial(q, boresight_body)
     desired = rotate_to_inertial(q_reference, boresight_body)
-    # atan2 of the cross and dot products, not acos of the dot product.
-    # acos loses half its significant digits near zero -- it returned
-    # 2e-8 rad for two exactly-parallel directions -- and this number is
-    # compared against a 0.5 deg capture threshold, so it should be
-    # accurate where it is small rather than only where it is large.
+    # atan2 of the cross and dot products, not acos of the dot product:
+    # acos loses half its significant digits near zero (2e-8 rad for two
+    # parallel directions), and this number is compared against a 0.5 deg
+    # capture threshold.
     return math.atan2(norm(cross(achieved, desired)),
                       dot(achieved, desired))
 
@@ -275,9 +268,8 @@ def quat_align(primary_body: Sequence[float],
     about it.
 
     Raises if the two inertial directions are parallel, rather than
-    silently returning an arbitrary roll -- an arbitrary but *stable*
-    roll would look fine and quietly change which way the footprint is
-    smeared.
+    returning an arbitrary roll, which would look fine and change which
+    way the footprint is smeared.
     """
     p_b = normalize(primary_body)
     p_i = normalize(primary_inertial)

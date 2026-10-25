@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Run ONE campaign run end to end (bridge, twin handoff, scheduler).
+"""Run one campaign run end to end (bridge, twin, scheduler).
 
 This is the command ``CommandLauncher`` invokes per run of a campaign
-(see ``acav/campaign_runner.py`` and ``docs/08_deploy_runbook.md``), or
-that can be run by hand for a single E6 measurement run.
+(see ``acav/campaign_runner.py`` and ``docs/acav/running_campaigns.md``),
+and it can be run by hand for a single run.
 
     python scripts/run_acav_run.py --run-id E6-seed1 --output out.json \\
         --bridge-config config/bridge_params_acav.yaml --scenario ... \\

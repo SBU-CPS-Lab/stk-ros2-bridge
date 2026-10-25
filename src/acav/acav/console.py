@@ -1,9 +1,8 @@
 """Keep the run orchestrators from blocking on their console.
 
 On Windows, a selection in a console window with QuickEdit on pauses
-every write to that console until a key is pressed. During E6 seed1 of
-the P9b campaign (9fed085) the runner logged a line to run.log, then
-blocked writing it to the console for 11.5 min. Two measures:
+every write to that console until a key is pressed, which can stall a
+run for as long as nobody notices. Two measures:
 
 - :func:`disable_quickedit` turns QuickEdit off for the console the
   process runs in (it is a property of the console, shared with the

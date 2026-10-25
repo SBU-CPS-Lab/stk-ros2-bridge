@@ -34,16 +34,15 @@ MATLAB_SESSION_FILE = "matlab_session.json"
 #: where a paused console could hold the twin.
 MATLAB_CONSOLE_FILE = "matlab_console.log"
 
-#: MATLAB start-up plus the twin's build and simulation start, seconds:
-#: the larger of two headless runs of run_twin_session on the deploy
-#: machine (R2023b Update 6, 2026-10-16: 126.3 s and 118.0 s; build
-#: about 91 s of that).
+#: MATLAB start-up plus the twin's build and simulation start, seconds,
+#: as measured headless with R2023b (about 120 s, of which the build is
+#: about 90 s).
 MEASURED_STARTUP_BUILD_S = 126.3
 #: The ack wait in matlab-batch mode: twice the measurement, at least
 #: 3 minutes. summary.json records the value used.
 AUTOMATED_TWIN_ACK_TIMEOUT_S = max(2 * MEASURED_STARTUP_BUILD_S, 180.0)
-#: From the stop file to the process's exit; it took 27.7 and 29.3 s in
-#: the same runs (closing the model, then MATLAB itself).
+#: From the stop file to the process's exit; measured at about 30 s
+#: (closing the model, then MATLAB itself).
 STOP_TIMEOUT_S = 120.0
 POLL_S = 0.5
 
@@ -91,9 +90,7 @@ class MatlabBatchTwin:
                  clock: Callable[[], float] = time.monotonic,
                  matlab: str = "matlab", matlab_dir: str = ""):
         # Absolute here, the one place paths are handed to MATLAB: it runs
-        # from src/stk_matlab, where a relative path means another file
-        # (live session on d0bf796: simulink_diagnostics.txt not writable,
-        # no matlab.log).
+        # from src/stk_matlab, where a relative path means another file.
         run_config = os.path.abspath(run_config)
         log_dir = os.path.abspath(log_dir)
         self.log_dir = log_dir

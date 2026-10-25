@@ -1,4 +1,4 @@
-"""Seeded imaging-target scenarios (Phase 3a).
+"""Seeded imaging-target scenarios.
 
 ``write_scenario(seed, out_dir)`` writes ``acav_seed<seed>.yaml``: the
 reference scenario (config/acav_scenario.yaml) with only its target list

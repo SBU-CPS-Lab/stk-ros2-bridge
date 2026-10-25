@@ -32,8 +32,8 @@ so rather than passing.
 Reading the report
 ------------------
 ``PASS`` measured and correct. ``WARN`` measured, not what was asked
-for, but the study still runs in a degraded form the paper must then
-describe honestly. ``FAIL`` the scenario would silently measure
+for, but the study still runs in a degraded form that must be
+described as such. ``FAIL`` the scenario would silently measure
 something other than what was designed -- do not run experiments
 against it. ``SKIP`` could not be measured on this backend.
 
@@ -44,8 +44,8 @@ not model sensor cones, terrain, or access geometry -- it synthesises
 plausible access intervals on a timer. A mock run therefore verifies
 the *plumbing* (paths, epochs, target placement arithmetic, the
 report's own logic) and nothing about STK. No number produced under
-``--backend mock`` may appear in the paper; ``verify_acav_scenario.py``
-prints that in a banner rather than leaving it to be remembered.
+``--backend mock`` is reportable; ``verify_acav_scenario.py`` prints
+that in a banner.
 """
 
 from __future__ import annotations
@@ -152,8 +152,8 @@ class VerificationReport:
     backend_type: str = ""
     scenario_name: str = ""
     results: List[CheckResult] = field(default_factory=list)
-    #: Free-form measurements downstream phases may want (C6 reports the
-    #: measured sensor half-angle and terrain mode in the methodology).
+    #: Free-form measurements for downstream reports (e.g. the measured
+    #: sensor half-angle and terrain mode).
     measurements: Dict[str, object] = field(default_factory=dict)
 
     def add(self, name: str, status: str, detail: str = "") -> CheckResult:
@@ -227,19 +227,15 @@ class AcavScenarioVerifier:
         self._angle_scale = AngleScale()
         #: The unit SetPosition Geodetic consumes. Taken from the build
         #: report when the scenario was built in this process, measured
-        #: otherwise -- but never assumed. Placing the FOV probes in
-        #: radians where STK wanted degrees put every one of them in the
-        #: wrong place and made the verifier report that the sensor
-        #: could not see nadir, which was true of the probes and not of
-        #: the sensor.
+        #: otherwise, never assumed: probes placed in the wrong unit
+        #: would make the sensor appear unable to see nadir.
         self._geodetic_write_unit: Optional[GeodeticWriteUnit] = None
         self._last_read_diagnostic = ""
         self._mask_failure = ""
         #: Probe-ladder measurement, taken once and read by both the
         #: boresight and the half-angle check. They are two conclusions
-        #: from one experiment, and running the probes twice would both
-        #: cost a second set of access computations and let the two
-        #: conclusions be drawn from different measurements.
+        #: from one experiment, so they are drawn from the same
+        #: measurement.
         self._fov: Optional[Dict[str, object]] = None
         self._orbit_ok = False
         self._satellite = ""
@@ -347,11 +343,10 @@ class AcavScenarioVerifier:
         if abs(offset) <= 1.0:
             return PASS, f"epoch {actual} matches window_start_utc"
 
-        # Not fatal: every offset in this study is measured FROM the
-        # scenario epoch, so the scenario is still internally consistent
-        # -- it is simply not at the epoch the spec names. That matters
-        # for reproducibility across machines and for the paper's
-        # scenario description, so it must be reported.
+        # Not fatal: every offset in this study is measured from the
+        # scenario epoch, so the scenario is still internally consistent,
+        # just not at the epoch the spec names. That matters for
+        # reproducibility, so it is reported.
         return WARN, (
             f"scenario epoch is {actual}, {offset:+.1f} s from the "
             f"configured window_start_utc {requested}. SetAnalysisTimePeriod "
@@ -588,12 +583,10 @@ class AcavScenarioVerifier:
         attitude puts body +Z towards nadir. Only their combination is
         observable, so that is what is measured.
 
-        **The conclusion is gated on the cone being narrow.** On the
-        first live run this check reported PASS while the sensor was at
-        STK's 45 deg default -- a cone that wide sees a nadir target
-        whatever the boresight is doing, so the test proved nothing and
-        said it had proved something. A pass is only meaningful when the
-        cone is tight enough for the nadir probe to discriminate.
+        **The conclusion is gated on the cone being narrow.** At STK's
+        45 deg default a cone sees a nadir target whatever the boresight
+        is doing, so a pass is only meaningful when the cone is tight
+        enough for the nadir probe to discriminate.
         """
         if not self._sensor:
             return SKIP, "no sensor resolved"
@@ -841,11 +834,9 @@ class AcavScenarioVerifier:
         dropped to 0 deg. A constraint that was accepted but not applied
         leaves the two identical.
 
-        This is a *constraint*, not a mask. STK has no constant-elevation
-        az-el mask -- the type enum offers only None, File and
-        TerrainData -- and an earlier version of this check tried to use
-        one as its control, failed on every run, and reported a verdict
-        from three identical numbers.
+        This is a *constraint*, not a mask: STK has no constant-elevation
+        az-el mask (the type enum offers only None, File and
+        TerrainData).
         """
         if not self._ground_station:
             return SKIP, "no ground station"
@@ -854,12 +845,10 @@ class AcavScenarioVerifier:
 
         minimum = float(self._spec.ground_station.get("min_elevation_deg",
                                                       10.0))
-        # Turn the terrain mask off for the duration. A terrain horizon
-        # higher than the elevation minimum hides the constraint
-        # completely -- the two measurements come out identical and the
-        # check reports "not applied" about a constraint that is applied
-        # and simply not binding. Controlling for the confound is the
-        # difference between a measurement and a coincidence.
+        # Turn the terrain mask off for the duration: a terrain horizon
+        # higher than the elevation minimum hides the constraint, and the
+        # check would report "not applied" about a constraint that is
+        # applied but not binding.
         confounded = ""
         with self._temporary_mask("none") as mask_off:
             if not mask_off:
@@ -915,8 +904,8 @@ class AcavScenarioVerifier:
         has: the terrain mask, and no mask at all. If they agree, terrain
         data is not affecting this region -- either it is not loaded, or
         the local horizon never rises above the elevation minimum. The
-        study still runs; the paper must then describe the mask as a
-        spherical-Earth elevation constraint and must NOT claim terrain.
+        study still runs, but the mask must then not be described as
+        terrain masking.
         """
         config = self._spec.ground_station or {}
         if not config.get("terrain_masking", False):
@@ -1033,11 +1022,9 @@ class AcavScenarioVerifier:
                                       probe_epoch: float) -> bool:
         """Try the opposite elevation, then put the sensor back.
 
-        Degrees, like every other angle-bearing Connect command measured
-        on this install. This previously sent radians, so the "flipped"
-        retry actually set an elevation of -1.57 DEG -- essentially the
-        horizon -- and the answer it produced said nothing about the
-        boresight either way.
+        Degrees, like every other angle-bearing Connect command on STK
+        12.6; in radians the flipped elevation would be -1.57 degrees,
+        essentially the horizon.
         """
         for label, elevation_deg in (("flip", -90.0),):
             if not self._connect_ok(
@@ -1084,13 +1071,9 @@ class AcavScenarioVerifier:
         """Applies an az-el mask mode, then restores the configured one.
 
         ``mode`` is one of STK's three: ``terrain``, ``none``, ``file``.
-        There is no constant-elevation mask -- a live 12.6 install
-        reports exactly ``eAzElMaskNone``, ``eMaskFile`` and
-        ``eTerrainData``. The verifier previously tried to apply a
-        constant mask as an experimental control, which failed on every
-        run and left the terrain check with nothing to compare against.
-        A minimum elevation is an access *constraint*, checked
-        separately.
+        There is no constant-elevation mask (STK 12.6 has exactly
+        ``eAzElMaskNone``, ``eMaskFile`` and ``eTerrainData``). A minimum
+        elevation is an access *constraint*, checked separately.
         """
 
         def __init__(self, verifier: "AcavScenarioVerifier", mode: str):
@@ -1101,9 +1084,8 @@ class AcavScenarioVerifier:
         def __enter__(self) -> bool:
             """Returns whether the mask was actually applied.
 
-            Callers must branch on this. A check that concludes from a
-            treatment which never ran is worse than no check: it reports
-            a verdict with nothing behind it.
+            Callers must branch on this, so that no check concludes from
+            a treatment that never ran.
             """
             try:
                 self._verifier._backend.set_az_el_mask(
@@ -1229,10 +1211,9 @@ class AcavScenarioVerifier:
 
         Returns ``(path, how)``; ``path`` is empty if nothing matched.
         The path *form* matters: STK reports absolute paths but accepts
-        the ``*/`` relative form, and mixing them silently breaks
-        dictionary lookups. Everything here is canonicalised, and which
-        route succeeded is reported so a path-form problem is visible
-        rather than inferred.
+        the ``*/`` relative form, and mixing them breaks dictionary
+        lookups. Everything here is canonicalised, and which route
+        succeeded is reported.
         """
         wanted = conv.canonical_object_path(f"*/{object_class}/{name}")
         if hint:
@@ -1278,9 +1259,8 @@ def _cross_track_km_for_off_nadir(off_nadir_deg: float,
     """Inverse of :func:`acav.slew_model.off_nadir_angle_deg`.
 
     Solved by bisection rather than algebraically: the forward function
-    is the study's contract for this geometry, and inverting it
-    numerically guarantees the two agree exactly, where a hand-derived
-    closed form could drift from it after an edit.
+    is the study's definition of this geometry, and inverting it
+    numerically keeps the two in exact agreement.
     """
     if off_nadir_deg <= 0.0:
         return 0.0

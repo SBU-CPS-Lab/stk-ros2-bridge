@@ -1,7 +1,7 @@
-"""Chart styling for C6's figures -- one place, applied consistently.
+"""Chart styling for the campaign report figures, applied consistently.
 
 Every figure in :mod:`acav.report_figures` is a static, print-destined
-image (the paper, not a dashboard), so the concerns are different from
+image (a report, not a dashboard), so the concerns are different from
 an interactive chart's: no hover, no dark mode, no legend that needs to
 survive a filter change. What still applies, because it is what makes a
 figure look designed rather than defaulted, is the color and mark
@@ -13,8 +13,7 @@ than the data it labels.
 The hex values below are a validated categorical/sequential/status
 palette (colorblind-safe adjacent pairs, checked contrast), not house
 colors picked by eye. Matplotlib's own defaults -- the tab10 cycle, a
-heavy grid, drop-shadowed legend boxes -- are exactly the "obviously a
-default" look this module exists to avoid.
+heavy grid, drop-shadowed legend boxes -- are replaced throughout.
 """
 
 from __future__ import annotations
@@ -104,7 +103,7 @@ def apply_style() -> None:
     ``pyplot``: these figures are rendered by ``run_acav_campaign
     report``, which has no reason to run anywhere with a display, and an
     interactive backend (GTK, Qt) picked up from whatever happens to be
-    installed will raise or hang on a headless deploy or CI box with no
+    installed will raise or hang on a headless machine or CI runner with no
     X server. ``matplotlib.use`` must run before the first ``import
     matplotlib.pyplot`` in the process or it has no effect -- safe here
     because every figure function imports pyplot lazily, and this is

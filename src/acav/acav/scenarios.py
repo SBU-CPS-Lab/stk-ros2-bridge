@@ -1,10 +1,9 @@
-"""Which scenario a run used, and whether the twin can run it (P10c).
+"""Which scenario a run used, and whether the twin can run it.
 
 The reference scenario (config/acav_scenario.yaml) is the one the twin
-reads -- its MATLAB YAML reader always opens that file -- and the one
-every record so far names. Generated scenarios (acav.scenario_generator)
-live in config/scenarios/generated and differ from it only in their
-targets and the missing ground station.
+reads (its MATLAB YAML reader always opens that file). Generated
+scenarios (acav.scenario_generator) live in config/scenarios/generated
+and differ from it only in their targets and the missing ground station.
 
 - :func:`known_scenarios`: the reference, the generated files and any
   extra file, by digest;

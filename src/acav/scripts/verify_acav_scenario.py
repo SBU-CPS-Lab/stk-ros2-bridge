@@ -8,8 +8,7 @@ The implementation lives in ``acav.verify_cli`` so that setup.py can
 expose it as a console_script (``ros2 run acav verify_acav_scenario``).
 This file exists so the same code can be run the way
 ``stk_bridge/scripts/check_environment.py`` is run -- straight out of
-the source tree, with no colcon build and no sourced workspace -- which
-is how the live-STK verify/fix loop actually happens on the Windows box.
+the source tree, with no colcon build and no sourced workspace.
 """
 
 import os

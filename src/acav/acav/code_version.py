@@ -2,13 +2,12 @@
 
 Recorded in every run record, run configuration and campaign manifest, so
 a result can be traced to the exact bridge, scheduler and twin code that
-produced it. Months later, "which version made this number" is otherwise
-answered from memory.
+produced it.
 
 The value is ``<40-hex commit>``, ``<commit>+dirty`` when tracked files
 differ from that commit, or ``unknown (<reason>)``. A dirty or unknown
 version is recorded as such, never omitted: a campaign run from modified
-code is still data, but the paper must not attribute it to a commit.
+code is still data, but it cannot be attributed to a commit.
 
 Lookup order:
 
@@ -17,8 +16,7 @@ Lookup order:
    orchestrator resolved even when it runs from an install tree that is
    not a git checkout.
 2. The git checkout containing this module.
-3. The git checkout containing the current directory (the runbook runs
-   every command from the workspace, inside the repository).
+3. The git checkout containing the current directory.
 """
 
 from __future__ import annotations
@@ -58,9 +56,9 @@ def describe_checkout(directory: str) -> Optional[str]:
 def describe(prefer_env: bool = True) -> str:
     """The code version to record. Never raises.
 
-    ``prefer_env=False`` is for the orchestrator, which must resolve the
-    version from its own checkout rather than trust a value left in the
-    operator's shell.
+    ``prefer_env=False`` is for the orchestrator, which resolves the
+    version from its own checkout rather than trusting a value left in
+    the shell.
     """
     override = os.environ.get(ENV_VAR, "").strip()
     if prefer_env and override:

@@ -1,35 +1,26 @@
-# stk_bridge configuration for the ACAV case study (C4-C6).
+# stk_bridge configuration for the ACAV case study.
 #
 # A copy of stk_bridge/config/bridge_params.yaml, not a reference to it,
-# with exactly the deltas config/acav_scenario.yaml's own `bridge:`
-# section documents as required for this study -- see that file's
-# comment block for why each one is what it is. Kept as a separate file
-# rather than edited in place so running the base bridge phases (T1
-# installation checks, non-ACAV use) is unaffected by the case study's
-# needs.
+# with the deltas this study needs (config/acav_scenario.yaml's `bridge:`
+# section documents why). Kept as a separate file so the generic bridge
+# configuration is unaffected by the case study.
 #
 #   ros2 launch stk_bridge stk_bridge.launch.py \
 #       config_file:=$(pwd)/src/acav/config/bridge_params_acav.yaml
 #
 # Deltas from the base file, and why:
 #   time.barrier_participants: adds acav_scheduler. The base file lists
-#     only matlab_twin because the bridge phases were verified without
-#     a scheduler in the loop at all; ACAV adds a second barrier
-#     participant, and BOTH must ack every step or the run stalls
-#     against barrier_timeout_s (acav_scenario.yaml: bridge section).
+#     only matlab_twin; ACAV adds a second barrier participant, and both
+#     must ack every step or the run stalls against barrier_timeout_s.
 #   scenario.scenario_name: matches config/acav_scenario.yaml's own
 #     scenario.name (ACAV_SSS1), not the base file's generic
-#     SSS1_DigitalTwin -- so a COM backend with attach_to_existing does
-#     not silently attach to an unrelated open scenario of the same
-#     satellite name.
+#     SSS1_DigitalTwin, so the bridge does not use an unrelated open
+#     scenario with the same satellite name.
 #
 # scenario.use_existing reuses the open scenario after checking its name.
 # COM attach_to_existing selects the application, not the scenario.
-# scenario.scenario_path stays empty -- see docs/08_deploy_runbook.md for the
-# order of operations (build the ACAV scenario in STK BEFORE launching
-# the bridge) this assumes; verify against your own STK session before
-# trusting it for an overnight campaign, the same as every other
-# operational value in this file (see the base file's own header).
+# scenario.scenario_path stays empty: the ACAV scenario is built in STK
+# before the bridge is launched (see docs/acav/running_campaigns.md).
 
 topic_prefix: stk
 log_level: INFO
@@ -100,15 +91,15 @@ sensing:
   enable_link_budget: false
   access_pairs: []
   # Opt-in, observe-only comparison of the current reads with the
-  # proposed optimisations (core/equivalence_diagnostic.py). It
-  # inflates every timing; enable it only in a per-run copy.
+  # optimised reads (core/equivalence_diagnostic.py). It inflates every
+  # timing; enable it only for a diagnostic run.
   equivalence_diagnostic: false
-  # (B) One 'Attitude Segment Quaternions' query serves attitude
+  # Combined read: one 'Attitude Segment Quaternions' query serves attitude
   # and rate, only after the bridge proves at a written sample that
   # its quaternion equals 'Attitude Quaternions' (core/sensing.py).
   # run_acav_run.py turns it off for E1 and forced providers.
   combine_attitude_rate: true
-  # (C) Lockstep orbit reads from audited 100-epoch HPOP blocks
+  # Orbit batching: lockstep orbit reads from audited 100-epoch HPOP blocks
   # (core/orbit_batch.py). Both block ends must match instantaneous
   # reads within these strict tolerances or the block is not used.
   # Valid only while no force depends on attitude and nothing edits
@@ -127,11 +118,10 @@ actuation:
   # ICRF position, velocity and target vectors, so it must command
   # AddAttitude Quat and read back through 'Attitude Quaternions'. The
   # base pairing (CBFQuat / 'ECF Attitude Quaternions') is Earth-fixed;
-  # used with this twin, every attitude it commanded landed in STK rotated
-  # by the Earth-rotation angle (live run 2026-09-27: access=False for
-  # every target, and a phantom ~108 deg error at t=0). Validation prefers
-  # this pairing because of this setting, and the bridge refuses to start
-  # if the validated read-back does not match it.
+  # used with this twin, every commanded attitude would land in STK
+  # rotated by the Earth-rotation angle. Validation prefers this pairing
+  # because of this setting, and the bridge refuses to start if the
+  # validated read-back does not match it.
   default_attitude_inertial: true
   coalesce: true
 

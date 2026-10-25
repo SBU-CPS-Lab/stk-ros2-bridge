@@ -91,9 +91,8 @@ class RunAggregate:
     """
 
     momentum_capacity_Nms: float
-    #: Parameterised rather than hardcoded, matching CaptureTracker --
-    #: the Stateflow mode name is the chart's to define, and two places
-    #: spelling it differently would make SAFE detectable in one of them.
+    #: Parameterised rather than hardcoded, matching CaptureTracker: the
+    #: mode name is the twin's to define.
     safe_mode_name: str = "SAFE"
     peak_momentum_fraction: List[float] = field(
         default_factory=lambda: [0.0, 0.0, 0.0])
@@ -148,7 +147,7 @@ class RunAggregate:
 
 @dataclass
 class LatencyAggregate:
-    """E6's latency breakdown, accumulated from the bridge's own timing.
+    """The step latency breakdown, accumulated from the bridge's timing.
 
     Each ``BridgeStatus`` sample already carries a MEAN over its own 1 Hz
     window (``stk_bridge.core.step_timing``); this takes the mean of

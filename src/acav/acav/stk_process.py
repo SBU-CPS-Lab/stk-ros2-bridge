@@ -1,13 +1,12 @@
-"""Which STK Desktop is running, and whether the operator started it.
+"""Which STK Desktop is running, and whether the user started it.
 
-An STK Desktop the operator starts is a plain AgUiApplication.exe; one
-started through COM (STKDesktop.StartApplication, as build_acav_scenario
-did when none was running) is a COM server: its command line ends in
-``-Embedding`` and its parent is svchost (DcomLaunch). In the P10 live
-session E6 on such an STK stepped at 95.7 ms against 60.0-61.1 ms on the
-P9 runs, and a free-run bridge's validation on it ran past 90 s. That is
-one run, so a correlation; final runs use an operator-started STK by
-protocol, and every COM run records which STK it had.
+An STK Desktop the user starts is a plain AgUiApplication.exe; one
+started through COM (STKDesktop.StartApplication, e.g. by the scenario
+builder when none was running) is a COM server: its command line ends in
+``-Embedding`` and its parent is svchost (DcomLaunch). An STK started
+through COM was measured to step about 1.6x slower in lockstep, and its
+convention validation took longer, so runs use a user-started STK and
+every COM run records which STK it had.
 
 Windows only (Win32_Process through PowerShell). The script has no
 double quotes: Windows PowerShell 5.1 strips them from native-command
@@ -69,7 +68,7 @@ def assess(processes: List[Dict], allow_com_started: bool
            ) -> Tuple[Dict, bool, str]:
     """(stk_process record, ok, detail) for a COM run's STK.
 
-    One operator-started STK passes. One started through COM, none, or
+    One user-started STK passes. One started through COM, none, or
     several (the bridge attached to one of them, but which is not
     knowable from here) fail unless ``allow_com_started``.
     """

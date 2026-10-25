@@ -1,12 +1,11 @@
-"""C6's figures -- one function per experiment's question.
+"""Campaign report figures: one function per experiment's question.
 
 Each function takes the aggregation :mod:`acav.campaign` already
 computes (``compare_schedulers``,
 ``determinism_comparison``, ``latency_breakdown``) and returns a
-``matplotlib.figure.Figure``. Nothing here re-derives a metric -- that
-would risk the exact failure C1 warns about for the slew model, two
-independently-written computations of one quantity silently
-disagreeing. These functions only lay the numbers out.
+``matplotlib.figure.Figure``. Nothing here re-derives a metric, so a
+figure and the JSON report beside it cannot disagree; these functions
+only lay the numbers out.
 
 Why a Figure, not a saved file
 -------------------------------
@@ -15,7 +14,7 @@ testable without touching the filesystem, and lets a caller compose
 several figures into one document however it likes. :func:`save_all`
 does the saving, once, for the CLI.
 
-Chart-type rationale, briefly (see ``docs/C6_analysis.md`` for the rest)
+Chart-type rationale, briefly (see ``docs/acav/analysis.md`` for the rest)
 -------------------------------------------------------------------------
 * **E2 -- capture vs coverage**: a *grouped* bar, two measures, not a
   dual-axis chart. Coverage rate has a different denominator to capture
@@ -200,9 +199,8 @@ def e2_outcome_breakdown_figure(schedulers: Dict[str, Any]):
     """Why targets were or were not captured, per scheduler.
 
     Status colors, because CaptureOutcome IS a status -- distinguishing
-    "still slewing" from "geometry never permitted it" is C1's own
-    stated reason this taxonomy exists, and only the study's finding
-    changes if the two are conflated.
+    "still slewing" from "geometry never permitted it" is why this
+    taxonomy exists (see acav/metrics.py).
     """
     names = [s for s in ("kinematic", "dynamics_aware") if s in schedulers]
     if not names:
@@ -383,10 +381,8 @@ def save_all(figures: Dict[str, Any], output_dir: str,
             formats: Sequence[str] = ("pdf", "svg", "png")) -> List[str]:
     """Write every figure in ``figures`` (name -> Figure) to disk.
 
-    Multiple formats by default: PDF/SVG are what a paper's typesetting
-    actually wants (vector, no resampling artefacts at print size); PNG
-    is what is easiest to preview without opening a PDF viewer -- e.g.
-    reading it back here, or pasting it into a quick status update.
+    Multiple formats by default: PDF/SVG for typesetting (vector, no
+    resampling at print size) and PNG for a quick preview.
     """
     apply_style()
     import matplotlib.pyplot as plt

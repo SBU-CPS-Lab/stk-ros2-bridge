@@ -1,13 +1,12 @@
-"""Seeded wheel faults for E5.
+"""Seeded wheel faults for the fault-replay runs (E5, part of E3).
 
-E5 asks whether a closed digital thread gives *deterministic fault
-replay*: inject a wheel failure at a random epoch, observe the twin trip
+Fault replay asks whether the closed loop gives *deterministic fault
+replay*: inject a wheel fault at a random epoch, observe the twin trip
 SAFE, then re-run the seed that failed and reproduce it exactly. The
 claim is about reproducibility, so the fault schedule itself has to be
 reproducible before anything downstream of it can be.
 
-That is a narrower requirement than "use a random number generator", and
-the difference is where this kind of harness usually goes wrong:
+That is a narrower requirement than "use a random number generator":
 
 * **The seed must fully determine the fault.** Not the seed plus the
   order runs happened to execute in, not the seed plus a module-level
@@ -32,7 +31,7 @@ machinery the twin already has, deliberately: a fault needing its own
 physics would measure the fault model rather than the loop's ability to
 replay it.
 
-``SATURATION`` (the default, and what C1 section 9 specifies for E5)
+``SATURATION`` (the default, and what the case study injects)
 drives the wheel's stored momentum to capacity. The momentum guard sees
 a full wheel on the next mode evaluation and the chart trips SAFE. The
 wheel is not jammed there -- the actuator model lets a saturated wheel
@@ -42,16 +41,13 @@ termination.
 ``FAILURE`` derates the wheel instead, via the per-axis ``health``
 ``adcs.wheels`` already takes, so the axis delivers no torque at all.
 
-**Measured, because the obvious reasoning is wrong.** This module used
-to claim that a dead wheel makes momentum build on the remaining axes
-until the momentum guard trips SAFE. It does not. Flying it shows the
-pointing error growing without bound -- 23 deg to 178 deg over a minute
--- while the healthy wheels stay near zero momentum and *no guard ever
-fires*, because the error is about the dead axis and the controller
-asks the other two for almost nothing. That is a real gap in the
-vehicle's fault detection and worth reporting as one; it is not,
-however, what E5 was specified to inject, which is why SATURATION is
-the default.
+A dead wheel does not make momentum build on the remaining axes until
+the momentum guard trips. Flying it shows the pointing error growing
+without bound (23 deg to 178 deg over a minute) while the healthy wheels
+stay near zero momentum and no guard fires, because the error is about
+the dead axis and the controller asks the other two for almost nothing.
+That is a gap in the vehicle's fault detection; it is not the fault the
+replay study injects, which is why SATURATION is the default.
 """
 
 from __future__ import annotations
@@ -70,8 +66,8 @@ AXIS_NAMES = ("x", "y", "z")
 #: which is the same reasoning that made wheel saturation a hard clamp.
 DEAD = 0.0
 
-#: Drive the wheel's stored momentum to capacity, tripping the chart's
-#: momentum guard. What C1 section 9 specifies for E5.
+#: Drive the wheel's stored momentum to capacity, tripping the
+#: momentum guard. The default fault.
 SATURATION = "saturation"
 
 #: Derate the wheel so it delivers no torque. Degrades pointing badly
@@ -126,8 +122,7 @@ class WheelFault:
         so that a fault scheduled exactly on a step boundary is applied
         on that step. Leaving it exclusive would make the injection
         epoch depend on floating-point comparison at the boundary, which
-        is exactly the kind of one-step ambiguity that makes two
-        supposedly identical replays diverge.
+        could make two replays diverge by one step.
         """
         healthy = [1.0, 1.0, 1.0]
         if self.kind == FAILURE and time_s >= self.at_s:
@@ -161,8 +156,7 @@ def fault_from_dict(raw: Optional[Dict[str, Any]]) -> Optional[WheelFault]:
     goes through. The record carries the fault that actually ran, so a
     replay reproduces that run even if the sampling rule below has since
     changed. Re-deriving the fault from the seed instead would make
-    every historical result quietly depend on the current version of
-    this module.
+    every earlier result depend on the current version of this module.
     """
     if not raw:
         return None
@@ -192,10 +186,9 @@ def plan_fault(seed: int, window_duration_s: float,
 
     The epoch is quantised to milliseconds so that the value written
     into the record is the value applied, with no float formatting in
-    between. An epoch that survives a JSON round trip differently from
-    how it was drawn is a replay that differs from its original by one
-    control step, which is the smallest possible way for this experiment
-    to be wrong and the hardest to notice.
+    between. An epoch that survived a JSON round trip differently from
+    how it was drawn would give a replay that differs from its original
+    by one control step.
     """
     if window_duration_s <= 0.0:
         raise ValueError("window_duration_s must be positive")
@@ -220,11 +213,10 @@ def plan_campaign_faults(seeds: Sequence[int], window_duration_s: float,
     """One fault per seed, as a mapping, for a Monte Carlo campaign.
 
     Each seed is planned independently, so adding, removing or
-    re-ordering seeds cannot change the fault any other seed gets. A
-    campaign that drew sequentially from one generator would renumber
-    every fault the moment a seed was inserted, and E5's "re-run the
-    failing seed" would then reproduce a different fault than the one
-    that failed.
+    re-ordering seeds cannot change the fault any other seed gets. Drawing
+    sequentially from one generator would renumber every fault when a
+    seed was inserted, and a replay would then reproduce a different
+    fault than the one that failed.
     """
     return {seed: plan_fault(seed, window_duration_s, **kwargs)
             for seed in seeds}

@@ -1,20 +1,20 @@
-"""Rest-to-rest slew time model -- the shared C3/C4 contract.
+"""Rest-to-rest slew time model, shared by the scheduler and the twin.
 
-Why this is pinned in C1 rather than written twice
---------------------------------------------------
+Why one model
+-------------
 Experiment E2 compares a *kinematic* schedule (assumes instantaneous
 reorientation) against a *dynamics-aware* one (budgets slew and settle
-time). That comparison is only meaningful if the dynamics-aware
+time). The comparison is only meaningful if the dynamics-aware
 scheduler's notion of "how long does a slew take" matches what the
-Simulink twin actually achieves. If the scheduler and the twin embed
-independently-written slew models, E2 measures the disagreement between
-two models rather than the effect under study, and the paper's headline
-result becomes an artifact.
+twin achieves. With two independently written slew models, E2 would
+measure their disagreement rather than the effect under study.
 
-So: this module is the single source of truth. C4's scheduler calls it
-directly. C3's Simulink twin is parameterised from the same YAML and
-its achieved slew times are *validated against* this model in C5 (see
-`profile_error` below), rather than being assumed to match.
+This module is therefore the single source of truth. The scheduler
+calls it directly; the twin's reference profile
+(``acav/twin_reference.py``, ``+adcs/slew_profile.m``) is built from the
+same model and parameters, and its achieved slew times are checked
+against this bound (see ``profile_error`` below) rather than assumed to
+match.
 
 The model
 ---------
@@ -32,25 +32,22 @@ acceleration limit ``alpha = tau_max / J`` and rate limit
       t = omega_max / alpha + dtheta / omega_max
 
 The two agree at the crossover ``dtheta = omega_max^2 / alpha``, both
-giving ``2 * omega_max / alpha`` -- verified in test_slew_model.py,
-because a discontinuity here would put a step in the scheduler's
-feasibility boundary that would be very hard to attribute later.
+giving ``2 * omega_max / alpha`` (checked in test_slew_model.py), so the
+scheduler's feasibility boundary has no step.
 
 For the ACAV parameters (ixx = 0.123 kg m^2, tau = 2 mNm, h = 20 mNms)
-the crossover is ~93 deg, so every slew in this study is triangular.
-The trapezoidal branch is implemented and tested anyway: it costs
-little, and a reader changing the wheel sizing should not silently fall
-off the model's validity range.
+the crossover is ~93 deg, so every slew in the study is triangular. The
+trapezoidal branch is implemented and tested for other wheel sizings.
 
-What this model deliberately does NOT capture
----------------------------------------------
+What this model does not capture
+--------------------------------
 Controller settling, flexible modes, wheel friction/stiction, and
-cross-axis coupling. It is a *lower bound* on achievable slew time --
-the best a perfect controller could do against these limits. The
-scheduler therefore adds ``settle_estimate_s`` on top (see
-``scheduling.settle_estimate_s`` in acav_scenario.yaml). Reporting the
-gap between this bound and the twin's achieved time is itself a result
-(E2), so the model must not be quietly "corrected" to fit measurements.
+cross-axis coupling. It is a *lower bound* on achievable slew time, the
+best a perfect controller could do against these limits. The scheduler
+therefore adds ``settle_estimate_s`` on top (see
+``scheduling.settle_estimate_s`` in acav_scenario.yaml). The gap between
+this bound and the twin's achieved time is itself a result, so the model
+is not adjusted to fit measurements.
 """
 
 from __future__ import annotations
@@ -145,9 +142,9 @@ def slew_time_deg_s(delta_theta_deg: float, limits: SlewLimits) -> float:
 def peak_rate_rad_s(delta_theta_rad: float, limits: SlewLimits) -> float:
     """Peak angular rate reached during the slew, rad/s.
 
-    Used by C5 to check whether a commanded slew would saturate the
-    wheels -- the same condition that triggers SAFE mode in the
-    Stateflow chart and that E5 injects as a fault.
+    Used to check whether a commanded slew would saturate the wheels,
+    the same condition that triggers SAFE mode and that the saturation
+    fault injects.
     """
     theta = abs(float(delta_theta_rad))
     if theta <= limits.crossover_rad:
@@ -169,7 +166,7 @@ def off_nadir_angle_rad(cross_track_km: float, altitude_km: float,
 
     This is a *planning estimate only*. STK computes the true geometry
     including oblateness and terrain; where the two disagree, STK is
-    correct by definition for this study -- the scheduler is allowed to
+    correct by definition for this study; the scheduler is allowed to
     be approximate, which is part of what E2 measures.
     """
     if altitude_km <= 0.0:
@@ -193,9 +190,8 @@ def slew_between_targets_rad(cross_track_a_km: float, cross_track_b_km: float,
 
     Targets on opposite sides of the ground track require a slew equal
     to the SUM of their off-nadir angles; on the same side, the
-    difference. Getting this sign handling wrong systematically
-    under-estimates the hardest slews in the scenario -- exactly the
-    ones E2 depends on.
+    difference. Getting this sign handling wrong would systematically
+    under-estimate the hardest slews in the scenario.
     """
     angle_a = off_nadir_angle_rad(cross_track_a_km, altitude_km)
     angle_b = off_nadir_angle_rad(cross_track_b_km, altitude_km)
@@ -210,7 +206,7 @@ def profile_error(measured_s: float, delta_theta_rad: float,
     ``(measured - model) / model``. Always >= 0 for a physically valid
     measurement, because the model is a lower bound; a negative value
     means the twin exceeded its stated torque/momentum limits and is a
-    bug, not a fast controller. C5 asserts on this.
+    bug, not a fast controller.
     """
     model = slew_time_s(delta_theta_rad, limits)
     if model <= 0.0:

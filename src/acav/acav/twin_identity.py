@@ -27,9 +27,8 @@ types come from. +adcs/code_fingerprint.m computes the same; both test
 suites pin one vector. Each file's text is hashed with CRLF turned into
 LF, so the line endings a checkout uses (core.autocrlf) do not change it.
 
-Format history: v1 had no polling rate; v2 added it; v3 marks this
-line-ending-free fingerprint. The runner accepts only v3; records keep
-whatever identity text they were written with.
+Format versions: v1 had no polling rate; v2 added it; v3 marks the
+line-ending-free fingerprint. The runner accepts only v3.
 """
 
 from __future__ import annotations

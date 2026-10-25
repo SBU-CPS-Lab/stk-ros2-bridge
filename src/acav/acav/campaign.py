@@ -1,29 +1,26 @@
 """Run matrices and aggregation for the E1, E2, E3, E5 and E6 campaigns.
 
-The pure half of C5. This module decides *what runs to do* and *what the
-results mean*; it never launches anything, opens a socket or imports
-ROS. :mod:`acav.campaign_runner` is the thin layer that executes a
-matrix built here, in the same division C4 already uses between
-``scheduling.py`` and ``scheduler_node.py``.
+The pure half of the experiment harness. This module decides *what runs
+to do* and *what the results mean*; it never launches anything, opens a
+socket or imports ROS. :mod:`acav.campaign_runner` executes a matrix
+built here, the same division as between ``scheduling.py`` and
+``scheduler_node.py``.
 
-Keeping it pure is not tidiness. A campaign is tens of runs, each needing
-STK and MATLAB for 10-16 minutes, so a campaign is a thing you run
-overnight on the Windows machine and cannot iterate on.
-Everything about it that can be wrong *before* it starts -- which runs,
-which seeds, which gains, which fault, and whether the results support
-the claim afterwards -- is decided by code that runs in milliseconds on
-any machine and is covered by tests here.
+A campaign is tens of runs, each needing STK and MATLAB for several
+minutes, so it cannot be iterated on. Everything that can be wrong
+before it starts (which runs, seeds, gains and faults, and whether the
+results support the claim afterwards) is decided by code that runs in
+milliseconds on any machine and is covered by tests.
 
 Why run identifiers are constructed, not counted
 ------------------------------------------------
 Every :class:`RunSpec` gets an id derived from what makes it distinct
 (experiment, scheduler, mode, seed, gains), not from its position in the
-list. Positional ids renumber when a run is inserted or a seed is added,
-which silently repoints every result file written by an earlier
-campaign; an id derived from the configuration stays attached to the
-configuration it describes. It is also what lets a campaign resume: the
-runner can tell which runs are already on disk only if the name of a
-run's output is a function of the run.
+list. Positional ids would renumber when a run is inserted, repointing
+existing result files; an id derived from the configuration stays
+attached to it. It also lets a campaign resume: the runner can tell
+which runs are already on disk because a run's output name is a
+function of the run.
 """
 
 from __future__ import annotations
@@ -80,8 +77,8 @@ class RunSpec:
     #: the others are injected by the bridge (sensing.inject_mismatch).
     mismatch: str = ""
     #: E1: "on" (the twin's attitude guard active) or "ablated" (only
-    #: frame_pairing has that arm); empty means the original E1
-    #: treatment's rule (ablated whenever attitude_provider is forced).
+    #: frame_pairing has that arm); empty means ablated whenever
+    #: attitude_provider is forced.
     mismatch_guard: str = ""
     #: The bridge's time.real_time_factor for this run (E3's matrix);
     #: None leaves the bridge config's. In the run id only when not 1.0.
@@ -206,11 +203,9 @@ class Campaign:
 #: The Earth-fixed read-back provider. The ACAV loop commands attitude
 #: in the inertial form (``AddAttitude Quat``, see
 #: ``config/bridge_params_acav.yaml``), so reading it back through the
-#: Earth-fixed provider is wrong by the Earth-rotation angle -- the bug
-#: found during the bridge's own bring-up, and the treatment E1 applies
-#: deliberately. (It was "Attitude Quaternions" while ACAV still
-#: commanded in the Earth-fixed form; the mis-pairing is always the
-#: provider that does NOT match the command form.)
+#: Earth-fixed provider is wrong by the Earth-rotation angle, the
+#: treatment E1 applies deliberately. The mis-pairing is always the
+#: provider that does not match the command form.
 MISPAIRED_ATTITUDE_PROVIDER = "ECF Attitude Quaternions"
 
 
@@ -248,8 +243,8 @@ def build_e1_convention(scenario_path: str = "", backend: str = "com",
         runs=runs, scenario_path=scenario_path, backend=backend)
 
 
-#: E1's interface-mismatch types. frame_pairing is the original treatment
-#: (a forced read-back provider) and the only one with a guard-ablated
+#: E1's interface-mismatch types. frame_pairing is a forced read-back
+#: provider and the only one with a guard-ablated
 #: arm; the other five are injected by the bridge on the telemetry it
 #: publishes (stk_bridge/core/mismatch_injection.py) and run guard-on.
 E1_MISMATCH_TYPES = ("frame_pairing", "quaternion_order",
@@ -264,9 +259,8 @@ E1_EXPECTED_NULL = ("angle_rate_units",)
 def e1_arm(mismatch: str, mismatch_guard: str,
            attitude_provider: str) -> str:
     """The E1 arm a run or record belongs to: "control",
-    "<type>/on" or "frame_pairing/ablated". A record from before the
-    mismatch fields existed with a forced provider is the original
-    treatment, frame_pairing with the guard ablated."""
+    "<type>/on" or "frame_pairing/ablated". A record without mismatch
+    fields but with a forced provider is frame_pairing, guard ablated."""
     if not mismatch:
         return "frame_pairing/ablated" if attitude_provider else "control"
     if mismatch == "frame_pairing":
@@ -494,25 +488,17 @@ def build_e3_matrix(n_repeats: int, n_fault_seeds,
         runs=tuple(runs), scenario_path=scenario_path, backend=backend)
 
 
-#: Measured wall time per automated run, minutes: summary.json
-#: started_at to finished_at, MATLAB start and build included. Excluded:
-#: E6_P9 seed1 (22.0 min, an 11.5 min console stall) and E6_P10 (14.8
-#: min, an STK started through COM). None: not measured.
+#: Measured wall time per automated run on the reference host, minutes:
+#: summary.json started_at to finished_at, MATLAB start and build
+#: included. Used only to estimate campaign durations.
 MEASURED_WALL_MIN = {
-    (LOCKSTEP, 1.0): (9.5, 11.4,
-                      "E5_P9d_lock2 9.5, E5_P9d_lock1 9.9, E6_P9 seed0 10.3, "
-                      "E6_P9 seed2 10.4, E2_P10_seed1 11.4"),
-    (FREE_RUN, 1.0): (15.3, 16.2,
-                      "E3_P9_rtf1 15.3, E5_P9d_free1 15.3, E5_P10_free2 "
-                      "16.2"),
-    (FREE_RUN, 0.5): (27.3, 27.3,
-                      "1 run: LIVE_E3_d0bf796 "
-                      "E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375"),
+    (LOCKSTEP, 1.0): (9.5, 11.4, "5 runs"),
+    (FREE_RUN, 1.0): (15.3, 16.2, "3 runs"),
+    (FREE_RUN, 0.5): (27.3, 27.3, "1 run"),
 }
-#: Said beside the missing rtf 0.5 time: measured, but with a manual twin.
-UNMEASURED_NOTE = {(FREE_RUN, 0.5): "the one run at rtf 0.5, "
-                                    "E3_P6_rtf05_8345551, had a manual "
-                                    "twin (37.6 min)"}
+#: Note printed beside a rate whose time is not measured.
+UNMEASURED_NOTE = {(FREE_RUN, 0.5): "measured with a manually started "
+                                    "twin only (37.6 min)"}
 
 
 def wall_time_lines() -> List[str]:
@@ -624,10 +610,8 @@ def build_e6_latency(repeats: int = 5, scenario_path: str = "",
 
     Identical lockstep runs, repeated -- not to compare anything, but
     because a single run's mean can catch one slow moment (a GC pause,
-    a disk stall) that a few repeats average out. C1 section 8 commits
-    the paper to reporting a MEASURED latency breakdown rather than an
-    implied step rate, which is what makes this experiment about
-    transparency rather than a performance claim.
+    a disk stall) that a few repeats average out. It reports a measured
+    latency breakdown rather than an implied step rate.
     """
     if repeats < 1:
         raise ValueError("E6 needs at least one run to measure anything")
@@ -773,10 +757,8 @@ def latency_breakdown(records: Sequence[RunRecord]) -> Dict[str, Any]:
     """E6's answer: the phase breakdown and the achieved step rate.
 
     Unreportable runs (see acav.run_record) are excluded up front,
-    matching every other aggregation function here -- a latency number
-    measured against the mock says nothing about the deploy machine's
-    real STK round trip, which is the entire quantity E6 exists to
-    report.
+    matching every other aggregation function here: a latency measured
+    against the mock says nothing about a real STK round trip.
     """
     usable = [r for r in records if r.reportable]
     return {
@@ -801,9 +783,7 @@ def convention_comparison(records: Sequence[RunRecord],
     scheduler -- both of E1's runs use the same scheduler on purpose
     (see :func:`build_e1_convention`'s own docstring: only the read-back
     provider is meant to vary), so grouping by scheduler the way
-    :func:`compare_schedulers` does would collapse E1's two runs into
-    one group and hide exactly the comparison the experiment exists to
-    make.
+    :func:`compare_schedulers` does would collapse the comparison.
     """
     control = [r for r in records if not r.provenance.attitude_provider]
     treatment = [r for r in records if r.provenance.attitude_provider]

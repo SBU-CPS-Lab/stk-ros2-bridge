@@ -6,29 +6,25 @@ return ``None``.
 
 Why this is not two lines of ``dp.execute``
 -------------------------------------------
-The first live run against STK 12.6 could not read a position back for
-any of the seven targets. ``LLA State`` works on the satellite and
-returns nothing useful on a Target, so the placement round-trip -- the
-check that catches a ``SetPosition Geodetic`` argument-order or unit
-error -- silently degraded to "UNVERIFIED" and the scenario shipped
-with all seven targets on the wrong side of the planet.
+On STK 12.6 ``LLA State`` works on the satellite but returns nothing
+useful on a Target, and without a target position the placement
+round-trip (the check that catches a ``SetPosition Geodetic``
+argument-order or unit error) cannot run.
 
-So position reads go through a fallback chain here, and when the whole
-chain fails the caller gets the object's actual data-provider inventory
-in the diagnostic. That inventory is the answer to "which provider
-should we have used", and getting it costs one round trip on a path
-that was going to fail anyway.
+Position reads therefore go through a fallback chain here, and when the
+whole chain fails the caller gets the object's data-provider inventory
+in the diagnostic, which names the provider to use instead.
 
 Units are measured, not assumed
 -------------------------------
 ``configure_units()`` asks STK for radians and *reports* whether the
 request was accepted, but acceptance is not the same as the value in a
-column being in that unit -- and the same run showed Connect commands
-consuming degrees while the Angle preference was set to radians. The
-scale is therefore measured against a quantity whose unit is not in
-doubt: Cartesian position in the Fixed frame is metres (verified at
-bring-up), and the latitude it implies can be compared against the
-latitude ``LLA State`` reports.
+column being in that unit, and Connect commands consume degrees while
+the Angle preference is radians. The scale is therefore measured
+against a quantity whose unit is not in doubt: Cartesian position in the
+Fixed frame is metres (checked by the bridge's validation), and the
+latitude it implies can be compared against the latitude ``LLA State``
+reports.
 """
 
 from __future__ import annotations
@@ -76,12 +72,8 @@ class GeodeticRead:
 class GeodeticWriteUnit:
     """The unit ``SetPosition ... Geodetic`` was measured to consume.
 
-    Shared rather than measured per caller. The builder measured this
-    correctly and the verifier did not, so the verifier placed its
-    field-of-view probes in radians where STK wanted degrees, put all
-    seven of them near (0.2, 0.5) deg instead of on the ground track,
-    and concluded that the sensor could not see nadir. One measurement,
-    one code path.
+    Shared rather than measured per caller, so the builder and the
+    verifier cannot disagree about it.
     """
 
     factor: float = 1.0
@@ -137,16 +129,16 @@ def measure_angle_scale(backend: StkBackend, satellite_path: str,
     """Determine whether ``LLA State`` reports radians or degrees.
 
     Compares the reported latitude against the latitude implied by the
-    Fixed-frame Cartesian position, whose unit (metres) was verified at
-    bring-up. Both describe the same point, so whichever interpretation
-    of the reported number agrees is the unit in use.
+    Fixed-frame Cartesian position, whose unit (metres) is not in doubt.
+    Both describe the same point, so whichever interpretation of the
+    reported number agrees is the unit in use.
 
     Several epochs are tried because the comparison is degenerate near
     the equator -- 0.01 rad and 0.01 deg are both "about zero", and a
     single sample at the scenario epoch happens to land there for this
     orbit. The first sample far enough from the equator to discriminate
-    is the one used; if none is, that is reported rather than papered
-    over with a default.
+    is the one used; if none is, that is reported rather than replaced
+    by a default.
     """
     attempts: List[str] = []
     for when in times:
@@ -195,10 +187,10 @@ def read_geodetic(backend: StkBackend, path: str, when: StkTime,
                   scale: Optional[AngleScale] = None) -> GeodeticRead:
     """Read any object's ground position, trying several providers.
 
-    Satellites answer ``LLA State``. Targets and facilities did not on
-    the first live install, so the Fixed-frame Cartesian position is
-    tried next and converted. When nothing works, the diagnostic carries
-    the object's provider inventory, which is what a fix needs.
+    Satellites answer ``LLA State``. Targets and facilities do not on
+    STK 12.6, so the Fixed-frame Cartesian position is tried next and
+    converted. When nothing works, the diagnostic carries the object's
+    provider inventory.
     """
     scale = scale or AngleScale()
     attempts: List[str] = []
@@ -347,10 +339,10 @@ def measure_geodetic_write_unit(backend: StkBackend, when: StkTime,
     anything the geodetic/geocentric difference or the study's spherical
     placement model could account for.
 
-    Measured on the live install: STK consumes **degrees** here, while
-    reporting radians back through LLA State once the Latitude and
-    Longitude unit preferences are set. The two directions are
-    genuinely independent and neither may be inferred from the other.
+    On STK 12.6 this command consumes **degrees**, while LLA State
+    reports radians once the Latitude and Longitude unit preferences
+    are set. The two directions are independent and neither may be
+    inferred from the other.
     """
     scale = scale or AngleScale()
     probe_lat_rad, probe_lon_rad = 0.5, 0.7

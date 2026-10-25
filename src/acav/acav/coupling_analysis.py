@@ -2,8 +2,8 @@
 
 Reads a run's record and its ``<run>.logs`` folder -- the topic
 captures (cmd.txt, attitude.txt, twin_status.txt, status.txt),
-bridge.log and summary.json -- without STK or ROS, and computes what
-the E3 free-run pilot analysis used:
+bridge.log and summary.json -- without STK or ROS, and computes the
+quantities that describe how the twin and the bridge were coupled:
 
 * ``control_rate_hz``: twin commands per scenario second (``window_s``);
 * command-gap distribution: p50, p90, max, count and total over 0.6 s;
@@ -32,8 +32,8 @@ the E3 free-run pilot analysis used:
 * bridge samples consumed: distinct bridge sample stamps (attitude.txt)
   and how many the twin answered with a command stamped one step later.
 
-Percentiles are ``sorted[n // 2]`` and ``sorted[int(0.9 * n)]``, as in the
-pilot analysis. A lockstep run gives 10 Hz, age 0 and deviation 0.
+Percentiles are ``sorted[n // 2]`` and ``sorted[int(0.9 * n)]``. A
+lockstep run gives 10 Hz, age 0 and deviation 0.
 """
 
 from __future__ import annotations

@@ -120,10 +120,8 @@ def test_plan_prints_formula_times_and_combined_campaign(tmp_path, capsys):
     assert code == 0
     assert ("E3 runs = (1 + N_FAULT_SEEDS) x (2 lockstep + 2 x N_REPEATS "
             "free-run) = (1 + 3) x (2 + 2 x 3) = 32") in out
-    # Measured once in the live session on d0bf796 (summary.json
-    # started_at to finished_at of LIVE_E3_d0bf796's one run).
-    assert ("free-run rtf 0.5: 27.3 min (1 run: LIVE_E3_d0bf796 "
-            "E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375)") in out
+    # The measured wall time of the one automated run at rtf 0.5.
+    assert "free-run rtf 0.5: 27.3 min (1 run)" in out
     assert "not measured" not in out
     assert "total measured part: 16.75-18.58 h" in out
     assert "combined campaign" in out

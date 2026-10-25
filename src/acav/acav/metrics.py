@@ -1,4 +1,4 @@
-"""Capture criterion and metric definitions -- the C4/C5/C6 contract.
+"""Capture criterion and metric definitions shared by scheduler, harness and analysis.
 
 The capture criterion is the study's dependent variable. It must be
 defined once, precisely, and applied identically by the scheduler
@@ -27,7 +27,7 @@ when the spacecraft cannot slew fast enough. Condition 2 alone would
 ignore whether the spacecraft was pointing at the *right* place.
 
 The gap between "condition 1 only" and "conditions 1 and 2" is the
-paper's headline quantity -- see :func:`capture_rate` and
+study's headline quantity; see :func:`capture_rate` and
 :func:`over_promise_gap`.
 
 A note on where each condition comes from
@@ -52,7 +52,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 class CaptureOutcome(str, Enum):
     """Why a target succeeded or failed. Ordering matters for reporting.
 
-    Distinguishing the failure modes is essential to the paper's claim.
+    Distinguishing the failure modes is essential to the study's claim.
     "Not captured" is uninformative; "the spacecraft was still slewing"
     versus "the geometry never permitted it" are different findings, and
     only the first supports the dynamics-coupling argument.
@@ -69,7 +69,7 @@ class CaptureOutcome(str, Enum):
     NO_ACCESS_AND_NOT_SETTLED = "no_access_and_not_settled"
     #: The scheduler chose not to attempt this target.
     NOT_ATTEMPTED = "not_attempted"
-    #: Spacecraft was in SAFE mode at the image epoch (E5 fault runs).
+    #: Spacecraft was in SAFE mode at the image epoch (fault runs).
     SAFE_MODE = "safe_mode"
     #: Attempted, but no twin telemetry fell in the hold window, so the
     #: criterion could not be applied. In free-run the twin can stall
@@ -95,7 +95,7 @@ class PointingSample:
     time_s: float          # seconds from window start
     error_deg: float       # angle between boresight and target line of sight
     has_access: bool       # STK's access answer at this epoch
-    mode: str = ""         # Stateflow mode name, for SAFE detection
+    mode: str = ""         # mission mode name, for SAFE detection
     #: The largest error over every twin step since the previous sample
     #: (TwinStatus.max_boresight_error_since_last_rad, in degrees); None
     #: from a twin that does not report it. The hold window is judged on
@@ -164,7 +164,7 @@ class RunResult:
     #: sense/actuate/barrier cycle. The achieved step rate, not a
     #: breakdown of what it is spent on.
     mean_step_latency_ms: float = float("nan")
-    #: The breakdown E6 actually asks for, from the BRIDGE's own timing
+    #: The breakdown E6 reports, from the bridge's own timing
     #: of each phase (stk_bridge.core.step_timing) -- a different vantage
     #: point than mean_step_latency_ms above, and not expected to sum to
     #: it exactly: the scheduler's tick-to-tick clock also includes its
@@ -201,17 +201,16 @@ def evaluate_capture(samples: Sequence[PointingSample], image_time_s: float,
         image_time_s: The scheduled image epoch.
         capture_error_deg: Tolerance from ``pointing.capture_error_deg``.
         settle_hold_s: Hold duration from ``pointing.settle_hold_s``.
-        safe_mode_name: Stateflow mode indicating loss of control.
+        safe_mode_name: Mission mode indicating loss of control.
 
     Returns:
         ``(outcome, error_at_image_deg, max_error_in_hold_deg)``.
 
     Raises:
         ValueError: if no samples fall inside the hold window. This is
-            deliberately an error rather than a silent NOT_SETTLED:
-            missing telemetry is a harness bug, and scoring it as a
-            capture failure would corrupt the study's headline metric
-            with data-collection problems.
+            an error rather than a silent NOT_SETTLED: missing
+            telemetry is a harness bug, and scoring it as a capture
+            failure would mix data-collection problems into the metric.
     """
     window_start = image_time_s - settle_hold_s
     in_window = [s for s in samples
@@ -292,7 +291,7 @@ def over_promise_gap(result: RunResult) -> float:
     """Fraction of attempted targets that were promised but not captured.
 
     ``(attempted - captured) / attempted``. For the kinematic scheduler
-    this is the paper's headline quantity: capacity claimed by planning
+    this is the study's headline quantity: capacity claimed by planning
     that ignores attitude dynamics, minus capacity actually delivered.
     """
     rate = capture_rate(result)

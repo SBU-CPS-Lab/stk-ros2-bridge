@@ -1,41 +1,35 @@
-"""ACAV -- Attitude-Coupled Access Verification.
+"""ACAV: Attitude-Coupled Access Verification.
 
-Case study for the stk_bridge paper. Demonstrates that mission planning
-which assumes instantaneous, perfect pointing over-promises imaging
-capacity, by closing the loop: STK computes target access from the
-attitude a Simulink ADCS twin actually achieves.
+A case study built on stk_bridge and the MATLAB ADCS twin. It tests
+whether mission planning that assumes instantaneous, perfect pointing
+over-promises imaging capacity, by closing the loop: STK computes target
+access from the attitude a Simulink ADCS twin actually achieves.
 
-Phase C1 (this delivery) fixes the cross-phase contracts:
+Scenario and contracts
+    ``spec``          Loads and validates config/acav_scenario.yaml.
+    ``slew_model``    Rest-to-rest slew time, shared by scheduler and twin.
+    ``metrics``       The capture criterion and every reported metric.
 
-``spec``        Loads and validates config/acav_scenario.yaml.
-``slew_model``  Rest-to-rest slew time -- shared by the scheduler (C4)
-                and validated against the Simulink twin (C3).
-``metrics``     The capture criterion and every reported metric, shared
-                by C4, C5, and C6.
+STK scenario
+    ``scenario_builder``, ``scenario_verifier``, ``ground_track``,
+    ``stk_queries``, ``scenario_generator``, ``scenarios``.
 
-C2 adds the STK scenario builder and its empirical verifier.
+ADCS twin reference
+    ``attitude``        Quaternion algebra and frame conventions.
+    ``twin_reference``  Dynamics, wheels, profile, control law, mode
+                        logic: what the MATLAB twin transcribes.
+    ``twin_fixtures``   The cross-language fixtures between the two.
 
-C5 adds the experiment harness:
+Scheduler
+    ``scheduling``, ``capture_tracking``, ``scheduler_node``.
 
-``run_record``      Run provenance and serialisation -- the C5/C6
-                    contract, and what keeps mock-backend numbers out of
-                    the paper.
-``fault_injection`` Seeded wheel faults for E5, resolved before a run so
-                    they can be replayed exactly.
-``campaign``        The E2-E5 run matrices and what their results mean.
-``campaign_runner`` Executes a matrix; the launch command is the
-                    operator's, because the launch topology belongs to
-                    the machine with STK on it.
-
-C3 adds the ADCS twin's executable reference:
-
-``attitude``        Quaternion algebra and the study's frame conventions.
-``twin_reference``  Dynamics, wheels, profile, control law, mode logic --
-                    the semantics the MATLAB twin is a transcription of.
-``twin_fixtures``   The cross-language contract between the two.
-
-Later phases add the scheduler node (C4), the experiment harness (C5),
-and analysis (C6).
+Experiment harness and analysis
+    ``run_record``      Run provenance and serialisation.
+    ``fault_injection`` Seeded wheel faults, resolved before a run.
+    ``campaign``        Run matrices and what their results mean.
+    ``campaign_runner`` Executes a matrix through a launch command.
+    ``deploy_run_cli``  Orchestrates one run (bridge, twin, scheduler).
+    ``paired_analysis``, ``paired_stats``, ``report_figures``.
 """
 
 from acav.attitude import (  # noqa: F401

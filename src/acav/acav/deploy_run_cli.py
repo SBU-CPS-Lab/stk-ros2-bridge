@@ -1,50 +1,42 @@
-"""Orchestrates ONE campaign run end to end, on the Windows deploy machine.
+"""Orchestrates one campaign run end to end on the STK host.
 
 This is the launch command ``CommandLauncher`` (``acav/campaign_runner.py``)
-runs per run -- every placeholder its argv template substitutes
+runs per run: every placeholder its argv template substitutes
 (``{run_id}``, ``{experiment}``, ``{scheduler}``, ``{execution_mode}``,
 ``{seed}``, ``{output}``, ``{scenario}``, ``{backend}``,
 ``{attitude_provider}``, ``{run_config}``, ``{gains_json}``,
-``{fault_json}``) is accepted here as a same-named CLI flag. See
-``docs/08_deploy_runbook.md`` for how a colleague without this project's
-context actually runs it.
+``{fault_json}``, ...) is accepted here as a same-named flag. See
+``docs/acav/running_campaigns.md``.
 
-Topology started, in this order, and why
-------------------------------------------
-1. **stk_bridge** (direct Python module process) -- the twin and the scheduler are
-   both lockstep barrier participants *against* the bridge, so nothing
-   else can usefully start first.
-2. **the MATLAB/Simulink twin -- NOT started by this script.**
-   ``build_acav_twin``'s model runs with ``StopTime = 'inf'`` (see
-   ``simulink/build_acav_twin.m``): it runs for exactly as long as the
-   bridge's ``/clock`` does, the same reason
-   ``stk_bridge/launch/full_twin.launch.py`` leaves MATLAB out of its
-   own launch file. This project has never run that model unattended,
-   headless, end to end against a live bridge -- only interactively
-   (``docs/C3_adcs_twin.md`` section 6). Scripting an unattended MATLAB
-   step this project has not verified and calling it done would replace
-   a measurement with a self-consistent, untested guess -- the specific
-   failure mode this project has repeatedly had to catch and fix
-   elsewhere (see e.g. ``docs/C6_analysis.md``). So this script stops
-   and asks a human to start it, then *confirms* over ROS that the twin
-   is actually acking the barrier before continuing -- it does not
-   trust a keypress alone.
-3. **acav_scheduler**, once the bridge is CONNECTED and the twin is
-   observed acking the barrier. Starting it any earlier would spend the
-   scheduler's own barrier-timeout budget waiting on a participant that
-   was never going to show up in time, turning a "twin not started yet"
-   situation into an "abort: barrier timeout" one instead.
+Order of operations
+-------------------
+1. Preflight: the run configuration, the per-run bridge configuration,
+   an idle ROS graph, and an STK Desktop started by the user.
+2. **stk_bridge** (a direct Python module process). The twin and the
+   scheduler are both lockstep participants against the bridge, so
+   nothing else can usefully start first. The run waits for
+   ``BridgeStatus`` CONNECTED and checks STK's graphics state.
+3. **The MATLAB/Simulink twin**, either started by a person
+   (``--twin-launch manual``: the script prints what to run and waits) or
+   by the script in a fresh ``matlab -batch`` process
+   (``--twin-launch matlab-batch``, ``acav/twin_launcher.py``). Either
+   way the script confirms over ROS that the twin acknowledges the
+   barrier and that its published identity names this run's config and
+   this checkout's code.
+4. **acav_scheduler**, once the twin is confirmed. Starting it earlier
+   would spend its barrier-timeout budget waiting for a participant that
+   is not there yet.
+5. Teardown in a fixed order, each post-run step under a time bound, so
+   nothing after the scheduler can hold a campaign.
 
 What is captured
------------------
+----------------
 Every subprocess's stdout/stderr goes to its own file under
-``<output>.logs/`` (created next to the run's output JSON), plus this
-script's own narrative in ``run.log`` and a ``summary.json`` recording
-timestamps, exit codes, and the backend actually observed on
-``BridgeStatus`` (so a COM run that silently fell back to mock is
-visible in the log bundle, not just in the record's own provenance).
-That is the "trace/logs for errors and metrics" a report from this
-script is expected to carry back for analysis.
+``<output>.logs/`` (next to the run's output JSON), together with this
+script's narrative in ``run.log``, topic captures, the bridge's startup
+phases and graphics samples, and a ``summary.json`` with timestamps,
+exit codes, run conditions and the backend observed on ``BridgeStatus``
+(so a COM run that fell back to the mock is visible).
 """
 
 from __future__ import annotations
@@ -71,9 +63,9 @@ EXIT_OK = 0
 EXIT_STEP_FAILED = 1
 EXIT_USAGE = 2
 
-#: Launch to BridgeStatus CONNECTED took 43.7-76.1 s over 40 runs (P10
-#: live session report); 90 s failed a run still inside validation. 180 s
-#: is about 2.4x the slowest, and the wait ends early if the bridge exits.
+#: Launch to BridgeStatus CONNECTED was measured at 44-76 s, mostly
+#: convention validation. 180 s leaves a wide margin, and the wait ends
+#: early if the bridge exits.
 BRIDGE_CONNECT_TIMEOUT_S = 180.0
 
 
@@ -104,8 +96,8 @@ class RunConfig:
     real_time_factor: Optional[float] = None
     #: A one-off measurement that report must never pool (summary.json).
     diagnostic_label: str = ""
-    #: "manual" (a person builds the model and presses Play, as always)
-    #: or "matlab-batch" (the runner starts and stops MATLAB itself, see
+    #: "manual" (a person builds the model and presses Play) or
+    #: "matlab-batch" (the runner starts and stops MATLAB itself, see
     #: acav/twin_launcher.py).
     twin_launch: str = "manual"
     #: Run on an STK Desktop started through COM, or one the runner
@@ -206,13 +198,12 @@ def _private_ros_node(name: str):
 
     Every ROS wait below runs in one. rclpy's default context is shared
     by the whole process, and rclpy.init() on it installs SIGINT/SIGTERM
-    handlers that shut it down; each wait then ended in
-    ``rclpy.shutdown()``, which raised "rcl_shutdown already called on
-    the given context" and replaced the wait's own error (P10 live
-    session, the first E6 attempt's idle_check). Here no signal handler
-    is installed, and try_shutdown does nothing to a context that is
+    handlers that shut it down; a wait ending in ``rclpy.shutdown()``
+    could then raise "rcl_shutdown already called on the given context"
+    and replace the wait's own error. Here no signal handler is
+    installed, and try_shutdown does nothing to a context that is
     already shut down or never started, so the wait's own exception is
-    the one that propagates. Cleanup errors are not allowed to hide it.
+    the one that propagates.
     """
     import rclpy
     from rclpy.context import Context
@@ -351,12 +342,9 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
 
     ``sensing.force_attitude_provider`` is set from the run, always: to
     the forced provider for E1's treatment and to empty for every other
-    run. Before this, ``--attitude-provider`` reached only the scheduler
-    -- it labelled the record without changing what the bridge read
-    through, so a treatment needed a hand-made YAML and a value left in
-    a shared YAML would have silently turned a nominal run into one. The
-    base file is not edited; the copy stays with the logs as the record
-    of what the bridge was given.
+    run, so a value left in a shared YAML cannot turn a nominal run into
+    a treatment. The base file is not edited; the copy stays with the
+    logs as the record of what the bridge was given.
     """
     import yaml
 
@@ -367,9 +355,7 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
         settings = yaml.safe_load(handle) or {}
     if not isinstance(settings, dict):
         raise ValueError(f"{config.bridge_config} is not a YAML mapping")
-    # The run's execution mode, always: before this the base file's mode
-    # (lockstep) was used whatever the run asked for, so an E3 free-run
-    # run silently ran in lockstep.
+    # The run's execution mode, always, whatever the base file says.
     settings.setdefault("time", {})
     settings["time"]["mode"] = config.execution_mode
     if config.real_time_factor is not None:
@@ -393,27 +379,26 @@ def write_bridge_config(config: RunConfig, log_dir: str, logger) -> str:
     if (sensing.get("equivalence_diagnostic")
             and not sensing.get("equivalence_diagnostic_dir")):
         sensing["equivalence_diagnostic_dir"] = os.path.abspath(log_dir)
-    # Sensing optimisations (decisions Q2/Q3): E1 compares attitude
-    # read-back conventions, so both arms keep the original sensing path,
-    # and a forced provider is never combined. The effective values are
-    # written explicitly, with the mode label, so the copy beside the logs
-    # says which path this run used.
+    # Sensing optimisations: E1 compares attitude read-back conventions,
+    # so both arms keep the plain sensing path, and a forced provider is
+    # never combined. The effective values are written explicitly, with
+    # the mode label, so the copy beside the logs says which path ran.
     combine = bool(sensing.get("combine_attitude_rate", False))
     batch = int(sensing.get("orbit_batch_samples", 1) or 1)
     if config.experiment == "E1" or config.attitude_provider:
         combine = False
     if config.experiment == "E1":
         batch = 1
-    # Free-run: (B) can never verify (no sense epoch is a written sample)
-    # and (C) reads epochs ahead of the wall clock, which an asynchronous
-    # loop must not do; written off so the record says what ran.
+    # Free-run: the combined read can never verify (no sense epoch is a
+    # written sample) and orbit batching reads epochs ahead of the wall
+    # clock, which an asynchronous loop must not do; both written off.
     if config.execution_mode == "free_run":
         combine = False
         batch = 1
     sensing["combine_attitude_rate"] = combine
     sensing["orbit_batch_samples"] = batch
     sensing["sensing_mode"] = sensing_mode_label(combine)
-    # Decision Q4: the bridge checks STK's stop time against the window.
+    # The bridge checks STK's stop time against the scenario window.
     if batch > 1 and sensing.get("orbit_batch_expected_window_s") is None:
         window = _scenario_window_s(config, logger)
         if window is not None:
@@ -458,7 +443,7 @@ def sensing_mode_label(combine_attitude_rate: bool) -> str:
 def _sensing_labels(bridge_config: str) -> dict:
     """What the per-run bridge config enables, for summary.json.
 
-    ``sensing_mode`` is the configured mode; whether (B) actually
+    ``sensing_mode`` is the configured mode; whether the combined read
     activated is in bridge.log and in the provider BridgeStatus reports.
     """
     import yaml
@@ -501,7 +486,7 @@ def standalone_run_config(config: RunConfig, version: str) -> dict:
 
     Same fields as ``campaign_runner.write_run_config``, from this run's
     own arguments: a standalone run has no ``RunSpec``, and its run id is
-    the operator's, not one derived from the configuration.
+    the user's, not one derived from the configuration.
     """
     gains = _json_argument(config.gains_json, "--gains-json")
     if gains is None:
@@ -538,7 +523,7 @@ def prepare_run_config(config: RunConfig, version: str):
     False only for an existing file without a ``run_id`` key, which
     cannot be shown to belong to this run. A missing file is written from
     this run's arguments, as UTF-8 without a byte-order mark. An existing
-    one -- a campaign run's, or an operator's override -- is left
+    one (a campaign run's, or a user's override) is left
     byte-for-byte unchanged, but must be a JSON object for this run: a
     file the twin cannot read, or one written for another run, is
     rejected here rather than discovered after the bridge has started.
@@ -629,17 +614,11 @@ def _wait_for_bridge_connected_ros(
     unit tests) on a machine with no ROS 2 sourced.
 
     Uses ``stk_bridge.interfaces.qos.status_qos()`` rather than a
-    hand-rolled profile, and that is load-bearing, not a style
-    preference: the bridge publishes ``{prefix}/status`` RELIABLE +
-    TRANSIENT_LOCAL (interfaces/qos.py's own docstring -- so a
-    late-joining watcher like this one sees current state immediately).
-    A subscriber whose durability does not request at least
-    TRANSIENT_LOCAL never matches that publisher at the DDS layer -- not
-    "arrives late", *never arrives*, with no error on either side. An
-    earlier version of this function used VOLATILE and reproduced
-    exactly that: the bridge was running and CONNECTED the whole time,
-    and this function reported "no BridgeStatus received at all" for the
-    full timeout regardless.
+    hand-rolled profile: the bridge publishes ``{prefix}/status`` RELIABLE
+    + TRANSIENT_LOCAL, so a late-joining watcher sees the current state
+    immediately. A subscriber whose durability does not request at least
+    TRANSIENT_LOCAL never matches that publisher at the DDS layer: the
+    message never arrives, with no error on either side.
     """
     from stk_bridge.interfaces.qos import status_qos
     from stk_msgs.msg import BridgeStatus
@@ -693,7 +672,7 @@ def _wait_for_twin_ack_ros(
 
     Uses ``stk_bridge.interfaces.qos.command_qos()`` -- the profile the
     bridge's own ack subscriber uses (``ros_subscribers.py``) -- for the
-    same reason ``_wait_for_bridge_connected_ros`` now uses
+    same reason ``_wait_for_bridge_connected_ros`` uses
     ``status_qos()``: a durability/reliability mismatch on this topic
     would not fail loudly, it would just never deliver a message, and
     this function has no way to tell that apart from "the twin really
@@ -993,8 +972,8 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                                   "message": str(error), "traceback": text})
         run_log.error("%s raised %s", step, text.rstrip())
 
-    # A QuickEdit selection in this console once held a run for 11.5 min
-    # (E6 seed1, P9b): off while the run lasts, restored afterwards.
+    # A QuickEdit selection in this console can hold a run indefinitely:
+    # off while the run lasts, restored afterwards.
     quickedit, restore_quickedit = deps.disable_quickedit()
     summary["console_quickedit"] = quickedit
     post_run_failed = []
@@ -1172,10 +1151,9 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                     return EXIT_STEP_FAILED
             if (config.backend not in ("mock",)
                     and connect_result.backend_type == "mock"):
-                # Not fatal by itself -- some backends legitimately fall
-                # back -- but this run's record will be unreportable, and
-                # that must be visible in THIS log, not only discovered
-                # later when C6 silently excludes it.
+                # Not fatal by itself (some backends legitimately fall
+                # back), but this run's record will be unreportable, and
+                # that must be visible in this log, not only in the report.
                 run_log.warning(
                     "requested backend %r but bridge reports 'mock' -- "
                     "this run will not be reportable (see run_record.py)",
@@ -1217,8 +1195,7 @@ def execute_run(config: RunConfig, deps: Optional[Deps] = None) -> int:
                     "just trust the keypress): ")
 
             # An automated twin's exit ends the wait at once; waiting out
-            # the timeout for a dead MATLAB only delays the failure (the
-            # d97800c incident waited 252.6 s after MATLAB had exited).
+            # the timeout for a dead MATLAB only delays the failure.
             twin = twin_state["twin"]
             exit_check = twin.exit_code if twin is not None else None
             ack_started = time.monotonic()
@@ -1377,7 +1354,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-config", default="")
     parser.add_argument("--gains-json", default="")
     parser.add_argument("--fault-json", default="")
-    # Not a CommandLauncher placeholder -- deploy-machine environment.
+    # Not a CommandLauncher placeholder: the host's environment.
     parser.add_argument("--bridge-config", required=True, metavar="PATH",
                         help="stk_bridge config with barrier_participants "
                              "including matlab_twin AND acav_scheduler "

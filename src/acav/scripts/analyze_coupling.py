@@ -1,6 +1,6 @@
 """Timing and coupling analysis of the runs in a results folder.
 
-    python scripts/analyze_coupling.py results/E3_pilot_48813ac [more ...]
+    python scripts/analyze_coupling.py results/E3 [more ...]
 
 Read-only: uses each run's record and its <run>.logs folder only (no
 STK, no ROS); see acav/coupling_analysis.py for every quantity. Writes

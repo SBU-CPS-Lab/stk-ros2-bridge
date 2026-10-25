@@ -6,7 +6,7 @@
 Run this after editing acav_scenario.yaml: it applies every
 cross-check in AcavSpec.validate() and prints the per-target
 feasibility table, so a spec error surfaces here rather than as a
-confusing result three phases later.
+confusing result later.
 """
 
 from __future__ import annotations

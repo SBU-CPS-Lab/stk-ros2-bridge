@@ -1,43 +1,36 @@
-"""Executable reference for the Simulink ADCS twin (C3).
+"""Executable reference for the MATLAB/Simulink ADCS twin.
 
-The twin itself is MATLAB/Simulink and runs on the Windows machine.
-This module is the same dynamics, control law, actuator model and mode
-logic written once in Python, where it can be tested, and it exists for
-three reasons:
+The twin itself is MATLAB/Simulink. This module is the same dynamics,
+control law, actuator model and mode logic written once in Python, where
+it can be tested without MATLAB, for three reasons:
 
-1. **The MATLAB cannot be tested here.** Shipping a thousand lines of
-   untested attitude code and finding the sign errors during a live
-   closed-loop run is the expensive order. The MATLAB is a transcription
-   of semantics fixed and tested here.
+1. **The semantics are fixed here.** The MATLAB code is a transcription
+   of semantics defined and tested in this module.
 2. **The two must not drift.** ``scripts/export_twin_fixtures.py``
    writes trajectories from this module; ``stk_matlab/test_acav_twin.m``
    replays them through the MATLAB implementation and asserts agreement.
    A transcription error becomes a failing MATLAB test rather than a
-   result.
-3. **C5 needs something to validate the twin against.** Experiment E2
-   only measures the effect under study if the twin and the scheduler
-   share a slew model; C1 made that point about ``slew_model.py`` and it
-   applies with more force to the closed-loop response.
+   wrong result.
+3. **The twin and the scheduler share one slew model**
+   (``slew_model.py``), so E2 measures the effect under study rather
+   than a disagreement between models.
 
 What this is not
 ----------------
-Not a substitute for the Simulink model, and no number it produces may
-appear in the paper. It has no flexible modes, no wheel friction, no
-sensor noise and no Stateflow. It fixes semantics; the twin produces
-results.
+Not a substitute for the Simulink model, and its numbers are not
+results. It has no flexible modes, no wheel friction and no sensor
+noise. It fixes semantics; the twin in the loop produces results.
 
 Design of the control path
 --------------------------
 A saturated PD controller on a double integrator overshoots badly, and
 the overshoot would show up as settling time the scheduler never
-budgeted for -- E2 would then be measuring the controller's overshoot
-rather than the effect under study. So the twin does what an agile EO
-spacecraft actually does: an **eigenaxis profile generator** produces a
-feasible reference trajectory using exactly the limits
-``acav/slew_model.py`` assumes, and a quaternion-feedback controller
-*tracks* it. The achieved slew time is then close to the analytic bound
-by construction, and the interesting quantity -- settling -- is what
-remains.
+budgeted for. The twin therefore does what an agile Earth-observation
+spacecraft does: an **eigenaxis profile generator** produces a feasible
+reference trajectory using exactly the limits ``acav/slew_model.py``
+assumes, and a quaternion-feedback controller *tracks* it. The achieved
+slew time is then close to the analytic bound by construction, and the
+quantity of interest, settling, is what remains.
 """
 
 from __future__ import annotations
@@ -71,7 +64,7 @@ from acav.slew_model import SlewLimits, slew_time_s
 
 
 class MissionMode(str, Enum):
-    """The Stateflow chart's states. Values match the chart's labels."""
+    """The mission modes. Values match the Stateflow chart's labels."""
 
     NADIR = "NADIR"
     SLEW = "SLEW"
@@ -84,9 +77,8 @@ class MissionMode(str, Enum):
 class TwinConfig:
     """Everything the twin needs, all of it from ``acav_scenario.yaml``.
 
-    Nothing here has a default that differs from the YAML: a value that
-    could drift between the twin and the scheduler is a value that makes
-    E2 measure their disagreement instead of the effect under study.
+    Nothing here has a default that differs from the YAML, so the twin
+    and the scheduler cannot drift apart.
     """
 
     inertia_kg_m2: Tuple[float, float, float]
@@ -97,20 +89,17 @@ class TwinConfig:
     capture_error_rad: float = math.radians(0.5)
     settle_hold_s: float = 2.0
     max_body_rate_rad_s: float = math.radians(15.0)
-    #: Closed-loop natural frequency and damping of the tracking loop.
-    #: Measured, not guessed: a sweep over authority and bandwidth put
-    #: the excess of achieved settling over the analytic slew bound at
-    #: +3.7 to +4.8 s across every slew in the scenario at these values,
-    #: against the 8 s the scheduler budgets. At 0.7 rad/s the largest
-    #: slew needed +9.8 s and would have missed every tight target for
-    #: a reason that has nothing to do with the effect under study.
-    #: Per-run overrides can set these, which is why they are here and not in the model.
+    #: Closed-loop natural frequency and damping of the tracking loop,
+    #: chosen by a sweep over authority and bandwidth: at these values the
+    #: achieved settling exceeds the analytic slew bound by +3.7 to +4.8 s
+    #: across every slew in the reference scenario, within the 8 s the
+    #: scheduler budgets (at 0.7 rad/s the largest slew needed +9.8 s).
+    #: Per-run overrides can set these.
     #:
-    #: Honest caveat for the paper: this bandwidth is optimistic for a
-    #: 6U CubeSat because the twin models no sensor noise, no attitude
-    #: estimation lag and no wheel dynamics. It is a fair basis for
-    #: comparing schedulers -- both face the same vehicle -- but it is
-    #: not a claim about achievable CubeSat pointing performance.
+    #: Caveat: this bandwidth is optimistic for a 6U CubeSat because the
+    #: twin models no sensor noise, no attitude estimation lag and no wheel
+    #: dynamics. It is a fair basis for comparing schedulers (both face the
+    #: same vehicle), not a claim about achievable CubeSat pointing.
     natural_frequency_rad_s: float = 1.0
     damping_ratio: float = 0.707
     #: Fraction of the wheel limits the reference profile is allowed to
@@ -125,9 +114,8 @@ class TwinConfig:
     #: per lockstep tick. Mirrors ``cfg.stepS`` in ``+adcs/config.m``;
     #: ``twin_step`` integrates over it.
     step_s: float = 0.1
-    #: A reaction wheel degrading partway through the run -- E5's
-    #: injected fault. ``None`` is a healthy vehicle, which is every
-    #: other experiment.
+    #: A reaction wheel fault injected partway through the run. ``None``
+    #: is a healthy vehicle.
     #:
     #: Carried on the config rather than arriving as an event because
     #: the fault is decided before the run and written into its record;
@@ -182,8 +170,8 @@ class TwinConfig:
         """The limits the reference trajectory obeys -- derated.
 
         Distinct from :meth:`slew_limits` on purpose. The scheduler's
-        estimate is a *lower bound* computed against the full limits, as
-        C1 says; the twin flies a profile that deliberately leaves
+        estimate is a *lower bound* computed against the full limits; the
+        twin flies a profile that deliberately leaves
         control margin, so it takes slightly longer than the bound. That
         gap is part of what ``scheduling.settle_estimate_s`` covers, and
         collapsing the two would either starve the controller or make
@@ -204,7 +192,7 @@ class ReactionWheels:
     """Three orthogonal wheels aligned with the body axes.
 
     Torque- and momentum-limited, and the momentum limit is the one that
-    matters: it is what trips SAFE mode, and it is the fault E5 injects.
+    matters: it is what trips SAFE mode, and it is the injected fault.
     Saturation is modelled as a hard clamp rather than a soft roll-off
     because that is what makes the failure abrupt and therefore
     detectable; a gentle roll-off would degrade pointing gradually and
@@ -214,7 +202,7 @@ class ReactionWheels:
     max_torque_Nm: float
     momentum_capacity_Nms: float
     momentum_Nms: Vector3 = (0.0, 0.0, 0.0)
-    #: Per-axis derate, 1.0 = healthy. E5 drives one of these to zero.
+    #: Per-axis derate, 1.0 = healthy; a 'failure' fault drives one to zero.
     health: Vector3 = (1.0, 1.0, 1.0)
 
     def command(self, torque_body_Nm: Sequence[float], dt: float
@@ -223,10 +211,8 @@ class ReactionWheels:
 
         The wheel absorbs the reaction, so its momentum changes by
         ``-torque * dt``. A wheel already at its momentum limit can still
-        torque *back* towards zero -- clamping both directions would make
-        saturation unrecoverable and turn every E5 run into a permanent
-        SAFE, which would not be a fault injection so much as a
-        termination.
+        torque *back* towards zero; clamping both directions would make
+        saturation unrecoverable.
         """
         delivered = []
         momentum = []
@@ -272,8 +258,7 @@ class RigidBody:
 
     Euler's equation with the wheel momentum included in the total, so
     gyroscopic coupling through a spinning wheel is present. It is small
-    at these momenta, but omitting it would make the twin's dynamics
-    differ from a real vehicle's in exactly the regime E5 explores.
+    at these momenta, but matters near wheel saturation.
     """
 
     inertia_kg_m2: Tuple[float, float, float]
@@ -297,11 +282,10 @@ class RigidBody:
              wheel_momentum_Nms: Sequence[float], dt: float) -> None:
         """One RK4 step.
 
-        RK4 rather than Euler: at 0.1 s with a 0.7 rad/s bandwidth,
-        forward Euler adds a slow energy drift that reads as a
-        controller that never quite settles. That is precisely the
-        measurement this study reports, so the integrator must not
-        contribute to it.
+        RK4 rather than Euler: at 0.1 s steps, forward Euler adds a
+        slow energy drift that looks like a controller that never quite
+        settles, which would distort the settling time this study
+        reports.
         """
         q0, w0 = self.quaternion, self.rate_rad_s
 
@@ -411,9 +395,9 @@ def tracking_torque(config: TwinConfig, q: Sequence[float],
 
     ``tau = -Kp * sign(qe_w) * qe_v - Kd * (omega - omega_ref)``
 
-    The ``sign(qe_w)`` is not cosmetic: without it the controller happily
-    takes the long way round a 350 degree error, arrives, and reports a
-    settling time three times longer than the model predicts. The
+    The ``sign(qe_w)`` selects the short way round: without it the
+    controller can take the long way round a 350 degree error, which
+    converges but triples the settling time. The
     feedforward term is what lets the response track the profile rather
     than lag it, which is what keeps achieved slew times near the
     analytic bound.
@@ -434,16 +418,10 @@ def control_torque(config: TwinConfig, mode: MissionMode,
 
     SAFE is **rate damping only** -- ``-Kd * omega``, with no attitude
     term. The purpose of SAFE is to stop the vehicle tumbling and stop
-    pointing at anything; commanding zero torque instead would leave
-    whatever rate tripped the guard exactly where it was, and E5 is the
-    campaign that exists to exercise precisely that recovery.
-
-    This function exists because the two implementations disagreed about
-    it. ``simulate_slew`` here zeroed the torque, ``+adcs/twin_step.m``
-    applied rate damping, and no fixture could see the disagreement
-    because the per-step orchestration had no counterpart in this module
-    to generate one from. One decision, one place, used by both
-    ``simulate_slew`` and ``twin_step``.
+    pointing at anything; commanding zero torque instead would leave the
+    rate that tripped the guard where it was. One decision, in one place,
+    used by both ``simulate_slew`` and ``twin_step`` (and mirrored in
+    ``+adcs/twin_step.m``).
     """
     if mode is MissionMode.SAFE:
         _, kd = config.gains()
@@ -469,9 +447,8 @@ def target_attitude(position_inertial: Sequence[float],
     """Boresight at a ground target, roll pinned by the velocity.
 
     ``boresight_body`` comes from ``sensor.boresight_body_axis`` in the
-    YAML and is the single place the +Z assumption enters the twin. If
-    the live install turns out to mount the boresight the other way, one
-    value in the scenario file changes and nothing else does.
+    YAML and is the single place the +Z assumption enters the twin; a
+    different mounting changes that one value.
     """
     line_of_sight = normalize(tuple(t - p for t, p
                                     in zip(target_inertial,
@@ -481,7 +458,7 @@ def target_attitude(position_inertial: Sequence[float],
 
 
 # ---------------------------------------------------------------------------
-# Mission mode logic (the Stateflow chart, as a function)
+# Mission mode logic
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -499,23 +476,16 @@ def update_mode(state: ModeState, config: TwinConfig, now_s: float,
                 boresight_error_rad_value: float, body_rate_rad_s: float,
                 momentum_fraction: float, slew_requested: bool,
                 profile_done: bool) -> ModeState:
-    """One transition evaluation. Mirrors the Stateflow chart exactly.
+    """One transition evaluation, as in +adcs/mission_mode.m.
 
-    ``profile_done`` is an argument rather than being derived from
-    ``state.profile`` here. It was derived, and the MATLAB transcription
-    took it as an argument -- so the two disagreed about a SLEW state
-    with no profile, and the cross-check caught it. Deriving it also hid
-    a bug state: a SLEW with no profile is a fault, and silently
-    treating it as "finished" is the kind of plausible recovery that
-    makes a wrong run look like a normal one.
+    ``profile_done`` is an argument rather than derived from
+    ``state.profile``, as in the MATLAB code: a SLEW with no profile is
+    a fault, not a finished slew.
 
     Ordering matters and is asserted by tests: the SAFE guards are
     evaluated **first and unconditionally**, so a wheel that saturates
     during IMAGE trips SAFE rather than being masked by an
-    already-satisfied hold. Writing the transitions in the other order
-    yields a chart that behaves correctly in every nominal run and
-    silently fails to protect the vehicle in exactly the campaign (E5)
-    that exists to test it.
+    already-satisfied hold.
     """
     if (momentum_fraction >= 1.0
             or body_rate_rad_s > config.max_body_rate_rad_s):
@@ -525,9 +495,9 @@ def update_mode(state: ModeState, config: TwinConfig, now_s: float,
 
     if state.mode is MissionMode.SAFE:
         # SAFE is latched. Recovery is an operator action, not an
-        # automatic transition -- an ADCS that re-armed itself the
+        # automatic transition: an ADCS that re-armed itself the
         # instant the trip condition cleared would oscillate in and out
-        # of SAFE and make E5's replay meaningless.
+        # of SAFE.
         return state
 
     if slew_requested and state.mode in (MissionMode.NADIR,
@@ -576,10 +546,9 @@ class TwinState:
 
     Wheel momentum lives here rather than on :class:`ModeState` because
     ``update_mode`` constructs a *fresh* ``ModeState`` on every
-    transition. A momentum field there would be silently zeroed each
-    time the mode changed -- which is not only physically impossible but
-    self-concealing, since entering SAFE would clear the very saturation
-    that tripped it and the vehicle would look recovered.
+    transition. A momentum field there would be zeroed each time the
+    mode changed, and entering SAFE would clear the saturation that
+    tripped it.
     """
 
     mode_state: ModeState = field(default_factory=ModeState)
@@ -587,16 +556,13 @@ class TwinState:
     #: Whether a SATURATION fault has already been applied. It is a
     #: one-shot: the wheel is filled once, and ordinary physics takes
     #: over afterwards so it can still unload. Re-applying it every step
-    #: would pin the wheel at capacity forever, which is a termination
-    #: rather than a fault injection -- the same reasoning that made
-    #: ReactionWheels let a saturated wheel torque back towards zero.
+    #: would pin the wheel at capacity forever.
     fault_applied: bool = False
     #: Cumulative integral of |tau . omega|, joules -- a proxy for slew
     #: cost, reported per run. Accumulated here rather than by whoever
     #: reads the telemetry because this is the only place that holds the
     #: delivered torque and the body rate at the same instant, and a
-    #: running total survives a dropped sample where a consumer-side
-    #: integration would silently lose that step's contribution.
+    #: running total is unaffected by a dropped sample.
     wheel_energy_J: float = 0.0
     previous_desired: Optional[Quaternion] = None
     previous_desired_time: Optional[float] = None
@@ -622,9 +588,8 @@ def _apply_saturation_fault(config: TwinConfig, inputs: TwinInputs,
 
     Applied to the state going INTO the step, before the momentum guard
     is evaluated, so the chart trips SAFE on the very step the fault
-    lands rather than one step later. A one-step lag there would be
-    invisible in a plot and would make the injection epoch in the record
-    disagree with the epoch the run actually reacted to.
+    lands rather than one step later, so the injection epoch in the
+    record is the epoch the run reacted to.
 
     The sign follows whichever way the wheel was already spinning, so a
     wheel unloading in one direction is not abruptly reversed; with no
@@ -648,41 +613,26 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
               state: TwinState) -> TwinStepResult:
     """One guidance-and-control cycle: guidance, mode, control, dynamics.
 
-    The counterpart of ``+adcs/twin_step.m``, and the reason it exists:
-    that function was the *only* part of the twin with nothing on this
-    side to generate fixtures from, so the cross-check never exercised
-    the orchestration, and two defects lived in it undetected until the
-    Simulink signal wiring was finally built.
+    The counterpart of ``+adcs/twin_step.m``, held equal to it by the
+    closed-loop twin_step fixtures.
 
-    The one that mattered: ``quaternionCmd`` was the input attitude,
-    returned verbatim. The twin read an attitude from STK, computed a
-    torque, and published back the attitude it had just read -- nothing
-    anywhere integrated that torque. The loop had no integrator at all,
-    so the vehicle could never slew and every capture would have been
-    decided by wherever it already happened to point. The design note
-    that justified it ("in the closed loop STK is the truth, the
-    dynamics are bypassed") rested on a misreading of what STK does with
-    injected attitude: ``AddAttitude CBFQuat`` stores and interpolates
-    samples, it does not propagate attitude dynamics. STK is the truth
-    for orbit, geometry and access; the vehicle's attitude *response* is
-    the twin's to compute, and this is where it is computed.
+    STK stores and interpolates injected attitude samples (``AddAttitude``);
+    it does not propagate attitude dynamics. STK is the truth for orbit,
+    geometry and access; the vehicle's attitude *response* is the twin's
+    to compute, and this is where it is computed.
 
     A failed wheel enters here and nowhere else: the health schedule is
     evaluated against this step's time and handed to the actuator model,
-    so a dead axis simply stops delivering torque. The controller is not
-    told, and that is the point -- it keeps commanding torque the
-    vehicle cannot produce, momentum builds on the remaining axes, and
-    the mode logic trips SAFE on the momentum guard. A twin that
-    reconfigured its controller around the failure would be measuring
-    fault-tolerant control rather than what E5 asks about.
+    so a dead axis stops delivering torque. The controller is not told:
+    it keeps commanding torque the vehicle cannot produce (pointing then
+    degrades without tripping a guard; see acav/fault_injection.py). A
+    twin that reconfigured its controller around the failure would be
+    studying fault-tolerant control instead.
 
-    What the command published still is: the ACHIEVED attitude, not the
-    reference. That part of the original intent was right and the whole
-    study turns on it -- publishing the reference would quietly
-    reinstate the perfect-pointing assumption the paper exists to
-    challenge. "Achieved" now means integrated one step forward under
-    the torque the wheels actually delivered, starting from the state
-    STK reported.
+    The command published is the *achieved* attitude, not the reference,
+    so that STK computes access from what the vehicle did rather than
+    from perfect pointing: the state STK reported, integrated one step
+    forward under the torque the wheels actually delivered.
     """
     state = _apply_saturation_fault(config, inputs, state)
 
@@ -722,12 +672,11 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
                       and mode_state.mode is not MissionMode.SLEW
                       and (mode_state.mode is not MissionMode.SETTLE
                            or state.previous_target_key != target_key))
-    # A slew towards the PREVIOUS target is not "done" for the new one.
-    # Without this, a target change on the step the old profile ends
-    # moved SLEW -> SETTLE, consumed the change, and left the feedback
-    # loop alone to close the full new slew at the torque limit (found
-    # by the moving_twin_step fixture). Keeping SLEW lets the re-plan
-    # below start the new profile on this same step.
+    # A slew towards the previous target is not "done" for the new one:
+    # otherwise a target change on the step the old profile ends would
+    # move SLEW -> SETTLE and leave the feedback loop alone to close the
+    # whole new slew. Keeping SLEW lets the re-plan below start the new
+    # profile on this same step.
     target_changed = state.previous_target_key != target_key
     profile_done = ((mode_state.profile is None
                      or (inputs.time_s - mode_state.slew_started_s)
@@ -807,7 +756,7 @@ def twin_step(config: TwinConfig, inputs: TwinInputs,
 
 @dataclass
 class TwinSample:
-    """One logged step. Mirrors what C5 records from the real twin."""
+    """One logged step. Mirrors what is recorded from the real twin."""
 
     time_s: float
     quaternion: Quaternion

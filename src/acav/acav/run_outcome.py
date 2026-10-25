@@ -1,7 +1,7 @@
 """What a run that left no record actually was, from its summary.json.
 
-The live session on d0bf796 showed that "no record" covers very
-different things, and only one of them is a mismatch being detected:
+"No record" covers very different things, and only one of them is a
+mismatch being detected:
 
     interrupted              a KeyboardInterrupt in summary.json errors:
                              no result, never a pass, never a fail-stop
@@ -11,8 +11,8 @@ different things, and only one of them is a mismatch being detected:
                              waitFor "not reached"): not a detection;
                              retry it
     guard_fail_stop          the twin stopped on its own attitude guard
-                             (adcs:simulink_step:AttitudeMismatch,
-                             +adcs/simulink_step.m:239)
+                             (adcs:simulink_step:AttitudeMismatch in
+                             +adcs/simulink_step.m)
     fail_stop                anything else that ended by itself
 
 Read only from what summary.json already records (errors and the

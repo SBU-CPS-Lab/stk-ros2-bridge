@@ -2,7 +2,7 @@
 
 For each seed: if its folder already holds a usable record for every run
 of the E2 campaign, made by this commit, skip it; otherwise build and
-verify the seeded scenario in the operator's STK (build_acav_scenario:
+verify the seeded scenario in the user's STK (build_acav_scenario:
 an open scenario is closed first, and graphics are left off and checked
 with the run guard's own rule), stop that seed on any non-zero result,
 then run the E2 campaign into results/E2_final_seed{k}_{tag}. Records

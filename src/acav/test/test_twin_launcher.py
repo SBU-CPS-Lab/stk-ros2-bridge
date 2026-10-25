@@ -90,10 +90,11 @@ class TestLauncher:
         assert not os.path.exists(stop), "a stale stop file is removed"
 
     def test_a_quote_in_a_path_is_escaped_for_matlab(self, tmp_path):
-        twin = tl.MatlabBatchTwin("C:/it's/r.json", "C:/logs",
+        config = os.path.join(str(tmp_path), "it's", "r.json")
+        twin = tl.MatlabBatchTwin(config, str(tmp_path / "logs"),
                                   popen=lambda *a, **k: None)
-        # Absolute and normalised (os.path.abspath) since 88f90b9's fix.
-        assert r"'C:\it''s\r.json'" in twin.argv[2]
+        # Absolute and normalised (os.path.abspath), quote doubled.
+        assert "'" + config.replace("'", "''") + "'" in twin.argv[2]
 
     def test_a_stop_file_stop(self, tmp_path):
         twin, _, killed, _ = _launcher(tmp_path, _Process(exits_after_polls=3))

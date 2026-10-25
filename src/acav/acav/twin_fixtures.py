@@ -1,23 +1,18 @@
 """Cross-language fixtures: the contract between the reference and MATLAB.
 
-The Simulink twin is a transcription of ``acav/twin_reference.py`` into
-MATLAB, and a transcription is exactly the kind of work that produces a
-sign error somewhere in three hundred lines of quaternion algebra. Such
-an error does not crash: the twin flies smoothly to a slightly, or
-completely, wrong attitude, and the result reads as a control-design
-finding.
+The MATLAB twin is a transcription of ``acav/twin_reference.py``. A sign
+error in such a transcription does not crash: the twin steers smoothly
+to a slightly, or completely, wrong attitude.
 
-So the two implementations are held together by data rather than by
-review. This module generates input/expected-output pairs from the
+The two implementations are therefore held together by data rather than
+by review. This module generates input/expected-output pairs from the
 Python reference; ``stk_matlab/test_acav_twin.m`` replays them through
 the MATLAB functions and asserts agreement to a tolerance far tighter
-than anything the study measures. A transcription error becomes a
-failing MATLAB test on the deploy machine rather than a number in a
-paper.
+than anything the study measures.
 
 The fixtures are checked in rather than generated on the fly, so the
-MATLAB test needs no Python, and so a change to the reference shows up
-as a reviewable diff in the expected values.
+MATLAB test needs no Python, and a change to the reference shows up as a
+reviewable diff in the expected values.
 """
 
 from __future__ import annotations
@@ -60,19 +55,12 @@ from acav.twin_reference import (
 #: rejected loudly by the MATLAB side instead of silently passing
 #: against the wrong expectations.
 #:
-#: 3: added the ``twin_step`` section -- the per-step orchestration had
-#:    no counterpart in the reference, so nothing generated fixtures for
-#:    it and two defects survived C3 in the one function no cross-check
-#:    could see. SAFE-mode torque also changed here (zero -> rate
-#:    damping) to match the MATLAB, so closed-loop runs that enter SAFE
-#:    have new expected values.
-#: 4: twin_step now accumulates |tau . omega| into the state, so the
-#:    twin can publish wheel energy on TwinStatus and the run record can
-#:    report it. The twin_step cases carry the running total.
-#: 5: E5's wheel fault reaches the twin. Adds a wheel_fault section
-#:    (the health/saturation schedule) and a faulted twin_step case, so
-#:    the MATLAB's zero-based axis handling and its one-shot saturation
-#:    are both pinned rather than assumed.
+#: 3: the ``twin_step`` section (per-step orchestration, closed loop);
+#:    SAFE-mode torque is rate damping.
+#: 4: twin_step accumulates |tau . omega| (wheel energy) in its state.
+#: 5: the ``wheel_fault`` section and faulted twin_step cases, pinning
+#:    the zero-based axis handling and the one-shot saturation.
+#: 6: the ``moving_twin_step`` section (moving geometry, target changes).
 FIXTURE_VERSION = 6
 
 
@@ -297,12 +285,11 @@ def _mode_cases(config: TwinConfig) -> List[Dict]:
 
 
 def _wheel_fault_cases() -> List[Dict]:
-    """E5's fault schedule, including the axis convention.
+    """The wheel-fault schedule, including the axis convention.
 
-    ``axis`` is ZERO-based in the record, because that is what Python
-    wrote; MATLAB indexes from one. That off-by-one would fault the
-    wrong wheel while every other number in the run looked right, so it
-    is pinned here rather than left to a code review.
+    ``axis`` is zero-based in the record, because that is what Python
+    writes; MATLAB indexes from one. An off-by-one would fault the wrong
+    wheel while every other number looked right, so it is pinned here.
     """
     cases = []
     for name, fault, time_s in (
@@ -335,10 +322,9 @@ def _twin_step_cases(config: TwinConfig) -> List[Dict]:
     transitions, profile creation, the control law, the actuators and
     the dynamics, in the order and carrying the state that the deployed
     loop does. Each step feeds the previous step's *commanded* attitude
-    back in as the next step's measurement -- which is exactly what the
-    real loop does via STK -- so a twin that computes a torque but never
-    integrates it shows up here as a boresight error that refuses to
-    decrease, rather than as nothing at all.
+    back in as the next step's measurement, as the real loop does via
+    STK, so a twin that computes a torque but never integrates it shows
+    up as a boresight error that does not decrease.
 
     Recording convention, so the MATLAB replay is unambiguous: at each
     checkpoint ``quaternion``/``rate_rad_s``/``wheel_momentum_Nms`` are
@@ -374,24 +360,20 @@ def _twin_step_cases(config: TwinConfig) -> List[Dict]:
          (0.0, 1.0, 2.0, 3.0, 4.0, 5.0), None),
         # Tumbling above the rate guard: SAFE trips on the first step and
         # latches, and rate damping runs the wheels into their momentum
-        # limit. Both phases are pinned deliberately -- a wheels-only
-        # ADCS cannot dump momentum, so it can only remove about
-        # h_max/J = 9.3 deg/s of tumble and the rest persists. That is
-        # the vehicle E5 injects faults into, and a fixture that stopped
-        # before saturation would hide it.
+        # limit. Both phases are pinned: a wheels-only ADCS cannot dump
+        # momentum, so it can only remove about h_max/J = 9.3 deg/s of
+        # tumble and the rest persists.
         ("safe_rate_damping", False, 0.0, (0.279, 0.0, 0.0), 15.0,
          (0.0, 3.0, 6.0, 9.0, 12.0, 15.0), None),
-        # E5's treatment: a wheel saturates mid-slew. The momentum guard
-        # sees a full wheel on the very step the fault lands and the
-        # chart trips SAFE, which is what C1 section 9 asks E5 to
-        # produce. Checkpoints straddle the epoch deliberately, so a
-        # one-step lag in applying it shows up as a mode mismatch.
+        # A wheel saturates mid-slew. The momentum guard sees a full
+        # wheel on the very step the fault lands and SAFE trips.
+        # Checkpoints straddle the epoch, so a one-step lag in applying
+        # it shows up as a mode mismatch.
         ("wheel_saturates_mid_slew", True, 0.0, (0.0, 0.0, 0.0), 12.0,
          (0.0, 4.0, 5.0, 6.0, 9.0, 12.0),
          WheelFault(axis=0, at_s=5.0, seed=7)),
         # The same epoch, the other fault kind: the wheel dies instead.
-        # Pointing degrades and NOTHING trips -- measured, not assumed,
-        # and the reason SATURATION is E5's default.
+        # Pointing degrades and nothing trips.
         ("wheel_fails_mid_slew", True, 0.0, (0.0, 0.0, 0.0), 12.0,
          (0.0, 4.0, 5.0, 6.0, 9.0, 12.0),
          WheelFault(axis=0, at_s=5.0, seed=7, kind=FAILURE)),
@@ -545,9 +527,7 @@ def _moving_twin_step_cases(config: TwinConfig) -> List[Dict]:
     attitude never moves), the slew profile transported with the line of
     sight (the identity), and the target-identity logic -- re-planning a
     slew when the target changes mid-SLEW or in SETTLE, and resetting
-    the rate history on a change or loss of target. Those paths decided
-    the second live E6 campaign's results, and the two implementations
-    agreed only because they were compared by hand.
+    the rate history on a change or loss of target.
 
     Each case records checkpoints (same convention as ``twin_step``),
     every mode transition, and every slew (re)plan time, so a replan
@@ -555,8 +535,8 @@ def _moving_twin_step_cases(config: TwinConfig) -> List[Dict]:
     failure rather than a drift several seconds later.
     """
     # The two SETTLE-related switch times are found by running the TA-only
-    # case -- hand-picked times would silently stop testing them whenever
-    # the control design changes. ``settle_s`` is the step whose OUTPUT is
+    # case, so they stay right when the control design changes.
+    # ``settle_s`` is the step whose OUTPUT is
     # SETTLE (its input mode is still SLEW, the old profile just ending);
     # one step later the input mode is SETTLE itself.
     _, _, transitions, _ = _run_moving(config, [(0.0, "TA")], 30.0, 30.0)
@@ -628,10 +608,9 @@ def compare_fixtures(on_disk, expected, tolerance: float = 1e-9,
     Numbers are compared with a tolerance rather than for equality.
     ``sin``, ``cos`` and ``atan2`` come from the platform's libm and can
     differ in the last bit between machines and Python builds, so an
-    exact check reports "out of date" for a file nobody touched -- which
-    trains the reader to ignore it. A tolerance of 1e-9 is far below
-    anything the study measures and far above last-bit noise, so a
-    reported difference is a real change in what the twin must do.
+    exact check would report an untouched file as out of date. A
+    tolerance of 1e-9 is far below anything the study measures and far
+    above last-bit noise, so a reported difference is a real change.
     """
     differences: List[str] = []
 
@@ -658,9 +637,9 @@ def compare_fixtures(on_disk, expected, tolerance: float = 1e-9,
             or expected is None or on_disk is None):
         # Checked before the numeric branch, and on BOTH sides. In
         # Python False == 0.0, so a saturation flag that turned into a
-        # number would sail through a tolerant numeric comparison -- and
-        # `settling_time_s` returning None is meaningfully different
-        # from returning 0.0, which is the whole reason it can.
+        # number would pass a tolerant numeric comparison, and
+        # `settling_time_s` returning None means something different
+        # from returning 0.0.
         if type(on_disk) is not type(expected) or on_disk != expected:
             differences.append(f"{path}: {on_disk!r}, expected {expected!r}")
     elif isinstance(expected, (int, float)):

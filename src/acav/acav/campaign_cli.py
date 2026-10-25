@@ -1,4 +1,4 @@
-"""Command-line driver for the E2-E5 campaigns.
+"""Command-line driver for the ACAV campaigns (E1, E2, E3, E5, E6).
 
     run_acav_campaign plan   --experiment E3 --output-dir results/E3
     run_acav_campaign run    --experiment E3 --output-dir results/E3 -- \\
@@ -12,12 +12,13 @@ overnight run commits to it. ``run`` executes it and can be re-issued
 after a crash without repeating completed runs. ``report`` reads the
 directory afterwards and is the only one that needs no launch command,
 so results can be re-analysed on a machine that has neither STK nor
-MATLAB -- which is where the analysis for the paper actually happens.
+MATLAB.
 
-The launch command after ``--`` is the operator's, and deliberately so:
-the launch topology (bridge, twin, scheduler, shutdown order) belongs to
-the machine with STK on it. See :class:`acav.campaign_runner.
-CommandLauncher` for the placeholders it can use.
+The launch command after ``--`` is supplied by the user, because the
+launch topology (bridge, twin, scheduler, shutdown order) belongs to the
+machine with STK on it; ``scripts/run_acav_run.py`` is the standard one.
+See :class:`acav.campaign_runner.CommandLauncher` for the placeholders it
+can use.
 
 What the exit code means
 ------------------------
@@ -76,12 +77,12 @@ from acav.spec import AcavSpec
 
 LOGGER = logging.getLogger(__name__)
 
-#: E4 (gain sweep) was dropped from the study and removed; records
-#: labelled E4 still load (load_results never checks the label).
+#: Experiments with a campaign builder. Records with other labels still
+#: load (load_results never checks the label).
 EXPERIMENTS = ("E1", "E2", "E3", "E5", "E6")
 
 
-#: --repeats when it is not given: E1 one per arm, E3 and E6 as before.
+#: --repeats when it is not given: E1 one per arm, E3 and E6 as listed.
 DEFAULT_REPEATS = {"E1": 1, "E3": 20, "E6": 20}
 
 
@@ -123,11 +124,10 @@ def load_results(output_dir: str) -> List[RunRecord]:
     records = []
     for path in sorted(glob.glob(os.path.join(output_dir, "*.json"))):
         name = os.path.basename(path)
-        # campaign.json is the manifest; *.runconfig.json is the run's
-        # gain-and-fault input CommandLauncher writes BESIDE each
-        # result (see campaign_runner.write_run_config) -- both live in
-        # the same directory as the records and match *.json, but
-        # neither is one.
+        # campaign.json is the manifest and *.runconfig.json the run's
+        # gain-and-fault input written beside each result
+        # (campaign_runner.write_run_config); both match *.json but
+        # neither is a record.
         if name == "campaign.json" or name.endswith(".runconfig.json"):
             continue
         try:
@@ -142,8 +142,7 @@ def diagnostic_runs(output_dir: str) -> List[str]:
 
     Read from each run's ``<run>.logs/summary.json`` (written by
     run_acav_run.py). Such a run's timings are inflated by the
-    diagnostic's extra queries, so it must never be pooled with ordinary
-    runs.
+    diagnostic's extra queries, so it is never pooled with ordinary runs.
     """
     found = []
     for path in sorted(glob.glob(os.path.join(output_dir, "*.logs",
@@ -182,10 +181,9 @@ def effective_real_time_factors(output_dir: str) -> dict:
     """Effective real-time factor -> run ids, for the records in a folder.
 
     The recorded provenance.real_time_factor when present. A record
-    without it (written before it was recorded) counts as 1.0 only if it
-    is lockstep -- lockstep time advances by steps, never by the wall
-    clock, so the factor cannot have shaped it -- or if its bridge.log
-    shows "rtf=1.000"; otherwise it is "unknown", which report refuses.
+    without it counts as 1.0 only if it is lockstep (lockstep time
+    advances by steps, never by the wall clock) or if its bridge.log shows
+    "rtf=1.000"; otherwise it is "unknown", which report refuses.
     """
     import re
 
@@ -217,8 +215,7 @@ def effective_real_time_factors(output_dir: str) -> dict:
 
 
 def twin_launch_modes(output_dir: str) -> dict:
-    """summary.json twin_launch -> run ids ("manual" when absent: every run
-    before --twin-launch existed was started by hand)."""
+    """summary.json twin_launch -> run ids ("manual" when absent)."""
     modes: dict = {}
     for path in sorted(glob.glob(os.path.join(output_dir, "*.logs",
                                               "summary.json"))):
@@ -235,7 +232,7 @@ def twin_launch_modes(output_dir: str) -> dict:
 
 def stk_start_modes(records: List[RunRecord]) -> dict:
     """provenance.stk_process started_by -> run ids ("" for records
-    without one: other backends, and records made before it existed)."""
+    without one, e.g. other backends)."""
     from acav.stk_process import start_mode
 
     modes: dict = {}
@@ -260,7 +257,7 @@ def code_version_summary(records: List[RunRecord]) -> dict:
     ``attributable`` is true only when every record names the same plain
     commit: records from older code (no version recorded), from modified
     code (``+dirty``) or from more than one commit cannot be attributed to
-    a single published version, which a paper's methods section needs.
+    a single published version.
     """
     from acav.code_version import is_clean
 
@@ -318,9 +315,8 @@ def analyse(experiment: str, records: List[RunRecord],
         report["did_not_trip"] = [r.result.run_id for r in faulted
                                   if not r.result.entered_safe_mode]
         # A saturation fault must trip the momentum guard. A faulted run
-        # that stayed nominal means the fault did not reach the twin --
-        # which looks like a clean run rather than a broken experiment,
-        # so it is called out rather than averaged over.
+        # that stayed nominal means the fault did not reach the twin, so
+        # it is called out rather than averaged over.
         report["claim_holds"] = bool(faulted) and not report["did_not_trip"]
         report["claim"] = ("every seeded fault reached the twin and "
                            "tripped SAFE; use the replay verb for "
@@ -631,14 +627,11 @@ def make_figure(experiment: str, report: dict, records: List[RunRecord],
     if experiment == "E5":
         from acav.campaign import replay_matches
 
-        # A replay's run_id is the original's with "-replay" appended --
-        # see RunSpec.run_id and build_e5_replay. Pairs are found that
-        # way rather than from provenance.fault alone, since matching
-        # faults is exactly what a genuine reproduction is supposed to
-        # produce and would pair even two UNRELATED runs that happened
-        # to share a fault. A directory holding only the original
-        # faulted runs (no replay verb run yet) has nothing to compare
-        # and reports "no data", not an error.
+        # A replay's run_id is the original's with "-replay" appended
+        # (RunSpec.run_id, build_e5_replay). Pairs are found that way
+        # rather than from provenance.fault alone, which would also pair
+        # unrelated runs that share a fault. A directory with no replays
+        # reports "no data", not an error.
         by_id = {r.result.run_id: r for r in records}
         checks = [
             replay_matches(record, by_id[f"{record.result.run_id}-replay"])
@@ -758,11 +751,10 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
     launch_modes = _merged([twin_launch_modes(directory)
                             for directory in directories])
     if len(launch_modes) > 1:
-        # The twin's code, config and results in lockstep are the same;
-        # but a GUI session with the model open and a batch session load
-        # the host differently, and free-run results and every timing
-        # depend on that load -- the same reason graphics modes are kept
-        # apart.
+        # Lockstep results do not depend on how the twin was launched,
+        # but a GUI session and a batch session load the host
+        # differently, and free-run results and timings depend on that
+        # load, so launch modes are kept apart like graphics modes.
         LOGGER.error(
             "refusing to report: these records were made with different "
             "twin launch modes, which load the host differently: %s. Move "
@@ -773,8 +765,8 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
 
     start_modes = stk_start_modes(records)
     if len(start_modes) > 1:
-        # E6 on an STK started through COM stepped at 95.7 ms against
-        # about 60 ms (P10 live session); a record that does not say
+        # An STK started through COM was measured to step about 1.6x
+        # slower than a user-started one; a record that does not say
         # which STK it had could be either, so it is kept apart too.
         LOGGER.error(
             "refusing to report: these records were made on STK Desktop "
@@ -876,9 +868,8 @@ def _report(campaign: Campaign, args, total_targets: int) -> int:
         return 1
 
     if not report["code_versions"]["attributable"]:
-        # Reported, not fatal: the numbers are still the numbers. But the
-        # paper must cite the code that produced them, and this campaign
-        # cannot be cited as one commit.
+        # Reported, not fatal: the numbers stand, but this campaign
+        # cannot be attributed to one commit.
         LOGGER.warning(
             "these records do not come from one clean commit: %s. Re-run "
             "from a single committed version before citing the results.",
@@ -1119,12 +1110,9 @@ def _write_figures(experiment: str, report: dict, records: List[RunRecord],
                    total_targets: int, output_dir: str) -> None:
     """Render this experiment's figure(s), or say clearly why not.
 
-    Never fatal to the report itself: a colleague running this to see
-    the JSON should not lose that because a plotting library is not
-    installed on their machine, or because matplotlib itself raised on
-    a genuinely malformed input. Either is logged and the verb's own
-    exit code -- which is about whether the experiment's CLAIM held --
-    is unaffected.
+    Never fatal to the report itself: a missing plotting library or a
+    matplotlib error is logged, and the verb's exit code, which says
+    whether the experiment's claim held, is unaffected.
     """
     try:
         from acav import report_figures as rf

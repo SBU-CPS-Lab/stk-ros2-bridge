@@ -1,31 +1,30 @@
 """Builds the ACAV STK scenario from ``config/acav_scenario.yaml``.
 
-Creates the satellite (HPOP), the body-fixed conic sensor, seven
-ground-track-relative imaging targets, and a terrain-masked ground
-station -- then hands off to ``verify_acav_scenario.py``, which checks
+Creates the satellite (HPOP), the body-fixed conic sensor, the
+ground-track-relative imaging targets and, for the reference scenario, a
+terrain-masked ground station; ``verify_acav_scenario.py`` then checks
 empirically that each piece does what was intended.
 
 Design stance: verify, don't assume
 -----------------------------------
-Every STK-facing operation here has at least one uncertain element --
-enum spellings, whether a Connect form works, whether a command that
-ACKs actually had an effect. The bridge's own bring-up needed four
-rounds of live-install correction for exactly this reason (see
-docs/06_troubleshooting.md). So this module:
+Every STK-facing operation here has an uncertain element: enum
+spellings, whether a Connect form works, whether a command that ACKs had
+an effect (see docs/bridge/stk_notes.md). This module therefore:
 
-* tries multiple candidate spellings and reports which worked, rather
-  than assuming one;
+* tries multiple candidate forms and reports which worked;
 * records what it actually did in a :class:`BuildReport`, so the
-  verifier and the paper can state what was configured rather than what
+  verifier and any report state what was configured rather than what
   was requested;
 * refuses to continue past a check that fails in a way that would make
-  the scenario silently wrong (target placement, sensor boresight).
+  the scenario wrong (target placement, sensor boresight).
 
-The distinction that matters throughout: a command returning ACK means
-STK parsed it, not that it had the intended effect. Terrain masking is
-the clearest case -- ``SetAzElMask ... TerrainData`` ACKs happily
-whether or not terrain data covers the region, so the only honest test
-is to compute access twice and compare.
+A command returning ACK means STK parsed it, not that it had the
+intended effect. Terrain masking is the clearest case: ``SetAzElMask``
+is accepted whether or not terrain data covers the region, so the only
+real test is to compute access with and without the mask and compare.
+
+The builder does not configure HPOP's force model or physical
+properties: HPOP runs with STK's default mass and drag/SRP areas.
 """
 
 from __future__ import annotations
@@ -105,14 +104,12 @@ class BuildReport:
     terrain_mask_method: str = ""
     terrain_mask_verified: Optional[bool] = None
     #: How STK reports angles back, and what unit it accepted for
-    #: geodetic positions. Both are measured, not assumed -- the first
-    #: live run showed Connect consuming degrees while the Angle unit
-    #: preference was set to radians.
+    #: geodetic positions. Both are measured, not assumed: Connect consumes
+    #: degrees while the Angle unit preference is radians.
     angle_read_unit: str = "not measured"
     geodetic_write_unit: str = "not measured"
-    #: Every Connect form tried, with the exact reason it was rejected.
-    #: Without this a NACK costs a whole live round trip to diagnose --
-    #: the first live run reported three commands as simply "none".
+    #: Every Connect form tried, with the exact reason it was rejected, so
+    #: a NACK can be diagnosed from the report.
     attempts: Dict[str, List[str]] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
@@ -232,8 +229,7 @@ class AcavScenarioBuilder:
         stop = proto.format_utcg(stop_time)
 
         # Scenario time period must bracket the window, or every data
-        # provider outside it returns zero rows -- the empty-result
-        # failure mode documented in docs/06_troubleshooting.md.
+        # provider outside it returns zero rows (docs/bridge/stk_notes.md).
         try:
             self._backend.execute_connect(
                 f"SetAnalysisTimePeriod * {proto.quote(start)} "
@@ -292,21 +288,17 @@ class AcavScenarioBuilder:
     def _set_orbital_elements(self, path: str) -> None:
         """Assign the classical elements, then check they took.
 
-        Two facts from the first live STK 12.6 run, both of which cost a
-        wrong scenario:
+        Two STK 12.6 facts shape this:
 
         * the accepted argument order is ``<start> <stop> <step>``, not
           the ``<step> <start> <stop>`` the Connect reference implies;
         * **the angles are consumed as degrees**, even though
-          ``configure_units()`` successfully set the Angle preference to
-          radians. Sending ``radians(97.4) = 1.70027`` produced a 1.700
-          deg inclination -- a perfectly valid orbit, along whose ground
-          track all seven targets were then placed. Nothing errored.
+          ``configure_units()`` set the Angle preference to radians:
+          sending ``radians(97.4) = 1.70027`` gives a valid 1.7 deg
+          inclination orbit, and nothing errors.
 
-        Hence degrees first, and hence ``verify``: a candidate is only
-        accepted if the satellite afterwards really is on the specified
-        orbit. Ordering the candidates by what worked last time is an
-        optimisation; the measurement is what makes it correct.
+        Hence degrees first, and hence ``verify``: a candidate is accepted
+        only if the satellite afterwards really is on the specified orbit.
         """
         spec = self._spec
         orbit = spec.orbit
@@ -421,11 +413,10 @@ class AcavScenarioBuilder:
         half_angle_deg = spec.sensor.half_angle_deg
         self._report.sensor_cone_half_angle_deg = half_angle_deg
 
-        # Through the backend rather than a raw Connect command: the
-        # Connect `Define ... SimpleConic` form was rejected in both
-        # angle units on a live STK 12.6 install, and only a backend may
-        # reach the Object Model to try the typed path or to read the
-        # resulting cone angle back.
+        # Through the backend rather than a raw Connect command: STK 12.6
+        # rejects the Connect `Define ... SimpleConic` form in both angle
+        # units, and only a backend may reach the Object Model to try the
+        # typed path or read the cone angle back.
         try:
             self._report.sensor_pattern_method = self._backend.set_sensor_cone(
                 path, math.radians(half_angle_deg), math.radians(1.0))
@@ -446,15 +437,10 @@ class AcavScenarioBuilder:
 
         # Body-fixed pointing along +Z. AzEl(0, 90) in the sensor's own
         # frame is the +Z boresight; Fixed pointing means attitude
-        # determines where it looks, which is the entire point of the
-        # study.
-        # Degrees first. The first live run accepted the radians form
-        # -- which means it set an elevation of 1.5708 DEGREES, not 90,
-        # and pointed the sensor nearly along the sensor frame's
-        # horizontal. Nothing complained, and the boresight probe still
-        # passed because the cone was at STK's 45 deg default and saw
-        # nadir regardless. Two silent errors that happened to cancel in
-        # the one test looking at them.
+        # determines where it looks.
+        # Degrees first: STK also accepts the radians form, as an
+        # elevation of 1.5708 degrees, pointing the sensor nearly along
+        # its frame's horizontal without any error.
         pointing_candidates = [
             ("Point Fixed AzEl (degrees)",
              f"Point {path} Fixed AzEl 0.0 90.0 Rotate"),
@@ -475,13 +461,11 @@ class AcavScenarioBuilder:
     def _measure_units(self) -> None:
         """Measure how STK reports angles, and what unit it writes them in.
 
-        Both were assumed to be radians on the strength of
-        ``configure_units()`` succeeding. Live runs disproved both
-        halves independently: Connect commands consume degrees, and
-        "LLA State" reported degrees until Latitude and Longitude -- which
-        are their own unit dimensions -- were set as well. The two
-        directions are measured separately because neither predicts the
-        other.
+        ``configure_units()`` succeeding does not settle either: Connect
+        commands consume degrees, and "LLA State" reports degrees unless
+        Latitude and Longitude (their own unit dimensions) are set as well.
+        The two directions are measured separately because neither predicts
+        the other.
         """
         satellite = self._report.satellite_path
         # A spread of epochs: near the equator the two units are
@@ -549,19 +533,17 @@ class AcavScenarioBuilder:
         ok, actual_km = verify_placement(here, ahead, point,
                                          target.cross_track_km)
         side = side_of_track(here, ahead, point)
-        # A zero offset is genuinely on-track, and side_of_track says so
-        # with a 0. Folding that case into "right" would reject the one
-        # placement whose side is unambiguous -- the ground station is
-        # configured exactly this way.
+        # A zero offset is on-track, and side_of_track says so with a 0
+        # (the reference ground station is placed this way).
         if target.cross_track_km == 0.0:
             expected_side = 0
         else:
             expected_side = 1 if target.cross_track_km > 0 else -1
 
         if not ok or side != expected_side:
-            # A placement error yields a plausible scenario that silently
-            # tests something other than what was designed -- the worst
-            # possible outcome. Stop rather than continue.
+            # A placement error yields a plausible scenario that tests
+            # something other than what was designed. Stop rather than
+            # continue.
             self._report.errors.append(
                 f"target {target.id} was placed incorrectly: requested "
                 f"{target.cross_track_km:+.1f} km, got {actual_km:.1f} km on "
@@ -650,8 +632,8 @@ class AcavScenarioBuilder:
 
     def _apply_elevation_constraint(self, path: str,
                                     min_elevation_deg: float) -> None:
-        # Degrees first: measured behaviour of every other angle-bearing
-        # Connect command on this install.
+        # Degrees first, as every angle-bearing Connect command on STK 12.6
+        # consumes degrees.
         candidates = [
             ("SetConstraint ElevationAngle (degrees)",
              f"SetConstraint {path} ElevationAngle Min {min_elevation_deg!r}"),
@@ -673,10 +655,9 @@ class AcavScenarioBuilder:
 
         Applying it proves only that STK accepted the request, not that
         terrain data covers this region. ``verify_acav_scenario.py``
-        therefore computes access with the terrain mask, again with a
-        constant mask, and again with a control mask well above it:
-        identical results mean the terrain mask is not actually doing
-        anything, whatever was accepted here.
+        therefore computes access with the terrain mask and with no mask:
+        identical results mean the terrain mask is not doing anything,
+        whatever was accepted here.
         """
         try:
             self._report.terrain_mask_method = self._backend.set_az_el_mask(
@@ -699,23 +680,17 @@ class AcavScenarioBuilder:
         """Try each candidate Connect form; return the label that worked.
 
         Returns ``"none"`` and records a warning if all fail. Reporting
-        *which* form succeeded matters: it is the difference between the
-        paper describing what was configured and what was requested.
+        which form succeeded is what lets a report state what was
+        configured rather than what was requested.
 
-        Two things this learned from the first live run:
-
-        * **The rejection reason is recorded.** That run reported three
-          separate commands as having been tried and failed, with no
-          indication of why, which is a whole round trip to the Windows
-          machine to recover one error string. Every attempt's exception
-          text now lands in ``report.attempts``.
+        * **The rejection reason is recorded.** Every attempt's exception
+          text lands in ``report.attempts``.
         * **``verify`` closes the loop.** An ACK means STK parsed the
-          command. ``SetState Classical`` ACKed on that run and left the
-          satellite at 1.7 deg inclination instead of 97.4, because it
-          consumed degrees where radians were sent. When a caller can
-          cheaply measure whether the command had its intended effect,
-          it passes a predicate here and candidates keep being tried
-          until one actually works.
+          command, not that it had the intended effect (``SetState
+          Classical`` ACKs radians and produces a 1.7 deg inclination).
+          When a caller can cheaply measure the effect, it passes a
+          predicate here and candidates are tried until one actually
+          works.
         """
         reasons: List[str] = []
         for label, command in candidates:
