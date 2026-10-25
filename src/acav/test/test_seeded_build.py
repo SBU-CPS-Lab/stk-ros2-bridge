@@ -1,6 +1,6 @@
 """Building seeded scenarios one after another, and running E2 over them.
 
-E2 final runs, 2026-10-19:
+Running E2 over seeded scenarios exposed these cases:
 1. build_acav_scenario into an STK that already holds ACAV_SSS1 failed
    ("NewScenario ... Already exists"): every scenario, reference and
    seeded, is named ACAV_SSS1. The builder now closes an open scenario
@@ -219,7 +219,7 @@ def test_resume_refuses_seeded_records_from_other_code(tmp_path):
 
 
 # --- seeded scenario files from the workspace, not the installed package -----------
-# Live check at eb69251: through `ros2 run` the package lives under
+# Through `ros2 run` the package lives under
 # build\acav, where generated\acav_seed*.yaml does not exist, and
 # run-seeds failed before building anything.
 
@@ -294,7 +294,7 @@ def test_the_verb_takes_a_scenario_dir():
 
 
 # --- report finds the seeded scenarios in the workspace, not the package -------
-# E2 final, 91f36b9: the paired report through `ros2 run` looked for the
+# The paired report through `ros2 run` looked for the
 # seed files next to the installed package and refused every record
 # ("not among the known scenario files").
 

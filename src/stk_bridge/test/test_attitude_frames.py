@@ -1,6 +1,6 @@
 """Attitude frames, and attitude history left on a reused scenario.
 
-Both were found on the second live E6 run (2026-09-27):
+Both were found on a live E6 run:
 
 * The ACAV twin computes attitude in the inertial frame (ICRF position,
   velocity and target vectors), but the bridge read attitude back through

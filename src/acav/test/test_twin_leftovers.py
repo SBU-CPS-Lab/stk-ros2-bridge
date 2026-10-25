@@ -1,11 +1,9 @@
 """Before MATLAB starts: leftover twin processes are recorded, and a
 leftover ROS 2 server is waited out or refused.
 
-In the live session on d0bf796 an E1 run's twin could not create its
-ROS 2 node ("Server failed to start. Details: Transport stopped.",
-results\\LIVE_E6_d0bf796, the quaternion_order attempt). Its cause is not
-established. Before launching MATLAB (--twin-launch matlab-batch) the
-runner now records every running matlab.exe and libmwros2server.exe in
+An E1 run's twin can fail to create its ROS 2 node ("Server failed to
+start. Details: Transport stopped."); the cause is not established.
+Before launching MATLAB (--twin-launch matlab-batch) the runner records every running matlab.exe and libmwros2server.exe in
 summary.json (step twin_leftovers); if a libmwros2server.exe is still
 running it waits up to 60 s for it to end, then refuses the run with a
 clear message. A matlab.exe alone is recorded, not refused: it may be

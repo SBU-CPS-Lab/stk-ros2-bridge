@@ -11,8 +11,8 @@ Everything here is the production code -- ComBackend's own write,
 clock and access methods, the real dispatcher and the bridge node's own
 methods -- except the COM root, which records commands, and the data
 providers, which come from the COM-shaped fake. The point: none of these
-per-step calls may change ``ComBackend.revision``, or (B) would re-verify
-and (C) would drop its cache every step.
+per-step calls may change ``ComBackend.revision``, or the combined attitude/rate
+read would re-verify and orbit batching would drop its cache every step.
 """
 
 from types import SimpleNamespace

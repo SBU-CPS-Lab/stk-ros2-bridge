@@ -1,10 +1,9 @@
 """The twin-ack wait stops as soon as MATLAB has exited.
 
-The d97800c incident (results/_archive/incidents/E2_P10_seed1_d97800c):
-MATLAB exited with an error about 112 s after launch, and the runner
-went on waiting for an ack until its 252.6 s timeout. The bridge wait
-already stops when the bridge exits (3d143bc); the twin-ack wait now
-does the same with the automated twin's exit code, records why it
+If MATLAB exits with an error about 112 s after launch, the runner must
+not keep waiting for an ack until its 252.6 s timeout. Like the bridge
+wait, which stops when the bridge exits, the twin-ack wait stops
+with the automated twin's exit code with the automated twin's exit code, records why it
 stopped (summary.json "twin_ack_wait") and, when MATLAB exited, the exit
 code in summary.json "errors". The timeout is unchanged otherwise.
 """

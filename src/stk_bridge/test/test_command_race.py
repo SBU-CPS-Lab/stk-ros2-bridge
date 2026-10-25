@@ -1,6 +1,6 @@
 """The command/ack race, and what STK reports when it is lost.
 
-Found on the third live E6 run (2026-09-27). The twin publishes its
+Found on a live E6 run. The twin publishes its
 attitude command and its lockstep ack on two topics; ROS 2 does not order
 delivery across topics, so on ~7% of steps the ack released the barrier
 first and the bridge sensed the next step before the command had landed.

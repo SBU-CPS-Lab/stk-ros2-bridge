@@ -4,8 +4,7 @@ The twin steps only when the attitude, orbit and rate stamps it holds
 equal the latest ScenarioTime stamp (build_acav_twin.m, UnpackTelemetry).
 Publishing ScenarioTime before sensing left a window of a whole sensing
 time per cycle in which the twin held a new clock and old telemetry and
-could not step; at rtf 1.0 on 4b26de0, with 56 % of cycles overrunning,
-it answered only 31 % of the bridge's samples. The clock is now
+could not step; at rtf 1.0, with 56 % of cycles overrunning, it answered only 31 % of the bridge's samples. The clock is now
 published after sensing with the same ``now``, so a cycle's messages
 match as soon as they are out.
 

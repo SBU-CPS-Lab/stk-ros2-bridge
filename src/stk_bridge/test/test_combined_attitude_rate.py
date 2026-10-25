@@ -1,4 +1,4 @@
-"""(B) sensing.combine_attitude_rate: one segment query for attitude and rate.
+"""sensing.combine_attitude_rate: one segment query for attitude and rate.
 
 'Attitude Segment Quaternions' already carries the quaternion the rate
 read fetches. With the option on, the pipeline first proves, at an epoch

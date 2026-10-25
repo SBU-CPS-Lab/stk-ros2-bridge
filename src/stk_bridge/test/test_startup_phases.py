@@ -1,12 +1,11 @@
 """Where the bridge's startup time goes, recorded as it happens.
 
-P10 live session (3186642): a free-run run failed bridge_connected with
-"no BridgeStatus received at all" after the runner's 90 s, and bridge.log
-stopped inside startup convention validation. Over 40 earlier runs,
-launch to CONNECTED took 43.7-76.1 s, and the log had no phase
-durations: only timestamps from which the phases had to be rebuilt.
+A slow startup can make the runner give up with "no BridgeStatus received
+at all" while bridge.log stops inside convention validation. Launch to
+CONNECTED takes 43.7-76.1 s, so the log needs per-phase durations rather
+than timestamps from which the phases must be rebuilt.
 
-The bridge now times each startup phase -- connect, each step of
+The bridge times each startup phase -- connect, each step of
 scenario setup, each convention-validation check, sensing, interfaces --
 logs each one's duration, and writes them to startup_phases_file as
 they happen, so a run killed part-way through still says which phase it

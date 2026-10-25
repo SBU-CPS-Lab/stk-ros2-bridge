@@ -1,10 +1,9 @@
 """Which STK a run used, who started it, and what the runner does about it.
 
-P10 live session (3186642): build_acav_scenario started STK through COM
-(AgUiApplication.exe -Embedding, parent svchost) because none was
-running. E6 on it stepped at 95.7 ms against 60.0-61.1 ms on the P9 runs,
-and a free-run bridge's validation on it ran past 90 s. Final runs use an
-STK the operator started, by protocol, so:
+An STK started through COM (AgUiApplication.exe -Embedding, parent
+svchost) steps markedly slower (95.7 ms against 60.0-61.1 ms) than one the
+operator started, and a free-run bridge's validation on it ran past 90 s.
+Final runs use an STK the operator started, so:
 
   * build/verify attach only; --start-stk starts one, with a warning;
   * every COM run records stk_process (pid, start time, command line,

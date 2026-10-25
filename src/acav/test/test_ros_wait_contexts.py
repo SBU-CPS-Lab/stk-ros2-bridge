@@ -1,8 +1,7 @@
 """The runner's ROS waits use their own rclpy context, and keep their error.
 
-P10 live session (3186642): the first E6 attempt failed at idle_check
-with "failed to shutdown: rcl_shutdown already called on the given
-context". The four waits (idle check, bridge connected, twin ack, twin
+With rclpy's default context a run can fail at idle_check with "failed
+to shutdown: rcl_shutdown already called on the given context". The four waits (idle check, bridge connected, twin ack, twin
 identity) all used rclpy's default context: rclpy.init() on it installs
 SIGINT/SIGTERM handlers that shut it down, and each wait's
 ``finally: rclpy.shutdown()`` then raised on the already shut-down

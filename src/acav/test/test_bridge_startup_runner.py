@@ -1,11 +1,8 @@
 """The runner's bridge-connect wait: bounded, fail-fast, and recorded.
 
-P10 live session (3186642): a free-run run failed bridge_connected with
-"no BridgeStatus received at all" after 90 s while the bridge was still
-inside convention validation. Over 40 earlier runs launch to CONNECTED
-took 43.7-76.1 s, so 90 s left 14 s of margin over the slowest.
-
-Now:
+A free-run run can fail bridge_connected with "no BridgeStatus received
+at all" while the bridge is still inside convention validation. Launch to
+CONNECTED took 43.7-76.1 s over 40 runs, so:
   * the bound is 180 s (about 2.4x the slowest of those 40);
   * the wait ends at once if the bridge process exits, with its code;
   * the bridge writes bridge_startup_phases.json into the run's logs

@@ -16,8 +16,8 @@ writes to or reads from STK:
 
 Off by default; with it off, every message published is identical to
 the previous implementation's: the reference is the fixture
-fixtures/publisher_messages.json, written from commit d065fa4
-(before any of this existed) by running this file with --write.
+fixtures/publisher_messages.json, written before the
+injection existed by running this file with --write.
 
 ROS is faked: message classes record attributes, builtin_interfaces
 Time is a plain class, so the real conversions run.

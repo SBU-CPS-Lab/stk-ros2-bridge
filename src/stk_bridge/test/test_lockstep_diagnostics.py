@@ -49,7 +49,7 @@ def _command(stamp_s):
 class TestCommandTimeScreen:
     def test_a_wall_clock_stamp_is_rejected_loudly(self, caplog):
         node = _node()
-        wall_clock = 1790420797.1   # the first live run's actual stamps
+        wall_clock = 1790420797.1   # stamps from a live run
         with caplog.at_level(logging.ERROR):
             kept = node._screen_command_times([_command(wall_clock)])
         assert kept == []

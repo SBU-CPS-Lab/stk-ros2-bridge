@@ -1,13 +1,13 @@
 """A time_offset fail-stop is "confirmed" only on the run's own evidence.
 
 A slow MATLAB start also ends the twin-ack wait in a timeout
-(E5_P10_free2 needed 152.2 s to ack, 100 s inside the 252.6 s bound).
+(one run needed 152.2 s to ack, 100 s inside the 252.6 s bound).
 So the E1 report labels a time_offset fail-stop "confirmed" only when
 what the run already recorded shows the twin was alive and never became
 ready, and the control arm acked within the bound:
 
   * summary.json twin_ack_wait: stopped "timeout", no exit code (MATLAB
-    was alive at the timeout; recorded since 3be3086);
+    was alive at the timeout);
   * summary.json matlab_session.running_at set (the simulation started);
   * the bridge_connected step passed;
   * topics_summary.json: 0 /acav/twin_status and 0 /stk/cmd/attitude

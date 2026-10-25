@@ -1,11 +1,11 @@
-"""(C) sensing.orbit_batch_samples: lockstep orbit reads from audited blocks.
+"""sensing.orbit_batch_samples: lockstep orbit reads from audited blocks.
 
 A block is two STK interval queries (Cartesian Position and Velocity) over
 the next N lockstep epochs, read with core/orbit_block.py unchanged. It is
 used only if its UTCG grid, row counts and values validate and both of
 its ends agree with instantaneous STK reads within the strict tolerances
 (1e-6 m, 1e-9 m/s by default). Otherwise those epochs are read
-instantaneously, as without (C). Rows are cached per object and frame,
+instantaneously, as without batching. Rows are cached per object and frame,
 for one backend revision only; the terminal epoch is never batched.
 """
 

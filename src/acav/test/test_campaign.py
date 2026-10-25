@@ -585,7 +585,7 @@ class TestReportCliFigures:
 
     def test_write_figures_survives_a_missing_matplotlib(self, tmp_path,
                                                           monkeypatch):
-        """A colleague running `report` for the JSON alone must not lose
+        """Someone running `report` for the JSON alone must not lose
         that because a plotting library is not installed."""
         import builtins
 

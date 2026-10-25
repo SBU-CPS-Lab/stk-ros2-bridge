@@ -1,8 +1,7 @@
 """Honest outcomes for a run that left no record.
 
-Live session on d0bf796 (results\\LIVE_E6_d0bf796) showed three ways an
-E1 guard-on run can end without a record, only one of which is the
-guard detecting the mismatch:
+An E1 guard-on run can end without a record in several ways, only one of
+which is the guard detecting the mismatch:
 
   interrupted              KeyboardInterrupt in summary.json errors: no
                            result; never a pass, never a fail-stop
@@ -15,8 +14,8 @@ guard detecting the mismatch:
                            the reason printed
   fail_stop                anything else that ended by itself
 
-The fixtures are minimal copies of fields from the three real
-summary.json files (sources named on each); results are not read here.
+The fixtures are minimal copies of fields from real summary.json files;
+results are not read here.
 """
 
 import json

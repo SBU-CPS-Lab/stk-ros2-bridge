@@ -1,6 +1,6 @@
 """How a run ends, and what the scheduler says when the twin's clock is wrong.
 
-Both were found on the first live E6 run (2026-09-26). The twin stamped
+Both were found on a live run. The twin stamped
 TwinStatus with wall-clock time, so no sample ever fell in a hold window
 and every target failed to finalise; the scheduler then waited for a
 grace period counted in SIMULATION seconds past the window's end -- a

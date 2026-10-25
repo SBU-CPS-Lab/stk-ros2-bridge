@@ -1,8 +1,7 @@
 """A record must cover exactly its scenario's targets to be used.
 
-The E3 free-run run at rtf 1.0 on 72be372 was written without T4 (the
-scheduler dropped unscored targets until 168cf19). Such a record still
-reads, and its signature is self-consistent, but every count in it is
+A free-run record at rtf 1.0 was once written without T4 (the scheduler
+dropped unscored targets). Such a record still reads, and its signature is self-consistent, but every count in it is
 short: report would score it 3/4 instead of 3/5. The expected target
 set is the scenario's own -- the scenario the record names by
 scenario_sha256 -- never a hard-coded list.

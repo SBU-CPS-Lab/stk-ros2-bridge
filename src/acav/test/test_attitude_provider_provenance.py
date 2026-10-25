@@ -1,9 +1,9 @@
 """The record's attitude provider is what the bridge reported, not what was asked.
 
 ``Provenance.attitude_provider`` used to be copied from the scheduler's
-own launch parameter, so E1's treatment label proved nothing about what
-the bridge read through (the 2026-10-08 E1 pair needed its bridge log
-checked by hand). It is now derived from ``BridgeStatus``, the same way
+own launch parameter, so the E1 treatment label proved nothing about what
+the bridge read through (the bridge log had to be checked by hand). It is
+now derived from ``BridgeStatus``, the same way
 the backend type is.
 
 ``SchedulerNode`` is built with ``__new__``; nothing here touches rclpy.

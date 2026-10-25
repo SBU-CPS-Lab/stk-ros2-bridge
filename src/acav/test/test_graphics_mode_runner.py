@@ -1,8 +1,7 @@
 """Every run requires a graphics mode, checked before the twin prompt.
 
 run_acav_run.py --graphics-mode {off,on}, default off. "off" is no 2D
-window, no 3D window and STK minimised -- the condition measured on
-2026-10-15; anything else is "on" (stk_bridge/core/graphics_state.py).
+window, no 3D window and STK minimised -- the condition measured; anything else is "on" (stk_bridge/core/graphics_state.py).
 Right after bridge_connected the runner reads the bridge's startup
 sample; a state that does not match fails the stk_graphics step before
 any handoff time is spent. After the scheduler exits it reads the whole

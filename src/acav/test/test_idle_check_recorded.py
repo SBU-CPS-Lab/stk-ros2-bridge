@@ -1,9 +1,8 @@
 """An idle-check refusal is a recorded, failed step -- not just a raise.
 
-On 2026-10-15 (E6-nc3-stale-model) the check refused a run because the
-previous Simulink twin was still publishing, but run.log ended after the
-sensing-mode line and summary.json had no steps: the reason was only in
-the console. It is now logged as `idle_check: <reason>` at ERROR and
+The check can refuse a run because the previous Simulink twin is still
+publishing. The reason must not live only in the console, with run.log
+ending after the sensing-mode line and summary.json holding no steps. It is logged as `idle_check: <reason>` at ERROR and
 recorded as a failed step, and the run returns 1 without launching.
 """
 

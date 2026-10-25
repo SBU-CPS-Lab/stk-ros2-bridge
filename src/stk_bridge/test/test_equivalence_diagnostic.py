@@ -3,8 +3,8 @@
 The diagnostic must OBSERVE only: with it off, the queries and the
 published samples are exactly what they were; with it on, the published
 samples are still the old path's. What it adds is a per-step comparison
-of (B) the 'Attitude Segment Quaternions' quaternion against 'Attitude
-Quaternions', and (C) an interval orbit block against the instantaneous
+of the 'Attitude Segment Quaternions' quaternion against 'Attitude
+Quaternions', and an interval orbit block against the instantaneous
 orbit read, written next to the run logs.
 
 The fake backend below answers like the COM backend does: UTCG text in
@@ -267,7 +267,7 @@ class TestObservesOnly:
 
 
 # ---------------------------------------------------------------------------
-# (B) attitude: segment quaternion versus Attitude Quaternions
+# attitude: segment quaternion versus Attitude Quaternions
 # ---------------------------------------------------------------------------
 
 class TestAttitudeComparison:
@@ -327,7 +327,7 @@ class TestAttitudeComparison:
 
 
 # ---------------------------------------------------------------------------
-# (C) orbit: interval block versus instantaneous reads
+# orbit: interval block versus instantaneous reads
 # ---------------------------------------------------------------------------
 
 class TestBlockGrid:

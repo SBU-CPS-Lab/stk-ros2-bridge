@@ -4,7 +4,7 @@ Drives the real StkBridgeNode._lockstep_iteration with the real TimeSync
 and RateGroupScheduler for 250 steps and records, per step, every stage
 the iteration calls with the epoch it passes, plus the rate groups'
 final state. The trace is compared with a golden file captured from the
-code BEFORE the free-run pacing change (commit 48813ac): any difference
+code before the free-run pacing change: any difference
 in step sequence, epochs, rate-group marking or sleeping fails.
 
 Regenerate the golden file only for a deliberate lockstep change:

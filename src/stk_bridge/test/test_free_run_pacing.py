@@ -3,8 +3,7 @@
 The rate groups mark their run with the time AFTER sensing
 (_run_rate_groups -> RateGroupScheduler.run_due -> mark_run), and the
 free-run loop slept until that mark plus the fast period, so every
-cycle cost its work plus ~0.1 s (E3 pilot on 48813ac: 239 ms cycles for
-~134 ms of work). Cycles now run on a fixed-rate schedule anchored at
+cycle cost its work plus ~0.1 s (239 ms cycles for ~134 ms of work). Cycles now run on a fixed-rate schedule anchored at
 the first cycle's start: period = max(work, period); an overrunning
 cycle is followed immediately by the next one, rebased to now -- no
 catch-up burst and no negative sleep -- and is counted. The rate groups

@@ -1,6 +1,6 @@
 """ComputeAccess waits until the attitude covers the requested stop time.
 
-Found on the E3 free-run run at rtf 1.0 on 72be372: T2's access was
+Found on a free-run run at rtf 1.0: T2's access was
 computed when the newest attitude written for the satellite was stamped
 109.959 s, before any sample at or after its 110.0 s image epoch, and
 STK reported a near-nadir attitude there (no access, with a 0.0018 deg

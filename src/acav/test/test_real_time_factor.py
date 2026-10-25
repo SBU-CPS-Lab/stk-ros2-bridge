@@ -8,8 +8,8 @@
   it is lockstep (simulation time there advances by steps, not by the
   wall clock) or when its bridge.log shows ``rtf=1.000``; otherwise it is
   refused as unknown.
-* Free-run turns the combined attitude/rate read (B) off and orbit
-  batching (C) to 1 in the per-run bridge config, so summary.json says
+* Free-run turns the combined attitude/rate read off and orbit
+  batching to 1 in the per-run bridge config, so summary.json says
   "separate" and 1 -- the bridge never ran either in free-run.
 * A free-run bridge writes its pacing summary to the file the per-run
   config names; the runner copies it into summary.json as

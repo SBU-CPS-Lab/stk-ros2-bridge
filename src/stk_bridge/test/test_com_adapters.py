@@ -456,8 +456,8 @@ def test_scenario_stop_time_without_a_scenario_raises():
 
 
 def test_revision_changes_on_structural_events_not_on_samples():
-    """(B) re-verifies, and (C) drops cached orbit rows, when the revision
-    changes; an ordinary attitude sample must not change it."""
+    """The combined read re-verifies and orbit batching drops cached rows
+    when the revision changes; an ordinary attitude sample must not change it."""
     backend = ComBackend()
     backend._execute = Mock()
     start = backend.revision

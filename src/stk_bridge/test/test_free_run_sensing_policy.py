@@ -1,7 +1,7 @@
-"""Free-run: (B) is explicitly off, and the pacing summary is written.
+"""Free-run: the combined read is off, and the pacing summary is written.
 
-(B) verifies only at an epoch where the bridge wrote an inertial sample,
-which a free-run sense epoch never is, so in the E3 pilot it stayed
+The combined read verifies only at an epoch where the bridge wrote an
+inertial sample, which a free-run sense epoch never is, so it stayed
 "pending" for the whole run. A free-run bridge now turns it off at
 startup with one INFO line, even if its config enables it (the runner
 already writes it off); lockstep is untouched. The free-run pacing

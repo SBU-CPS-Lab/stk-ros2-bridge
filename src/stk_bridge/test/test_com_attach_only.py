@@ -1,17 +1,16 @@
 """The COM backend attaches to the operator's STK; it starts one only
 when told to.
 
-P10 live session (3186642): build_acav_scenario found no STK and
-silently started one through COM ("no running STK found; starting a
-new one"; AgUiApplication.exe -Embedding, parent svchost). E6 on that
-STK stepped at 95.7 ms (sense 57.3 ms) against 60.0-61.1 ms on the P9
-runs, and a free-run bridge's convention validation on it ran past the
-runner's 90 s. One run, so a correlation, not a measured cause; final
-runs use an STK the operator started, by protocol.
+An STK started silently through COM ("no running STK found; starting a
+new one"; AgUiApplication.exe -Embedding, parent svchost) stepped at
+95.7 ms (sense 57.3 ms) against 60.0-61.1 ms on an operator-started one,
+and a free-run bridge's convention validation on it ran past 90 s. One
+observation, so a correlation, not a measured cause; final runs use an
+STK the operator started.
 
-Now attaching is the only default: with no STK to attach to, connect
+Attaching is the only default: with no STK to attach to, connect
 fails and says what to do. backend.com.start_stk: true (build and
-verify scripts: --start-stk) restores the old fallback, with a warning.
+verify scripts: --start-stk) starts one instead, with a warning.
 """
 
 import logging

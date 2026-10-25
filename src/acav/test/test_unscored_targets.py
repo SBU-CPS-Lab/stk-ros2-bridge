@@ -1,7 +1,6 @@
 """Every scenario target stays in the run record, scored or not.
 
-Found on the E3 free-run run at rtf 1.0 on 72be372 (2026-10-15): the
-twin published nothing between t = 247.734 s and 252.219 s, so T4's hold
+In a free-run run at rtf 1.0 the twin published nothing between t = 247.734 s and 252.219 s, so T4's hold
 window [248, 250] s held no telemetry. The scheduler then dropped T4
 from result.targets -- and so from the determinism signature and from
 every count -- while the record stayed reportable, so a report would

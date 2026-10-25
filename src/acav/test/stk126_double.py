@@ -1,8 +1,8 @@
 """A MockBackend that reproduces STK 12.6's *measured* misbehaviour.
 
-Everything here was observed on the live Windows install on
-2026-09-09, and every one of them produced a scenario that built
-cleanly and measured the wrong thing:
+Everything here was observed on a Windows STK 12.6 install, and every
+one of them produced a scenario that built cleanly and measured the wrong
+thing:
 
 * ``SetPosition ... Geodetic`` consumes **degrees**, although
   ``configure_units()`` set the Angle preference to radians and STK
@@ -92,7 +92,7 @@ class Stk126Double(MockBackend):
         """Report LLA in whichever unit this install is pretending to use.
 
         The read direction is a separate question from the write
-        direction -- the live run showed Connect consuming degrees while
+        direction -- a live run showed Connect consuming degrees while
         the Angle *preference* was radians -- so it gets its own knob
         rather than being derived from geodetic_unit.
         """
@@ -113,7 +113,7 @@ class Stk126Double(MockBackend):
         Not a geometry model -- just enough for a mask comparison to
         mean something. Without it a test of "does the mask change
         access" is answered by a constant, which is precisely the
-        non-experiment the live run's terrain verdict rested on.
+        non-experiment an earlier terrain verdict rested on.
         """
         facility = any(self._objects.get(p) is not None
                        and self._objects[p].object_type == "Facility"

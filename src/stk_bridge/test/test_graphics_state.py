@@ -1,8 +1,8 @@
 """The bridge measures STK's graphics state and writes it for the runner.
 
-STK's 2D/3D Graphics windows redraw on every step: on 2026-10-15 closing
-them and minimising STK cut an E6 step from 120.3 to 70.2 ms with an
-identical signature. The state is read through documented, read-only
+STK's 2D/3D Graphics windows redraw on every step: closing them and
+minimising STK cut an E6 step from 120.3 to 70.2 ms with an identical
+signature. The state is read through documented, read-only
 Object Model calls (IAgUiApplication.Windows / WindowState / Visible,
 IAgUiWindow.GetServiceByType) at startup, every SUMMARY_EVERY_STEPS steps
 and at the terminal epoch, and written to the file named by the bridge

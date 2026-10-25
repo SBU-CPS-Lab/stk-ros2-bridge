@@ -1,7 +1,6 @@
 """E4 (controller gain sweep) is gone from the code; old records still load.
 
-E4 was dropped from the study (docs/C1_case_study_spec.md section 9). Its
-campaign builder, its aggregation, its figure and its CLI choice are
+E4 is not part of the study. Its campaign builder, its aggregation, its figure and its CLI choice are
 removed. Records already written with the E4 or E5 label must still be
 readable by `report` (backward compatible): the label is a string in the
 record, never checked against the current experiment list. E5 stays a

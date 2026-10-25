@@ -1,7 +1,7 @@
-"""Regression tests for the STK 12.6 behaviours the first live run found.
+"""Regression tests for STK 12.6 behaviours seen on a live install.
 
-Every test here corresponds to a specific way the 2026-09-09 live run
-produced a scenario that built cleanly and measured the wrong thing.
+Every test here corresponds to a specific way a live run produced a
+scenario that built cleanly and measured the wrong thing.
 They run against ``Stk126Double``, which reproduces those behaviours
 exactly, so the compensations cannot silently rot.
 
@@ -207,7 +207,7 @@ class TestVerifierWritesInTheMeasuredUnit:
 
 
 class TestRejectedCommandsAreDiagnosable:
-    """The live run reported three commands as 'none' with no reason."""
+    """A live run reported three commands as 'none' with no reason."""
 
     def test_the_reason_for_each_rejection_is_recorded(self, spec):
         _, report = build(spec)
@@ -238,7 +238,7 @@ class TestVerifierDoesNotOverclaim:
 
     def test_terrain_check_skips_when_the_mask_cannot_be_applied(
             self, spec, monkeypatch):
-        """The first live run compared the unmasked baseline against
+        """A live run compared the unmasked baseline against
         itself three times and reported a verdict about terrain."""
         backend, report = build(spec)
         treat_as_live(monkeypatch)
@@ -297,7 +297,7 @@ class TestVerifierDoesNotOverclaim:
     def test_a_constant_mask_is_refused_rather_than_attempted(self, spec):
         """STK has no constant-elevation mask: the type enum offers only
         None, File and TerrainData. An earlier verifier tried to use one
-        as its experimental control, failed on every live run, and then
+        as its experimental control, failed on every run, and then
         reported a terrain verdict from three identical numbers."""
         backend, _ = build(spec, reject_azelmask=False)
         with pytest.raises(Exception, match="AgEAzElMaskType|unknown mask"):

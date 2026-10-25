@@ -3,7 +3,7 @@
 acav.coupling_analysis reads a run's record and its <run>.logs folder
 (the topic captures cmd.txt / attitude.txt / twin_status.txt /
 status.txt, bridge.log and summary.json) -- no STK, no ROS -- and
-computes the quantities the E3 pilot analysis (P1) used: effective
+computes the quantities the E3 analysis uses: effective
 control rate, command-gap distribution, sample age at each image epoch,
 n > 1 sub-step count and max n, command-stamp offset, write lag, COM
 round-trip stalls and the STK read-back deviation beyond the newest

@@ -1,10 +1,10 @@
-"""A run can no longer hang after the scheduler exits (P9e).
+"""A run cannot hang after the scheduler exits.
 
-E6 seed1 of the P9b campaign (9fed085) stalled 11.5 min between
-``scheduler_exit`` and ``stk_graphics_end``: the runner's log line went
-to run.log and then blocked writing to the console, where a QuickEdit
-selection had paused output, until a keystroke; meanwhile the bridge,
-never stopped, timed out at step 7200. Three changes:
+A run once stalled 11.5 min between ``scheduler_exit`` and
+``stk_graphics_end``: the runner's log line went to run.log and then
+blocked writing to the console, where a QuickEdit selection had paused
+output, until a keystroke; meanwhile the bridge, never stopped, timed out
+at step 7200. Three safeguards:
 
 - console output goes through a background thread, so a paused console
   never blocks the runner (acav.console);

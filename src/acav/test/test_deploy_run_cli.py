@@ -122,7 +122,7 @@ class TestArgvBuilding:
 class TestPerRunBridgeConfig:
     """``--attitude-provider`` must reach the bridge, not only the record.
 
-    Until 2026-10 it reached only the scheduler: the record said
+    It once reached only the scheduler: the record said
     "treatment" whatever the bridge read through, and E1's treatment ran
     only because a hand-made YAML was passed alongside it.
     """
