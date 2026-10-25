@@ -80,7 +80,7 @@ otherwise parses braces as a script block). The continuation backtick
 must be the last character on its line. `--twin-launch matlab-batch`
 starts and stops MATLAB per run; manual mode prompts you instead.
 
-**Absolute output folders.** Every command below sets an absolute folder per experiment (`$outE1`, ... from `Join-Path (Get-Location)`) and passes that. MATLAB runs from `src\stk_matlab`, so a relative folder handed to it pointed somewhere else: in the live session on d0bf796 MATLAB could not write `simulink_diagnostics.txt` and `matlab.log` was never made. Since 6afe951 the runner makes every path it gives MATLAB absolute anyway; the absolute folders keep every other tool independent of the current directory too. Use one folder per experiment: E6 and E1 records in one folder cannot be reported separately.
+**Absolute output folders.** Every command below sets an absolute folder per experiment (`$outE1`, ... from `Join-Path (Get-Location)`) and passes that. MATLAB runs from `src\stk_matlab`, so a relative folder handed to it points somewhere else; the runner makes every path it gives MATLAB absolute, and absolute folders keep every other tool independent of the current directory too. Use one folder per experiment: E6 and E1 records in one folder cannot be reported separately.
 
 How to check any finished run (two commands):
 

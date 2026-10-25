@@ -3,7 +3,7 @@
 The MATLAB/Simulink digital twin the bridge drives, and the Python
 reference that pins its semantics. Sections 1-3 are the design;
 sections 4-6 describe how the twin runs in the loop today; section 7
-keeps the design decisions that came out of live bring-up.
+keeps the design decisions.
 
 ## 1. Why there are two implementations
 

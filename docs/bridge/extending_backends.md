@@ -81,9 +81,9 @@ trusted.
    than being more forgiving than production. A backend that is kinder
    than real STK will pass tests that then fail against the real thing.
 
-## Contracts added since bring-up
+## Further contracts
 
-Three parts of `StkBackend` that later features depend on:
+Three parts of `StkBackend` that other features depend on:
 
 * `revision` (`backends/base.py`): a counter that changes on every
   structural change (scenario or object lifecycle, propagator changes,

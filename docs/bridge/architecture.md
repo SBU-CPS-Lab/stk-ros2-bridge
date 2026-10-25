@@ -4,7 +4,8 @@ How the framework is built today: what each part does, how a run moves
 through it in each execution mode, and how a result is tied back to the
 code, configuration and scenario that produced it. Every claim names
 the file (and function) it describes, so it can be checked against the
-code. History appears only where it explains a design decision.
+code. Design rationale is collected in
+[design decisions](design_decisions.md).
 
 ## 1. What the framework is
 

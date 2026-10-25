@@ -1,10 +1,10 @@
-# Troubleshooting
+# STK notes and troubleshooting
 
 Two parts. **Part 1** covers the case-study runs: what a failed step in
-`<run>.logs/summary.json` means and what to do. **Part 2** lists the
-STK 12.6 behaviours found while bringing the bridge up against a real
-install; each fix is now in `core/`, and they are listed in case
-another install surfaces something similar.
+`<run>.logs/summary.json` means and what to do. **Part 2** lists
+STK 12.6 behaviours the bridge compensates for; each compensation is in
+`core/`, and they are listed in case another install surfaces something
+similar.
 
 # Part 1: case-study runs
 
@@ -123,7 +123,7 @@ graphics mode, twin launch mode, how STK was started, scenario, or that
 holds a diagnostic run; the message names each group and its runs. Move
 each group to its own directory ([experiment harness](../acav/experiment_harness.md)).
 
-# Part 2: STK 12.6 findings from bring-up
+# Part 2: STK 12.6 behaviours
 
 ## "Data provider ... returned NO DATA (0 columns, 0 rows)"
 
