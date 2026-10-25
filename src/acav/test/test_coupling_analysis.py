@@ -205,7 +205,7 @@ class TestFreeRun:
 
 
 class TestTwinLoop:
-    """How much of the bridge's output the twin used (P5b). The twin's
+    """How much of the bridge's output the twin used. The twin's
     ready calls are its free-run calls with matched telemetry stamps
     (summary.json twin_substeps.samples); every fresh call publishes one
     command, so the rest are holds (n = 0). Free-run time is wall time

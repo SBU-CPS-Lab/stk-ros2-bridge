@@ -2,8 +2,7 @@
 
 These tests are unusual: they verify the mock is BAD in the same ways
 real STK is bad. A mock that is kinder than production defeats its
-purpose -- see mock_backend.py's module docstring, and the Phase 3/4
-history where an overly forgiving mock let real bugs through.
+purpose -- see mock_backend.py's module docstring, and the reason an overly forgiving mock lets real bugs through.
 """
 
 import math
@@ -60,7 +59,7 @@ class TestGroupedProviderGuard:
 
 
 class TestRealtimePropagatorEphemerisCliff:
-    """Regression test for the Phase 3 bring-up failure: switching to
+    """Regression test for a bring-up failure: switching to
     RealTime DISCARDS analytic ephemeris, so a query before any sample
     is injected returns zero rows, not extrapolated Kepler state."""
 

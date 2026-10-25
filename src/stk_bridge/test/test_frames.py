@@ -1,6 +1,6 @@
 """Unit tests for core/frames.py.
 
-Includes regression tests for the J2000 issue found during Phase 3
+Includes regression tests for the J2000 issue found during
 bring-up: STK 12.6 has no "J2000" Cartesian Position group member.
 """
 

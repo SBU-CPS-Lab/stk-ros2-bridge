@@ -23,7 +23,7 @@ setup(
     ],
     install_requires=["setuptools"],
     # matplotlib is deliberately NOT a hard dependency: it is needed only
-    # to render C6's figures, on whatever machine does the analysis --
+    # to render the report figures, on whatever machine does the analysis --
     # not on the deploy machine running acav_scheduler against live STK,
     # which should not need to pull in a plotting stack it never uses.
     # `run_acav_campaign report` imports it lazily and degrades to

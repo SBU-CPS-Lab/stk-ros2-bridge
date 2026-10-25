@@ -13,7 +13,7 @@
 # C:\Program Files\AGI\STK 12\bin\AgPythonAPI\agi.stk12-12.6.0-py3-none-any.whl)
 # and must be pip-installed from that local path, not from PyPI:
 #   pip install "C:\Program Files\AGI\STK 12\bin\AgPythonAPI\agi.stk12-12.6.0-py3-none-any.whl"
-# scripts/check_environment.py (Phase 2) verifies this install and its
+# scripts/check_environment.py verifies this install and its
 # version at runtime.
 
 pywin32>=306          # COM backend: win32com.client, pythoncom, win32api

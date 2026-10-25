@@ -55,7 +55,7 @@ def build_parser(description: str) -> argparse.ArgumentParser:
                              "acav_scenario.yaml shipped with this package; "
                              "--config is the older name)")
     parser.add_argument("--json", default=None, metavar="PATH",
-                        help="also write the report as JSON, for C6")
+                        help="also write the report as JSON, for the analysis step")
     parser.add_argument("--start-stk", action="store_true",
                         help="com backend: start STK Desktop if none is "
                              "running (default: attach to the one you "

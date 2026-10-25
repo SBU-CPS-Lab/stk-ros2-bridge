@@ -2,7 +2,7 @@
 
 Not a ROS test (no rclpy dependency) -- it drives core/ directly the way
 nodes/bridge_node.py's step loop does, minus the ROS publish/subscribe
-layer. This is the same scenario manually exercised during Phase 4/5
+layer. This is the same scenario manually exercised during
 bring-up, captured as an automated regression test.
 """
 

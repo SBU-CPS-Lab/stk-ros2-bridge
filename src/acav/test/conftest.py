@@ -1,13 +1,13 @@
 """Pytest configuration for the acav package.
 
 Makes the package importable when running plain `pytest` from a source
-checkout, without requiring a colcon build first -- the C1 contract
+checkout, without requiring a colcon build first -- the spec contract
 modules (spec, slew_model, metrics) have no ROS dependency by design,
 so the fast inner loop should not need a sourced workspace.
 
-C2 adds a dependency on `stk_bridge` (declared in package.xml), which
+The scenario builder depends on `stk_bridge` (declared in package.xml), which
 lives in the sibling source directory rather than in this package. It
-is put on the path here for the same reason: the C2 builder and
+is put on the path here for the same reason: the scenario builder and
 verifier are exercised against the mock backend, which needs no ROS
 and no STK, so those tests must stay runnable in the fast loop too.
 """

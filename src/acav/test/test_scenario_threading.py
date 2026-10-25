@@ -1,4 +1,4 @@
-"""Generated scenarios threaded through runs and reports (P10c).
+"""Generated scenarios threaded through runs and reports.
 
 - Known scenario files: the reference, the generated files committed
   under config/scenarios/generated (each equal to what the generator

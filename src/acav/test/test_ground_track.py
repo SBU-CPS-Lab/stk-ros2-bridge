@@ -1,7 +1,7 @@
 """Tests for the ground-track geodesy used to place ACAV targets.
 
 These are offline tests of pure geometry, but they are not cosmetic.
-Target placement is the one part of C2 whose failure mode is a scenario
+Target placement is the one part of the scenario build whose failure mode is a scenario
 that builds cleanly, runs cleanly, and measures the wrong thing: a
 target on the wrong side of the ground track is still a valid target,
 STK still computes access to it, and every downstream number is

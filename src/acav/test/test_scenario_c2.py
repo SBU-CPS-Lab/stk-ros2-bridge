@@ -1,4 +1,4 @@
-"""C2 end-to-end tests: build the ACAV scenario, then verify it.
+"""End-to-end scenario tests: build the ACAV scenario, then verify it.
 
 Run against the mock backend, which models no STK geometry at all. That
 limits what these tests can assert -- and the limit is the point. They
@@ -7,7 +7,7 @@ check two things:
 1. the *plumbing* works end to end (paths, epochs, placement
    arithmetic, report structure, CLI exit codes);
 2. the guards are **load-bearing**, by breaking the scenario in each of
-   the specific ways C2 is meant to catch and asserting that the
+   the specific ways the builder is meant to catch and asserting that the
    builder refuses to continue or the verifier reports FAIL.
 
 The second is the part worth having. A verifier that passes a correct
@@ -367,7 +367,7 @@ class TestCommandLine:
 
 
 def test_footprint_assumption_still_holds(spec):
-    """Sanity anchor for the tolerances used across C2.
+    """Sanity anchor for the tolerances used across the scenario build.
 
     The 1 km placement tolerance and the probe ladder in the verifier
     are only defensible while the footprint is tens of km. If the sensor

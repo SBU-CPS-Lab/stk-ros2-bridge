@@ -1,4 +1,4 @@
-"""Tests for the C5/C6 record schema.
+"""Tests for the run-record schema.
 
 The properties asserted here are the ones that decide whether a number
 may be published: that a mock-backend run cannot be mistaken for a real
@@ -106,7 +106,7 @@ class TestRoundTrip:
 
 class TestReportability:
     def test_the_mock_backend_is_not_reportable(self):
-        """C1 section 8: no number the mock produced may appear in the
+        """Case study section 8: no number the mock produced may appear in the
         paper. The mock is an in-process Python object with no STK in
         it, so its numbers are not measurements of anything."""
         assert not _record(backend="mock").reportable

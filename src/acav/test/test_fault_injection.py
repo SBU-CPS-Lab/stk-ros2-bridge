@@ -160,7 +160,7 @@ class TestFaultKinds:
         assert not fault.saturates_at(10.0)
 
     def test_saturation_is_the_default_because_e5_specifies_it(self):
-        """C1 section 9: "inject wheel saturation ... Stateflow -> SAFE"."""
+        """Case study section 9: "inject wheel saturation ... Stateflow -> SAFE"."""
         assert WheelFault(axis=0, at_s=1.0).kind == "saturation"
 
     def test_an_unknown_kind_is_refused(self):

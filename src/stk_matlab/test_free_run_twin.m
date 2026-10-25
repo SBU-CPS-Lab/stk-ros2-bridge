@@ -82,7 +82,7 @@ function test_free_run_twin()
         'the reference must differ from held geometry, or this test proves nothing');
     assert(stats.events == 2 && stats.max_n == 2, 'n > 1 statistics');
 
-    % -- what happened between publishes (TwinStatus, P10e) ---------------
+    % -- what happened between publishes (TwinStatus) ---------------
     % saturation_events counts rising edges of the saturated flag at every
     % step, sub-steps included; the maximum error covers every step since
     % the previous published sample.

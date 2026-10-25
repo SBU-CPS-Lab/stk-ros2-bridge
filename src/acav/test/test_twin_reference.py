@@ -66,7 +66,7 @@ class TestConfigComesFromTheScenario:
 
     def test_the_twin_and_the_scheduler_share_one_slew_model(self, spec,
                                                              config):
-        """C1's central contract. Two independently-written slew models
+        """The central contract of the case study. Two independently-written slew models
         would make E2 measure their disagreement rather than the effect
         under study."""
         assert config.slew_limits().alpha_rad_s2 == pytest.approx(
@@ -488,7 +488,7 @@ class TestTwinStepClosesTheLoop:
 
     ``twin_step`` was the one part of the twin with no counterpart in
     this module, so no fixture could cross-check it and two defects
-    survived the whole of C3 inside it. These are the regression
+    survived inside it. These are the regression
     boundary for both: that the vehicle actually moves, and that SAFE
     damps rather than coasts.
     """
@@ -669,7 +669,7 @@ class TestTwinStepClosesTheLoop:
                          duration_s, target=self._target_at(2.0))
 
     def test_a_saturating_wheel_trips_safe_on_the_injection_step(self, config):
-        """E5's treatment, and C1 section 9's stated expectation. The
+        """E5's treatment, and the case study's stated expectation (section 9). The
         fault is applied to the state going INTO the step, before the
         momentum guard runs, so SAFE trips on the very step the fault
         lands -- a one-step lag would make the epoch in the record

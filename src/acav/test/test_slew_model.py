@@ -1,4 +1,4 @@
-"""Tests for the shared slew-time model (the C3/C4 contract)."""
+"""Tests for the shared slew-time model (the contract between twin and scheduler)."""
 
 import math
 
@@ -141,7 +141,7 @@ class TestProfileError:
 
     def test_faster_than_model_is_negative_and_signals_a_bug(self):
         """The model is a lower bound. A negative profile_error means the
-        twin exceeded its stated torque/momentum limits -- C5 asserts on
+        twin exceeded its stated torque/momentum limits -- the harness asserts on
         this rather than celebrating a fast controller."""
         theta = math.radians(30.0)
         model = slew_time_s(theta, ACAV)

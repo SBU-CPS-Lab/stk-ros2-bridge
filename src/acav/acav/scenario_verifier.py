@@ -617,7 +617,7 @@ class AcavScenarioVerifier:
                 "is inverted: either STK's default satellite attitude puts "
                 "body -Z towards nadir, or the Point command's elevation "
                 "sign is opposite to what was assumed. Fix "
-                "scenario_builder._create_sensor and make C3's body-frame "
+                "scenario_builder._create_sensor and make the twin's body-frame "
                 "convention match, since the twin commands attitude in the "
                 "same frame.")
         return FAIL, (

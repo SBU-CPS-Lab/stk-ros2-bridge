@@ -1,10 +1,10 @@
-"""TwinStatus carries what happened between two publishes (P10e).
+"""TwinStatus carries what happened between two publishes.
 
 In free-run the twin integrates several steps per published status, so
-a brief event between two publishes was invisible: E3 free-run with the
-seed-4 fault (P9d) recorded 0 saturation events where lockstep recorded
+a brief event between two publishes would be invisible: a free-run
+fault run recorded 0 saturation events where lockstep recorded
 the 0.1 s saturation at 127.1 s, and the capture hold window saw only
-the published samples. TwinStatus now has
+the published samples. TwinStatus therefore has
 
     uint32  saturation_events                   cumulative, every step
     float64 max_boresight_error_since_last_rad  every step since the

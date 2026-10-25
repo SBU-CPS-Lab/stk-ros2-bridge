@@ -1,4 +1,4 @@
-"""Tests for C6's figures.
+"""Tests for the report figures.
 
 Mostly smoke tests -- each function must return a Figure without
 raising, for both populated and empty input, since a campaign directory

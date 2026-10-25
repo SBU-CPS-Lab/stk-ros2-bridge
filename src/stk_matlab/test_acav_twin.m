@@ -430,7 +430,7 @@ function results = twinStepCases(results, fx, tol)
 %
 % adcs.twin_step was the one function with no counterpart in the Python
 % reference, so until these fixtures existed nothing cross-checked it --
-% and two defects lived there through all of C3. The worse one was that
+% and two defects lived there through all of the twin's development. The worse one was that
 % quaternionCmd returned the input attitude verbatim: the twin computed
 % a torque and published back the attitude it had just read, so the
 % vehicle could never slew. This section exists so that cannot recur.

@@ -23,7 +23,7 @@ builtin_interfaces = pytest.importorskip(
 
 class TestQuaternionOrdering:
     """The class of bug that produced a 99 deg 'ordering error' that was
-    actually a frame-pairing error during Phase 3 bring-up (see
+    actually a frame-pairing error (see
     core/validation.py's docstring). These tests guard the primitives
     that check depends on.
     """

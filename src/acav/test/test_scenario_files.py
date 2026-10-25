@@ -1,4 +1,4 @@
-"""Scenario files other than the reference (Phase 3a, P10a).
+"""Scenario files other than the reference.
 
 The reference scenario (config/acav_scenario.yaml) stays byte-identical:
 every existing record names it. Generated scenarios are separate files

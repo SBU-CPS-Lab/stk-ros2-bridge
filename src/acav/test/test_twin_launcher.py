@@ -261,7 +261,7 @@ class TestRunnerAutomated:
 
 class TestManualIsUnchanged:
     """Byte for byte what the runner did before --twin-launch existed,
-    plus console_quickedit (P9e), errors (the waits' own exceptions) and
+    plus console_quickedit, errors (the waits' own exceptions) and
     the bridge's startup record (bridge_*) and which STK the run used
     (stk_process, allow_com_started_stk), which every run now records."""
 

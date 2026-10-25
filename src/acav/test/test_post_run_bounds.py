@@ -205,7 +205,7 @@ class TestConsoleLogging:
                 HANG.wait()
 
         handler = console.BackgroundConsoleHandler(Paused())
-        logger = logging.getLogger("p9e.test")
+        logger = logging.getLogger("post_run.test")
         logger.addHandler(handler)
         logger.propagate = False
         try:
@@ -221,7 +221,7 @@ class TestConsoleLogging:
         stream = io.StringIO()
         handler = console.BackgroundConsoleHandler(stream)
         handler.setFormatter(logging.Formatter("%(message)s"))
-        logger = logging.getLogger("p9e.test2")
+        logger = logging.getLogger("post_run.test2")
         logger.addHandler(handler)
         logger.propagate = False
         logger.warning("hello")

@@ -1,4 +1,4 @@
-"""Seeded target generator (Phase 3a, P10b).
+"""Seeded target generator.
 
 A generated scenario is the reference file with only the target list
 replaced and the ground station removed: the vehicle, sensor, pointing

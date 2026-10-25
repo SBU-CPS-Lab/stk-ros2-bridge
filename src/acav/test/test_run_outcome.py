@@ -28,7 +28,7 @@ from acav.campaign_cli import main
 from test_e1_mismatch import _write  # noqa: I100
 
 
-# E1-...-mismatchTimeOffset.logs.superseded-20261017T192525/summary.json
+# E1-...-mismatchTimeOffset/summary.json
 INTERRUPTED = {
     "steps": [{"step": "stk_graphics", "ok": True, "detail": ""},
               {"step": "twin_launch", "ok": True, "detail": "matlab -batch"},
@@ -59,7 +59,7 @@ INFRASTRUCTURE = {
             "acav_twin_81473.\r\n        Server failed to start. Details: "
             "Transport stopped."},
 }
-# E1-...-mismatchQuaternionOrder.logs.superseded-20261017T191957/summary.json
+# E1-...-mismatchQuaternionOrder/summary.json
 GUARD = {
     "steps": [{"step": "twin_identity", "ok": True, "detail": "v3"},
               {"step": "bridge_alive", "ok": False, "detail": "exited"},

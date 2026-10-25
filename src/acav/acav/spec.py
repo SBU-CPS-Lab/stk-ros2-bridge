@@ -150,7 +150,7 @@ class AcavSpec:
         if not os.path.isfile(path):
             raise FileNotFoundError(
                 f"ACAV scenario spec not found at {path}. This file is the "
-                f"contract every C2-C6 phase reads; it is not optional."
+                f"contract every module reads; it is not optional."
             )
         with open(path, "r", encoding="utf-8") as handle:
             raw = yaml.safe_load(handle) or {}
