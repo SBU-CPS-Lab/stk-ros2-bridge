@@ -1,35 +1,27 @@
-# Physical models (Matlab)
-*.slx
-*.slxc
-*.autosave
-*.asv
-slprj/
-*.slx.*
-Physical Models/**/*.mat
-
-# STK
-# Scenario directories STK writes next to the repo. Never ignore *.xml
-# globally: ROS 2 package manifests are package.xml, and a global rule
-# silently excluded all three of them, so a fresh clone could not be
-# built at all.
-AGI STK/
-!package.xml
-
-# STK-ROS2
+# colcon
 build/
 install/
 log/
+
+# Python
 __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
+
+# MATLAB / Simulink build artifacts
+*.slx
+*.slxc
+*.slx.*
+*.autosave
+*.asv
+slprj/
 matlab_msg_gen/
-
-# Generated Simulink ROS bus conversion helpers (at any model working directory)
 +bus_conv_fcns/
-
-# Local MATLAB preferences and runtime state created in the working directory
 /MathWorks/
 
-# Local ACAV run records, run configurations and diagnostic logs
-/stk_ros2_ws/results/
+# STK scenario folders written next to the workspace
+AGI STK/
+
+# Campaign outputs
+/results/
