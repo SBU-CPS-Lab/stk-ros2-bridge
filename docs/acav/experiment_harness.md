@@ -1,4 +1,4 @@
-# C5: The experiment harness
+# The experiment harness
 
 What turns the closed loop into experiments: the run matrices (E1, E2,
 E3 with its fault replay, E6), provenance that decides whether a number
@@ -10,8 +10,8 @@ that resumes after an interruption.
 
 | Module | Role |
 |---|---|
-| `acav/run_record.py` | Provenance + serialisation. **The C5/C6 contract.** |
-| `acav/fault_injection.py` | Seeded wheel faults (E3 fault replay, formerly E5) |
+| `acav/run_record.py` | Provenance + serialisation. **The contract between harness and analysis.** |
+| `acav/fault_injection.py` | Seeded wheel faults (E3 fault replay) |
 | `acav/campaign.py` | The run matrices, and what the results mean |
 | `acav/campaign_runner.py` | Executes a matrix. Knows nothing about STK |
 | `acav/campaign_cli.py` | `ros2 run acav run_acav_campaign` |
@@ -19,10 +19,10 @@ that resumes after an interruption.
 The first three are pure: no ROS, no subprocess, no sockets. The fourth
 is thin wiring, and takes its launcher by injection so the whole loop —
 resume, validation, aggregation — is exercised in tests here without
-STK or MATLAB. This is the same division C4 draws between
+STK or MATLAB. This is the same division the [scheduler](scheduler.md) draws between
 `scheduling.py` and `scheduler_node.py`, and for a sharper reason: a
 campaign is tens of runs, each needing STK and MATLAB for 10-16
-minutes (C1 section 8). It is an overnight thing on one machine and it
+minutes ([case study](case_study.md) section 8). It is an overnight thing on one machine and it
 cannot be iterated on. Everything about it that can be decided in milliseconds on
 any machine is decided by tested code before the night starts.
 
@@ -37,7 +37,7 @@ looks finished, cannot be exercised anywhere it is written, and fails at
 
 ## 2. Provenance, and the one rule it enforces
 
-C1 section 8 commits the paper to reporting **no number the mock backend
+The case study (section 8) commits the paper to reporting **no number the mock backend
 produced**. A result file that records only outcomes puts the burden of
 remembering which backend ran on whoever assembles the figures, months
 later, across several hundred files. That is not a burden a person
@@ -103,7 +103,7 @@ failed" would reproduce a different fault than the one that failed.
 | `saturation` (default) | fills the wheel to capacity, once | momentum guard trips **SAFE** on that step |
 | `failure` | derates the wheel so it delivers no torque | pointing collapses and **nothing trips** |
 
-`saturation` is the default because C1 section 9 specifies "inject wheel
+`saturation` is the default because the [case study](case_study.md) (section 9) specifies "inject wheel
 saturation … Stateflow → SAFE". The wheel is not jammed there: the
 actuator model lets a saturated wheel torque back towards zero, and the
 reference confirms it unloads from 0.0198 to 0.0123 N·m·s over the ten
@@ -175,9 +175,7 @@ to a single run as `--real-time-factor`.
 seeded faults, and the rate reaches each run through `{real_time_factor}`
 (`RunSpec.real_time_factor`, checked against the record). The plan emits
 every run's exact command (`campaign_runner.planned_commands`). The
-earlier free-run fault runs (E5_P9d_free1, E5_P10_free2_3186642, now in
-results/_archive/20261019_results_cleanup/pilots/) predate it and were started by an analysis
-script; the E5 builder still plans lockstep fault runs for old folders.
+E5 builder plans lockstep fault runs only.
 
 E3 sets the same seeds on both sides so that an identical free-run batch
 would mean a deterministic loop, not an unvaried one, and groups results
@@ -189,7 +187,7 @@ id, `{mismatch}` / `{mismatch_guard}`, `--mismatch` / `--mismatch-guard`,
 run config, `Provenance.mismatch` / `mismatch_guard`; never the
 determinism signature. `report` groups E1 by arm and counts a planned
 run with a `summary.json` but no record as a fail-stop in its arm. The
-original two-run treatment (`build_e1_convention`) stays for old folders.
+two-run treatment (`build_e1_convention`) is kept for existing folders.
 E1's frame_pairing treatment sets `sensing.force_attitude_provider` on the bridge,
 pairing `ECF Attitude Quaternions` against the inertial command, and
 disables the twin's mismatch guard (`attitude_mismatch_policy:

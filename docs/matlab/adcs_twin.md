@@ -1,4 +1,4 @@
-# C3: The ADCS twin
+# The ADCS twin
 
 The MATLAB/Simulink digital twin the bridge drives, and the Python
 reference that pins its semantics. Sections 1-3 are the design;
@@ -14,7 +14,7 @@ mode logic, none of which can be tested on the development machine.
 A sign error in that code does not crash. The twin flies smoothly to a
 slightly — or completely — wrong attitude, STK dutifully reports no
 access, the capture rate drops, and the result reads as a control-design
-finding. That is the same failure mode the bridge's own bring-up hit
+finding. The bridge has the same failure mode
 when an ECF-commanded attitude was read back against an inertial
 provider: wrong by the Earth-rotation angle, and entirely plausible.
 
@@ -115,11 +115,11 @@ settling.
 
 `test_twin_reference.py::test_every_acav_slew_fits_the_scheduler_s_budget`
 guards this. **The table was measured with fixed targets.** In the live
-loop the target direction moves, and the guidance now compensates for it
+loop the target direction moves, and the guidance compensates for it
 (section 7): live slews end within ~1.4° and enter IMAGE immediately, so
-these settling margins describe the original fixed-target design, not
-the measured live behaviour. If a gain change breaks it, E2's headline becomes an
-artifact, so the test fails rather than the study quietly degrading.
+these settling margins are conservative for live behaviour. If a gain
+change breaks the budget, E2's headline becomes an artifact, so the test
+fails rather than the study quietly degrading.
 
 **Honest caveat for the paper.** A 1.0 rad/s bandwidth is optimistic for
 a 6U CubeSat, because the twin models no sensor noise, no attitude
@@ -156,8 +156,8 @@ entangled with slew-profile initialisation in a way the chart alone does
 not capture; wiring it would mean restructuring `GuidanceControl` to
 take the chart's mode as an input. Until that is done, the paper may
 show the chart as the specification of the mode logic, but must not
-describe it as executing. Tracked in
-[dev/phase3_backlog.md](dev/phase3_backlog.md).
+describe it as executing. This is a known
+limitation (see the developer guide).
 
 ## 5. The twin in the loop
 
@@ -239,23 +239,23 @@ MATLAB tests in `src/stk_matlab`, each run from that folder after
 | `test_acav_twin` | Replays the Python reference's fixtures (`acav/twin_fixtures.py`, `export_twin_fixtures`) through the MATLAB, to 1e-9. Refuses stale fixtures. |
 | `test_simulink_adapter` | `adcs.simulink_step` against `adcs.twin_step` over closed-loop steps; startup gating; reset. |
 | `test_free_run_twin` | Free-run sub-stepping, causal geometry, the TwinStatus fields' classes and values. |
-| `test_twin_model_runs` | Builds the model and **runs** it for 1 s. A diagram update passes even when a block's output class is wrong; running it does not (d97800c stopped every live run at its first step that way). |
+| `test_twin_model_runs` | Builds the model and **runs** it for 1 s. A diagram update passes even when a block's output class is wrong; running it does not (a wrong output class stopped every live run at its first step). |
 | `test_twin_identity` | The identity text and the shared fingerprint vector. |
 | `test_settle_retarget`, `test_target_rate_reset` | Re-targeting rules. |
 | `test_e1_ablation` | E1's explicit mismatch-guard ablation. |
 
 After any change to the twin or to a `.msg` file, run
-`test_twin_model_runs` before a live session.
+`test_twin_model_runs` before a live run.
 
-## 7. Design decisions from live bring-up
+## 7. Design decisions
 
-Kept because each explains why the code is the way it is:
+Each explains why the code is the way it is:
 
 - **The twin integrates its own dynamics.** `AddAttitude` stores and
-  interpolates samples; STK does not propagate attitude dynamics. An
-  early `twin_step` published back the attitude it had read and never
-  integrated its torque, so the vehicle could not move. It now runs the
-  torque through the wheels and integrates one step.
+  interpolates samples; STK does not propagate attitude dynamics. A
+  `twin_step` that only published back the attitude it had read would
+  never integrate its torque and the vehicle could not move, so it runs
+  the torque through the wheels and integrates one step.
 - **SAFE applies rate damping**, in both implementations
   (`twin_reference.control_torque`). With no desaturation path, SAFE can
   remove only about `h_max / J_xx` (9.3 deg/s) of body rate before the
@@ -270,6 +270,6 @@ Kept because each explains why the code is the way it is:
   (`test_moving_fixtures.py`).
 - **Stamps from ScenarioTime.** Header Assignment blocks stamp with the
   Simulink node's own clock, which is not simulation time; every sample
-  landed years outside the scenario on the first live run.
-- **Free-run geometry is propagated, not held** (P2c), and the twin's
-  loop is paced (P5); see section 5.
+  would land years outside the scenario.
+- **Free-run geometry is propagated, not held**, and the twin's
+  loop is paced; see section 5.

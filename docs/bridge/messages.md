@@ -84,18 +84,17 @@ neither publishes nor subscribes to them.
 | `saturation_events` | count (uint32) | Cumulative number of steps at which `wheels_saturated` rose from false to true, counted by the twin at **every** integration step, sub-steps included. |
 | `max_boresight_error_since_last_rad` | rad | The largest `boresight_error_rad` over every step since the previous TwinStatus, this one included. |
 
-The last two fields were added in d97800c (P10e). In free-run the twin
+The last two fields exist because, in free-run, the twin
 integrates several 0.1 s steps per published status, so an event between
-two publishes was invisible: an E3 free-run fault run counted 0
-saturation events where lockstep counted 1. The scheduler now takes the
+two publishes would be invisible (a free-run fault run counted 0
+saturation events where lockstep counted 1). The scheduler takes the
 larger of its own edge count and `saturation_events`, and judges the
 capture hold window on `max_boresight_error_since_last_rad`
 (`acav/capture_tracking.py`, `acav/metrics.py`). In lockstep every step
 is published, so both fields equal what the other fields already show,
 and lockstep results are unchanged (golden trace and the E6 signature).
-The free-run fault re-run on 3186642 counted the T3 blip at
-t = 127.235 s through this field
-(results/_archive/20261019_results_cleanup/pilots/E5_P10_free2_3186642).
+In one free-run fault run, the T3 blip at t = 127.235 s was counted
+through this field.
 
 ## Absence, not defaults
 

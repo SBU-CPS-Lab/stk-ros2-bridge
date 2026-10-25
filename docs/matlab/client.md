@@ -23,7 +23,7 @@ compiler-not-found error that does not name Visual Studio.
 ## 3. Generate the message types: `setup_stk_ros`
 
 ```matlab
-cd <path-to>\stk_ros2_ws\src\stk_matlab
+cd <path-to>\stk-ros2-bridge\src\stk_matlab
 setup_stk_ros()                    % first time
 setup_stk_ros('Rebuild', true)     % after any .msg change
 ```
@@ -31,7 +31,7 @@ setup_stk_ros('Rebuild', true)     % after any .msg change
 It adds `+stkros` to the path, runs `ros2genmsg` on `stk_msgs` (output
 under `src/matlab_msg_gen`), and checks that the ROS 2 network is
 reachable (`setup_stk_ros.m`). **After any `.msg` change** (for
-example the `TwinStatus` fields added in d97800c) rebuild with colcon
+example a new `TwinStatus` field) rebuild with colcon
 and run `setup_stk_ros('Rebuild', true)`; the twin's code fingerprint
 covers the message definitions, so a model built against stale types
 is refused by the twin identity check.
@@ -76,10 +76,10 @@ Viewer into `simulink_diagnostics.txt` and copied into
 
 The runner waits up to 252.6 s for the first ack
 (`AUTOMATED_TWIN_ACK_TIMEOUT_S`: twice the 126.3 s measured for MATLAB
-start plus build plus simulation start, at least 180 s). Across the 11
-automated runs with a clean stop up to 2026-10-17, launch to first ack
-took 103.4-113.2 s, and 152.2 s in one run whose MATLAB was slower in
-every phase (results/_archive/20261019_results_cleanup/pilots/E5_P10_free2_3186642). Stopping writes the stop
+start plus build plus simulation start, at least 180 s). Across 11
+automated runs with a clean stop, launch to first ack took
+103.4-113.2 s, and 152.2 s in one run whose MATLAB was slower in every
+phase. Stopping writes the stop
 file and waits up to 120 s; if MATLAB has not exited, the runner kills
 the process tree it started, by its own PID only.
 

@@ -1,4 +1,4 @@
-# C4: The ACAV scheduler
+# The ACAV scheduler
 
 The Python ROS 2 node that decides which target to point at and when,
 and scores what actually happened. This is what makes E2 (kinematic vs.
@@ -19,7 +19,7 @@ section 2 for why that boundary is drawn there and not here.
 
 Two pure modules carry all the logic that matters, and both are fully
 offline-tested (`test_scheduling.py`, `test_capture_tracking.py`),
-matching this project's own established boundary: `core`-shaped logic
+matching the bridge's boundary: `core`-shaped logic
 is unit-tested without ROS; only the thin node wiring around it needs a
 sourced ROS environment to exercise.
 
@@ -29,88 +29,35 @@ sourced ROS environment to exercise.
 | `acav/capture_tracking.py` | Buffers telemetry, applies `metrics.evaluate_capture` once a target's access answer is known |
 | `acav/scheduler_node.py` | Thin ROS wiring: `SchedulerNode` (lazy rclpy/stk_msgs imports, DI-constructed like `nodes/clock_node.py`) + `main()` |
 
-## 2. Why the scheduler-twin interface needed two new messages
+## 2. The scheduler-twin interface
 
-The architecture names `/acav/setpoint` (scheduler → twin) and expects
-the twin to report enough back to score a capture. Neither had a wire
-format before this phase. Two small additions to `stk_msgs`:
+`/acav/setpoint` (scheduler -> twin) and `/acav/twin_status` (twin ->
+scheduler) are the whole contract. Two small messages in `stk_msgs`
+carry it:
 
 - **`TargetSetpoint`** (`/acav/setpoint`): a target id, an inertial
   position, and a `has_target` flag. Deliberately data, not an
-  attitude — the guidance law stays in the twin (see below).
+  attitude: the guidance law stays in the twin (see below).
 - **`TwinStatus`** (`/acav/twin_status`): the twin's own Stateflow mode
   name and its own `boresight_error_rad`.
 
 They live in `stk_msgs` rather than a new package (see
-`docs/bridge/messages.md`'s "Application-level messages" section
-for the reasoning) and were verified to `colcon build` cleanly and
-round-trip through `ros2 interface show` in the `humble-desktop-full`
-container.
+[messages](../bridge/messages.md), "Application-level messages").
 
-**A real interface bug this caught.** `build_acav_twin.m`'s
-`SetpointSub` block was wired to `stk_msgs/AttitudeCommand` for
-`/acav/setpoint` — a type that carries a quaternion, and cannot carry
-the target position `adcs.twin_step`'s `targetEci` input actually
-needs. It was never exercised (the model's signal wiring has never been
-built — see `docs/matlab/adcs_twin.md` section 7), so nothing had yet
-depended on the wrong type. Fixed as part of defining this contract,
-since C4 is where it is produced.
-
-**`ros2genmsg` now runs in this development environment (2026-09-14),
-which is how the two messages above got verified beyond a `colcon
-build`.** Two independent blockers, both worked around without
-touching the MATLAB installation itself:
-
-1. R2024a's (and R2023a's) ROS Toolbox needs a Python interpreter in
-   [3.8, 3.11); the dev box's only system Python is 3.14. Fixed by
-   extracting a Python 3.10 (with `venv`/`pip` support — the base
-   `osrf/ros:humble-desktop-full` image needs `python3.10-venv` and
-   `python3-pip` installed into it first) from that same container and
-   pointing MATLAB's ROS Toolbox at it via
-   `setpref('ROSToolbox', 'ROS2_PYTHON_EXECUTABLE', <path>)` — an
-   internal but stable preference key.
-2. This host's GCC 15.2.0 exposes a missing `#include <cstdint>` in
-   ~53 of MATLAB's own bundled ROS 2 headers (they relied on a
-   transitive include older GCCs provided). Fixed with
-   `setenv('CXXFLAGS', '-include cstdint')` /
-   `setenv('CPPFLAGS', '-include cstdint')` before calling
-   `ros2genmsg` — colcon's CMake invocation picks both up, so no
-   vendor file needs editing.
-
-With both set, `setup_stk_ros` completes, `ros2genmsg` builds `stk_msgs`
-(including these two new messages) cleanly, and `build_acav_twin`
-proceeds past `requireMessages()` to a real, fully wired `.slx`. The
-full recipe is in the local (untracked) working notes, since neither
-workaround belongs in this repository — the DEPLOY machine has a Python
-in range already and should never need the `cstdint` flag at all if its
-toolchain is the one MATLAB was built against.
-
-**The "third dev-box limitation" reported here earlier was a wiring bug,
-not a tooling one.** This section used to claim that on this
-R2024a-on-Linux setup no MATLAB Function or Bus Selector could read a
-Subscribe block's output for any custom `stk_msgs` type, and blamed a
-GLIBCXX mismatch in MATLAB's ROS 2 server subprocess. The real cause
-was simpler: the model wired each Subscribe block's output **1** into
-`UnpackTelemetry`. On `ros2lib/Subscribe`, output 1 is the boolean
-`IsNew` flag and output 2 is the message bus. Every "cannot determine
-sizes and/or types" and "is not a bus signal" error came from reading
-message fields off a boolean. The evidence that seemed to point at the
-toolchain fits the wiring bug just as well: blocks that never read a
-field (a Terminator) could not fail, and the ROS 2 Current Time block
-used as a control has a single output, so its port 1 really is the
-message.
-
-Wiring port 2 fixed it. The corrected model passes diagram update on
-this same dev box, with the same `ros2genmsg` recipe as above, and on
-the deploy machine. `build_acav_twin` now fails, rather than warns,
-when diagram update fails. See `docs/matlab/adcs_twin.md` section 5.
+The twin's `SetpointSub` block must use `TargetSetpoint`, not
+`stk_msgs/AttitudeCommand`: the latter carries a quaternion and cannot
+carry the target position `adcs.twin_step`'s `targetEci` input needs.
+On `ros2lib/Subscribe`, output 1 is the boolean `IsNew` flag and output 2
+is the message bus, so signal wiring must read fields from port 2;
+`build_acav_twin` fails, rather than warns, when diagram update fails
+([ADCS twin](../matlab/adcs_twin.md) section 5).
 
 **Who computes the pointing error, and why not the scheduler.** The
 twin does, in `TwinStatus.boresight_error_rad`. It already has the
 freshest (satellite state, target) pair at the instant it computes that
 angle for its own SETTLE→IMAGE transition; a second, independently
 written computation of the same angle here would risk exactly the
-failure C1 flags for the slew model — two models measuring their own
+failure the [case study](case_study.md) flags for the slew model — two models measuring their own
 disagreement instead of the effect under study. The scheduler trusts
 it and does not re-derive it from raw telemetry.
 
@@ -211,8 +158,8 @@ whether SAFE was entered, and saturation events: the larger of the
 scheduler's own count of rising edges in the published
 `wheels_saturated` flag and the twin's cumulative `saturation_events`.
 In lockstep the two are equal; in free-run the twin's count includes
-sub-steps nobody saw published (the seed-4 fault re-run on 3186642
-counted the T3 blip at t = 127.235 s this way).
+sub-steps nobody saw published (a brief saturation between two
+published statuses is counted this way).
 
 **The record** (`_write_output`): the result plus provenance (backend
 and STK version as reported by the bridge, the attitude provider
@@ -240,9 +187,8 @@ writes `output_json` and shuts down at the end of the run
 
 ## 7. Status
 
-Both policies have run live in lockstep (E2 on the reference scenario
-and, on 3186642, the dynamics-aware policy on generated seed 1); see
-[09_live_runs_and_results.md](09_live_runs_and_results.md). Offline
-coverage: `test_scheduling.py`, `test_capture_tracking.py`,
-`test_access_deferral.py`, `test_target_coverage.py`,
-`test_twin_status_fields.py`, `test_scheduler_completion.py`.
+Both policies run in lockstep (E2 on the reference scenario and on
+generated seeds). Offline coverage: `test_scheduling.py`,
+`test_capture_tracking.py`, `test_access_deferral.py`,
+`test_target_coverage.py`, `test_twin_status_fields.py`,
+`test_scheduler_completion.py`.

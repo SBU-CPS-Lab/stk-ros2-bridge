@@ -64,8 +64,7 @@ plausible-looking as a number.
 Both providers are **ungrouped** on STK 12.6 -- they take no reference-
 frame argument, so passing one is silently ignored. This exact mismatch
 (commanding CBFQuat, reading via the inertial provider) produced a
-~99 degree "quaternion ordering" failure during this project's Phase 3
-bring-up that was actually a frame-pairing bug, not an ordering bug --
+~99 degree "quaternion ordering" failure during bring-up that was actually a frame-pairing bug, not an ordering bug --
 see `core/validation.py`'s `_check_quaternion_ordering` docstring for
 the full story and the diagnostic that now distinguishes the two cases
 automatically.

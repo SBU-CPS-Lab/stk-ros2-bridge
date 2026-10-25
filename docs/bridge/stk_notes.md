@@ -9,19 +9,16 @@ another install surfaces something similar.
 # Part 1: case-study runs
 
 Every run writes `<run>.logs/summary.json` with one entry per step
-(`step`, `ok`, `detail`) and, since f19ced4, the original exception of
-any step that raised under `errors` (type, message, traceback).
+(`step`, `ok`, `detail`) and the original exception of any step that raised under `errors` (type, message, traceback).
 `run.log` has the same lines with times. Start there.
 
 ## `idle_check` failed
 
 "Another run is active on ...": a bridge, scheduler or twin from an
 earlier run is still publishing. Stop it first (and see "Leftover
-MATLAB processes" below). Before f19ced4 this step could also fail with
-"failed to shutdown: rcl_shutdown already called on the given context",
-which hid the real error: the check used rclpy's default context, whose
-signal handlers shut it down. Each wait now runs on its own context with
-no signal handlers, and the real error is recorded.
+MATLAB processes" below). Each wait of the runner runs on its own rclpy
+context with no signal handlers, so a shutdown error cannot hide the real
+one, which is recorded.
 
 ## `bridge_connected` failed
 
@@ -33,11 +30,10 @@ took 43.7-76.1 s; the runner waits up to 180 s
 process exits (`bridge_exit_code` in summary.json).
 
 - "no running STK Desktop to attach to": start STK Desktop yourself and
-  build the scenario in it. The bridge no longer starts STK by itself.
+  build the scenario in it. The bridge does not start STK by itself.
 - A phase under `validation/...` that runs far longer than the others:
   look at `bridge.log` for that check. One free-run run on an STK that
-  automation had started stayed in validation for more than 60 s
-  (results/_archive/incidents/E5_P10_free1_3186642).
+  automation had started stayed in validation for more than 60 s.
 - "no scenario is open" / "expected 'ACAV_SSS1'": build the scenario
   first ([running campaigns](../acav/running_campaigns.md)).
 
@@ -47,7 +43,7 @@ The bridge attached to an STK Desktop that was started through COM
 (`AgUiApplication.exe ... -Embedding`, parent `svchost.exe`), not by
 you, or the runner cannot tell which STK it used (none found, or more
 than one running). E6 on such an STK stepped at 95.7 ms against about
-60 ms (one run, P10). Close it, start STK Desktop yourself, build the
+60 ms (one run). Close it, start STK Desktop yourself, build the
 scenario, and run again. `--allow-com-started-stk` runs anyway; the run
 records it (`stk_process.started_by`), and `report` will not pool it
 with operator-started runs. An STK is started through COM when a script
@@ -85,7 +81,7 @@ MATLAB's message types ([MATLAB client](../matlab/client.md)).
 ## The run stopped printing: QuickEdit
 
 With QuickEdit on, selecting text in the console pauses every write to
-it; in P9b a selection held a run for 11.5 min. The runner and the
+it; one selection held a run for 11.5 min. The runner and the
 campaign turn QuickEdit off while they run and restore it afterwards
 (`acav/console.py`, `console_quickedit` in summary.json), and write the
 console copy of the log from a background thread. Still: do not click
@@ -187,8 +183,7 @@ elsewhere in STK's own documentation.
 ## `SetPosition` argument order
 
 The Connect command is `SetPosition <path> <time> <frame> <x y z>` --
-**time before frame**, not frame before time. Both backends were fixed
-to match; if extending either backend, check this order against a live
+**time before frame**, not frame before time. Both backends follow this order; if extending either backend, check this order against a live
 `ExecuteConnect` call before trusting written documentation examples.
 
 ## MATLAB: custom message errors that look like network problems

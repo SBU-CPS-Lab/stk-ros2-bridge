@@ -1,4 +1,4 @@
-# C1: ACAV case-study specification
+# ACAV case-study specification
 
 **Attitude-Coupled Access Verification.** The case study that exercises
 the framework end to end. Where this document and
@@ -126,24 +126,23 @@ targets) are always reported together.
 ## 7. Ground station: dropped
 
 The reference YAML still defines a terrain-masked ground station GS1,
-and the builder still creates it (the file stays byte-identical so that
-existing records keep their scenario digest). No experiment uses it and
+and the builder still creates it (the file is left unchanged so that
+records keep their scenario digest). No experiment uses it and
 the paper makes no claim about it; seeded scenarios omit it.
 
 ## 8. Compute budget (measured)
 
-A lockstep step costs about 60 ms on the deploy host (E6 pilot runs,
-graphics off, operator-started STK; [09_live_runs_and_results.md](09_live_runs_and_results.md)).
-Measured wall time per automated run, including MATLAB start and build,
-from the pilot runs now in `results/_archive/20261019_results_cleanup/pilots/`
-(the values the plan uses, `acav/campaign.py` `MEASURED_WALL_MIN`):
+A lockstep step costs about 60 ms on the 2-core deploy host (graphics
+off, operator-started STK). Measured wall time per automated run,
+including MATLAB start and build (the values the plan uses,
+`acav/campaign.py` `MEASURED_WALL_MIN`):
 
-| Run kind | Wall time per run | Source |
-|---|---|---|
-| Lockstep, rtf n/a | 9.5-11.4 min | E5_P9d_lock1/2, E6_P9 seed0/2, E2_P10_seed1 |
-| Free-run, rtf 1.0 | 15.3-16.2 min | E3_P9_rtf1, E5_P9d_free1, E5_P10_free2 |
-| Free-run, rtf 0.5 | 27.3 min (one run, automated twin) | LIVE_E3_d0bf796 |
-| Free-run, rtf 0.5 | 37.6 min (one run, manual twin) | E3_P6_rtf05_8345551 |
+| Run kind | Wall time per run |
+|---|---|
+| Lockstep, rtf n/a | 9.5-11.4 min |
+| Free-run, rtf 1.0 | 15.3-16.2 min |
+| Free-run, rtf 0.5 | 27.3 min (one run, automated twin) |
+| Free-run, rtf 0.5 | 37.6 min (one run, manual twin) |
 
 Commitments: the scenario is one 12-minute window, not a full orbit;
 E6 reports the measured latency; no reported number comes from the mock
@@ -155,7 +154,7 @@ backend (`RunRecord.unreportable_reasons`).
 |---|---|---|
 | **E1** | What does an interface-convention mismatch do, and is it caught? | Lockstep, per repeat: a control and six mismatch types (below), each guard-on; frame_pairing also guard-ablated. Run count: `<N_REPEATS>` x (1 + 2 + 5). |
 | **E2** | Does kinematic planning over-promise? | Kinematic against dynamics-aware scheduling on the same targets, lockstep, on the reference scenario and on seeded scenarios. Capture rate, coverage rate, over-promise gap, outcome breakdown. **Headline.** |
-| **E3** | What does lockstep buy, and what does free-run cost? | One matrix: execution mode (lockstep; free-run at rtf 1.0 and 0.5) x fault (none, `<N_FAULT_SEEDS>` seeded wheel faults) x repeats (lockstep 2, free-run `<N_REPEATS>`), `(1 + N_FAULT_SEEDS) x (2 + 2 N_REPEATS)` runs. Lockstep replay: each fault cell's two lockstep runs must share one signature (**deterministic fault replay**, formerly E5); free-run: the spread of outcomes, saturation events and signatures. |
+| **E3** | What does lockstep buy, and what does free-run cost? | One matrix: execution mode (lockstep; free-run at rtf 1.0 and 0.5) x fault (none, `<N_FAULT_SEEDS>` seeded wheel faults) x repeats (lockstep 2, free-run `<N_REPEATS>`), `(1 + N_FAULT_SEEDS) x (2 + 2 N_REPEATS)` runs. Lockstep replay: each fault cell's two lockstep runs must share one signature (**deterministic fault replay**); free-run: the spread of outcomes, saturation events and signatures. |
 | **E6** | What does it cost? | Repeated identical lockstep runs: per-step sense, actuate and barrier-wait times, achieved step rate. Graphics off, no CPU sampler, operator-started STK. |
 
 **E1 mismatch types** (`acav/campaign.py` `E1_MISMATCH_TYPES`; the five
@@ -182,8 +181,8 @@ The table states expectations from offline reference checks
   (`simulink/build_acav_twin.m`, comment at the chart). The mode is
   decided by `+adcs/mission_mode.m`, called from `adcs.twin_step`. The
   paper may show the chart as the specification of that logic; it must
-  not describe it as running in the loop. Not changed for the final runs
-  (wiring it changes the twin fingerprint).
+  not describe it as running in the loop. Wiring it would change the twin
+  fingerprint.
 - **HPOP physical properties.** The builder selects HPOP
   (`acav/scenario_builder.py:268`) but does not apply `mass_kg`
   (`acav_scenario.yaml:47`, read at `acav/spec.py:183` and only printed)
@@ -191,17 +190,13 @@ The table states expectations from offline reference checks
   for every run and arm. The paper must not state that the orbit uses
   the spacecraft's 8 kg mass.
 
-**Dropped and merged.** E4 (controller gain sweep) is dropped and its
-code removed; records labelled E4 still load. E5 (fault replay) is
-merged into E3; the E5 campaign builder still
-plans the seeded lockstep fault runs (`run_acav_campaign --experiment
-E5`). Candidate studies not yet decided (a communication-step study, an
-offline file-exchange baseline) are in
-[dev/phase3_backlog.md](dev/phase3_backlog.md), not here. The repeat
-counts for the final runs, and the final runs themselves (E1, E3, E6 on
-6c32287 (db7cfb6); E2 on 81bc202 (91f36b9)), are in
-[running campaigns](running_campaigns.md) section 8 and
-[09_live_runs_and_results.md](09_live_runs_and_results.md).
+**Not experiments.** A controller gain sweep (E4) is not part of the
+study and has no code; records labelled E4 still load. Fault replay (E5)
+is part of E3; the E5 campaign builder plans the seeded lockstep fault
+runs (`run_acav_campaign --experiment E5`). A communication-step study
+and an offline file-exchange baseline are possible extensions. Repeat
+counts and the commands for each experiment are in
+[running campaigns](running_campaigns.md).
 
 ## 10. Executable contracts
 

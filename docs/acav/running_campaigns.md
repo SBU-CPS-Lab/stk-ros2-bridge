@@ -1,13 +1,12 @@
-# Deploy runbook: running the experiments
+# Running the experiments
 
 An operator manual for the Windows deploy host. Every command here was
 checked against its parser (`acav/deploy_run_cli.py` `_parser`,
 `acav/campaign_cli.py` `_parser`, `acav/build_cli.py` `build_parser`).
-Commands are PowerShell, run from `stk_ros2_ws` in a shell where ROS 2
-and the workspace are sourced. Sections 4 to 7 write repeat counts as
+Commands are PowerShell, run from `stk-ros2-bridge` in a shell where ROS 2
+and the workspace are sourced. Sections 4 and 5 write repeat counts as
 placeholders (`<N_REPEATS>`, `<N_SEEDS>`, `<N_FAULT_SEEDS>`); the
-counts decided for the final runs, and the final runs themselves, are
-in section 8.
+counts used for the study are in section 7.
 
 ## 1. One-time setup
 
@@ -59,7 +58,7 @@ python src\acav\scripts\build_acav_scenario.py --backend com --verify
 ```
 
 `--scenario <yaml>` builds a seeded scenario instead; for E2 the
-`run-seeds` verb does all the building itself (section 8.4).
+`run-seeds` verb does all the building itself (section 7.4).
 
 The build attaches to the STK you opened and fails if none is running
 (it never starts STK; `--start-stk` would, and runs then refuse it). If
@@ -101,9 +100,9 @@ captures, free-run: startup_gate.json, free_run_pacing.json,
 twin_substeps.json, twin_loop.csv), plus `campaign.json` and, after
 cleanups, `twin_cleanup.jsonl`.
 
-Measured wall time per automated run (C1 section 8): lockstep about
+Measured wall time per automated run ([case study](case_study.md) section 8): lockstep about
 10-11 min, free-run at rtf 1.0 about 15-16 min, free-run at rtf 0.5
-27.3 min (one automated run, LIVE_E3_d0bf796; `acav/campaign.py`
+27.3 min (one automated run; `acav/campaign.py`
 `MEASURED_WALL_MIN`).
 
 ### 4.1 E1: convention mismatch
@@ -170,13 +169,13 @@ For the reference scenario leave out `--scenario`. `report` refuses a
 folder that mixes scenarios. Send back one folder per scenario. To
 analyse the seeds as pairs, give one folder with `--output-dir` and the
 others with `--include-dir` ([analysis](analysis.md) section 8).
-For the seeded scenarios as a whole, `run-seeds` (section 8.4) does the
+For the seeded scenarios as a whole, `run-seeds` (section 7.4) does the
 builds, runs and both reports in one command.
 
 `report` finds a seeded scenario's file by its digest among the
 reference, `--scenario`, and the YAML files in `--scenario-dir`
 (default: `src\acav\config\scenarios\generated` under the current
-directory) and next to the package; run it from `stk_ros2_ws` or give
+directory) and next to the package; run it from `stk-ros2-bridge` or give
 `--scenario-dir`. The paired report writes no figures and writes its
 JSON to a file only with `--json PATH` (otherwise it prints it); it
 only reads the seed folders.
@@ -313,89 +312,12 @@ Writes `_coupling\coupling.csv` and one `.coupling.json` per run
 - **MATLAB failed:** `matlab_session.json` (`exit`, `error`,
   `simulink_diagnostics`), `simulink_diagnostics.txt`, `matlab.log`,
   `matlab_console.log`, in that order. After a twin or `.msg` change run
-  `test_twin_model_runs` in MATLAB before the next live session.
+  `test_twin_model_runs` in MATLAB before the next run.
 
-## 7. Live verification session
+## 7. Reference campaigns
 
-Run once on d0bf796 (outcome: 09_live_runs_and_results.md; its folders are now in `results/_archive/20261019_results_cleanup/pilots/`); kept for a repeat verification. Read the results with `results/_analysis/live_check/summarize_live_check.py` (local). Follow the steps in order.
-
-**Operator protocol (before step 1, in this order):**
-
-- [ ] Close every editor and any other program that opens the project tree.
-- [ ] Close MATLAB (the runs start their own).
-- [ ] Check Task Manager that no STK started through COM (AgUiApplication.exe -Embedding) is running.
-- [ ] Start STK Desktop yourself, not through a script, and build the reference scenario in it (section 3, without `--scenario`).
-- [ ] Close every 2D and 3D Graphics window and minimise STK.
-- [ ] No CPU sampler running.
-- [ ] Hands off the PowerShell console until the last step ends.
-
-**a. E6, one automated run** (1 run). Pass: its `determinism_signature` equals results\E6_smoke\E6-smoke-1.json's.
-
-```powershell
-$outLiveE6 = Join-Path (Get-Location) 'results\LIVE_E6_<commit>'
-ros2 run acav run_acav_campaign plan --experiment E6 --output-dir $outLiveE6 --repeats 1
-
-ros2 run acav run_acav_campaign run --experiment E6 --output-dir $outLiveE6 --repeats 1 --twin-launch matlab-batch -- `
-    python src\acav\scripts\run_acav_run.py `
-        --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
-        --execution-mode '{execution_mode}' --seed '{seed}' --output '{output}' `
-        --scenario '{scenario}' --backend '{backend}' --attitude-provider '{attitude_provider}' `
-        --run-config '{run_config}' --gains-json '{gains_json}' --fault-json '{fault_json}' `
-        --mismatch '{mismatch}' --mismatch-guard '{mismatch_guard}' --real-time-factor '{real_time_factor}' `
-        --bridge-config src\acav\config\bridge_params_acav.yaml
-
-ros2 run acav run_acav_campaign report --experiment E6 --output-dir $outLiveE6 --repeats 1
-```
-
-**b. E1: control, quaternion_order and time_offset, guard on** (3 runs: E1-dynamics_aware-lockstep, E1-dynamics_aware-lockstep-mismatchQuaternionOrder, E1-dynamics_aware-lockstep-mismatchTimeOffset). Pass: the control completes with a record; quaternion_order is a fail-stop whose `matlab_session` records the twin's own stop reason; time_offset is labelled by `report` either "confirmed" or "cause not independently confirmed" (both valid; note which).
-
-```powershell
-$outLiveE1 = Join-Path (Get-Location) 'results\LIVE_E1_<commit>'
-ros2 run acav run_acav_campaign plan --experiment E1 --output-dir $outLiveE1 --repeats 1 --e1-types quaternion_order,time_offset
-
-ros2 run acav run_acav_campaign run --experiment E1 --output-dir $outLiveE1 --repeats 1 --e1-types quaternion_order,time_offset --twin-launch matlab-batch -- `
-    python src\acav\scripts\run_acav_run.py `
-        --run-id '{run_id}' --experiment '{experiment}' --scheduler '{scheduler}' `
-        --execution-mode '{execution_mode}' --seed '{seed}' --output '{output}' `
-        --scenario '{scenario}' --backend '{backend}' --attitude-provider '{attitude_provider}' `
-        --run-config '{run_config}' --gains-json '{gains_json}' --fault-json '{fault_json}' `
-        --mismatch '{mismatch}' --mismatch-guard '{mismatch_guard}' --real-time-factor '{real_time_factor}' `
-        --bridge-config src\acav\config\bridge_params_acav.yaml
-
-ros2 run acav run_acav_campaign report --experiment E1 --output-dir $outLiveE1 --repeats 1 --e1-types quaternion_order,time_offset
-```
-
-**c. E3: one automated free-run run at rtf 0.5 with fault seed 4** (E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375; fault {"at_s": 218.375, "axis": 0, "axis_name": "x", "health": 0.0, "kind": "saturation", "seed": 4}). Record: wall time, captured/attempted, saturation events, twin loop rate. The `--%` passes the rest of the line to Python unchanged, so the JSON keeps its quotes in Windows PowerShell 5.1:
-
-```powershell
-$env:OUT_LIVE_E3 = Join-Path (Get-Location) 'results\LIVE_E3_<commit>'
-mkdir $env:OUT_LIVE_E3
-python src\acav\scripts\run_acav_run.py --% --run-id E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375 --experiment E3 --scheduler dynamics_aware --execution-mode free_run --seed 0 --output %OUT_LIVE_E3%\E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375.json --scenario "" --backend com --attitude-provider "" --run-config %OUT_LIVE_E3%\E3-dynamics_aware-free_run-seed0-rtf0p5-faultx218p375.runconfig.json --gains-json {} --fault-json "{\"at_s\": 218.375, \"axis\": 0, \"axis_name\": \"x\", \"health\": 0.0, \"kind\": \"saturation\", \"seed\": 4}" --mismatch "" --mismatch-guard "" --real-time-factor 0.5 --bridge-config src\acav\config\bridge_params_acav.yaml --twin-launch matlab-batch
-```
-
-**Estimated duration** (measured wall time per automated run, summary.json, of runs now archived under `results/_archive/20261019_results_cleanup/pilots/`; lockstep 9.5-11.4 min from E5_P9d_lock2 9.5, E5_P9d_lock1 9.9, E6_P9 seed0 10.3, E6_P9 seed2 10.4, E2_P10_seed1 11.4): steps a and b, 4 lockstep runs, at most 38.0-45.6 min (the two E1 fail-stops should end sooner; not measured); step c, free-run rtf 0.5: to be measured (this session measures it). Add STK start and the scenario build.
-
-## 8. Final runs
-
-Configuration fixed by the author. **Done** (2026-10-19), each from a
-clean tree:
-
-| Experiment | Commit | Folder(s) under `results\` |
-|---|---|---|
-| E6 | 6c32287 (db7cfb6) | `E6_final_db7cfb6` |
-| E1 | 6c32287 (db7cfb6) | `E1_final_db7cfb6` |
-| E3 | 6c32287 (db7cfb6) | `E3_final_db7cfb6` |
-| E2 | 81bc202 (91f36b9) | `E2_final_seed{1..10}_91f36b9`, `E2_final_ref_91f36b9`, `E2_final_paired_91f36b9` |
-
-E2 was re-run on 81bc202 (91f36b9): on 6c32287 (db7cfb6) a seeded build failed against the
-reference scenario still open in STK, unnoticed by the shell loop then
-used (`src/acav/test/test_seeded_build.py`, module docstring); those
-folders are in `results/_archive/20261019_results_cleanup/E2_superseded_db7cfb6`.
-The commits between the two (2bea0b9..81bc202, old 89c3c7e..91f36b9) change only scenario
-building and orchestration, and the paired analysis refuses records from
-different commits, so all E2 arms were re-run on 81bc202 (91f36b9). Records, counts and checks:
-[09_live_runs_and_results.md](09_live_runs_and_results.md). The blocks
-below are kept as the commands that were run.
+The configurations used for the study, each from a clean tree. Commands
+write one folder per experiment, never reused between experiments.
 
 **Before starting, every session:**
 
@@ -423,7 +345,7 @@ below are kept as the commands that were run.
 **E2 analysis, declared before the runs:** primary metric
 `capture_rate`; secondary `coverage_rate`, `wheel_energy_J`,
 `wheel_saturation_events`, Holm-adjusted together with the primary
-(`report --experiment E2 ... --include-dir`, C6 section 8).
+(`report --experiment E2 ... --include-dir`, [analysis](analysis.md) section 8).
 
 **Estimated duration** (measured wall time per automated run; lockstep
 9.5-11.4 min from five runs, free-run rtf 1.0 15.3-16.2 min from three
@@ -431,7 +353,7 @@ runs, free-run rtf 0.5 27.3 min from 1 run): E6 0.79-0.95 h, E1
 3.80-4.56 h, E2 3.48-4.18 h, E3 18.69-19.71 h; together 26.77-29.40 h.
 Fail-stop E1 arms end sooner, so the E1 figure is an upper bound.
 
-### 8.1 E6, 5 runs
+### 7.1 E6, 5 runs
 
 ```powershell
 $outE6final = Join-Path (Get-Location) 'results\E6_final_<commit>'
@@ -447,7 +369,7 @@ ros2 run acav run_acav_campaign run --experiment E6 --output-dir $outE6final --r
 ros2 run acav run_acav_campaign report --experiment E6 --output-dir $outE6final --repeats 5
 ```
 
-### 8.2 E1, six types, 3 repeats
+### 7.2 E1, six types, 3 repeats
 
 ```powershell
 $outE1final = Join-Path (Get-Location) 'results\E1_final_<commit>'
@@ -463,7 +385,7 @@ ros2 run acav run_acav_campaign run --experiment E1 --output-dir $outE1final --r
 ros2 run acav run_acav_campaign report --experiment E1 --output-dir $outE1final --repeats 3
 ```
 
-### 8.3 E3: lockstep, then rtf 1.0, then rtf 0.5
+### 7.3 E3: lockstep, then rtf 1.0, then rtf 0.5
 
 The campaign runs the three modes in that order by itself.
 
@@ -481,7 +403,7 @@ ros2 run acav run_acav_campaign run --experiment E3 --output-dir $outE3final --r
 ros2 run acav run_acav_campaign report --experiment E3 --output-dir $outE3final --repeats 5 --fault-seeds 5 --repeats-lockstep 3 --repeats-rtf05 3
 ```
 
-### 8.4 E2: seeds 1..10, then the reference arm, in one command
+### 7.4 E2: seeds 1..10, then the reference arm, in one command
 
 Open STK and do nothing else; the command builds every scenario itself.
 The tree must be clean; folders are suffixed with HEAD's short hash
@@ -511,21 +433,9 @@ summary lists, per seed and for the reference: build, run, usable/
 requested runs and folder, plus both report exit codes. The exit code
 is non-zero if anything failed; rerunning the same command resumes.
 
-On 81bc202 (91f36b9) the reference report succeeded and the paired report inside
-`run-seeds` was refused: it looked for the seed files next to the
-installed package (fixed in 2244a06 (53004a3), `--scenario-dir`). The paired
-report was then made separately, into its own folder (the seed folders
-are only read):
+The paired report can also be made on its own, into a separate folder
+(the seed folders are only read):
 
 ```powershell
-$out = Join-Path (Get-Location) 'results\E2_final_paired_91f36b9'; New-Item -ItemType Directory -Force $out | Out-Null; $inc = 2..10 | ForEach-Object { '--include-dir'; Join-Path (Get-Location) "results\E2_final_seed${_}_91f36b9" }; ros2 run acav run_acav_campaign report --experiment E2 --output-dir (Join-Path (Get-Location) 'results\E2_final_seed1_91f36b9') @inc --json (Join-Path $out 'paired_report.json') | Tee-Object (Join-Path $out 'paired_report.txt')
-```
-
-The three E2 paper figures come from `src\acav\scripts\make_e2_paper_figures.py`
-(not from `report`), run from `stk_ros2_ws`; it reads the ten seed
-folders and `paired_report.json` and writes PDF/SVG/PNG and
-`E2_figure_data.json` into `results\E2_final_paired_91f36b9\figures`:
-
-```powershell
-python src\acav\scripts\make_e2_paper_figures.py
+$out = Join-Path (Get-Location) 'results\E2_final_paired_<commit>'; New-Item -ItemType Directory -Force $out | Out-Null; $inc = 2..10 | ForEach-Object { '--include-dir'; Join-Path (Get-Location) "results\E2_final_seed${_}_<commit>" }; ros2 run acav run_acav_campaign report --experiment E2 --output-dir (Join-Path (Get-Location) 'results\E2_final_seed1_<commit>') @inc --json (Join-Path $out 'paired_report.json') | Tee-Object (Join-Path $out 'paired_report.txt')
 ```

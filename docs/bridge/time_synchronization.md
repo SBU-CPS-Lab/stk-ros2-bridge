@@ -69,9 +69,8 @@ starts paused at exactly t = 0. The bridge senses once, publishes that
 state, republishes it every 2 s, and opens the gate when every barrier
 participant has acked; the clock then runs from t = 0. The wait is
 recorded in `startup_gate.json` and in summary.json
-(`free_run_start_gate.wait_s`; e.g. 176.5 s in
-results/_archive/20261019_results_cleanup/pilots/E5_P10_free2_3186642,
-most of it MATLAB starting and building).
+(`free_run_start_gate.wait_s`; 176.5 s in one run, most of it MATLAB
+starting and building).
 Without the gate the window ran on through MATLAB's start.
 
 **Pacer** (`core/free_run_pacer.py`). Cycles are scheduled at
@@ -87,8 +86,8 @@ commands that have arrived, sense and publish telemetry, then publish
 groups and status. The clock is published after sensing because the
 twin steps only when the telemetry it holds is stamped with the latest
 ScenarioTime: published first, it left the twin unable to step for a
-whole sensing time per cycle (E3 at rtf 1.0 on 4b26de0: 31% of samples
-answered; fixed in 1628866).
+whole sensing time per cycle (at rtf 1.0 only 31% of samples were
+answered).
 
 **The twin in free-run** (`+adcs/simulink_step.m`). Simulink runs paced
 at `PollingRateHz` (100) model steps per wall second. Each time
@@ -102,8 +101,8 @@ over the sub-steps integrated since the previous status ([messages](messages.md)
 Sub-step statistics go to `twin_substeps.json`; per-wall-second counters
 to `twin_loop.csv`.
 
-**Sensing in free-run.** Combined attitude/rate (B) and orbit batching
-(C) are off ([architecture](architecture.md) section 6).
+**Sensing in free-run.** Combined attitude/rate and orbit batching
+are off ([architecture](architecture.md) section 6).
 
 **Access in free-run.** The scheduler asks for access at
 `t_i + access_query_delay_s`; if the twin's written attitude does not
@@ -116,13 +115,10 @@ and makes the record unreportable ([scheduler](../acav/scheduler.md)).
 ## 3. Rates and costs
 
 On the deploy host (2 cores) a lockstep step costs about 60 ms in E6
-with graphics off and an operator-started STK (E6_P9_9fed085, in
-results/_archive/20261019_results_cleanup/pilots/: 60.0,
+with graphics off and an operator-started STK (three runs: 60.0,
 61.1 and 60.2 ms; sense 34.3-34.6 ms), so the 7200 steps of the 720 s
 window take about 7 minutes of stepping, plus startup. Sensing
-dominates. See
-[09_live_runs_and_results.md](09_live_runs_and_results.md) for the
-measured numbers and [analysis](../acav/analysis.md) for how they are
+dominates. See [analysis](../acav/analysis.md) for how these numbers are
 computed.
 
 ## 4. Why the step loop has its own thread

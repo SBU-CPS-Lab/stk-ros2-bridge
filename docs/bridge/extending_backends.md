@@ -11,9 +11,8 @@ Everything above `backends/` codes against
 it (`StateSample`, `AttitudeSample`, `DataProviderQuery`, etc.). Nothing
 in `core/`, `interfaces/`, or `nodes/` may import `agi.stk12`,
 `win32com`, `pythoncom`, or socket-level Connect machinery directly --
-this is enforced by an AST-based check during this project's own
-development (see the layering-verification snippet referenced in the
-Phase 5 delivery notes) and should be re-run after any change here:
+this is enforced by an AST-based check, which you should re-run after any
+change here:
 
 ```python
 import ast, glob

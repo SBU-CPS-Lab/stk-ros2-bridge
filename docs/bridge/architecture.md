@@ -147,8 +147,7 @@ depends on the host. `nodes/bridge_node.py`:
 3. **Order within a cycle** (`_free_running_iteration`): apply
    commands, sense and publish telemetry, *then* publish /clock and
    ScenarioTime with the same time. Publishing the clock before sensing
-   left the twin unable to step for a whole sensing time per cycle
-   (1628866).
+   leaves the twin unable to step for a whole sensing time per cycle.
 4. **The twin sub-steps** (`+adcs/simulink_step.m`). Simulink runs at
    its own paced rate (PollingRateHz, 100 by default), and on each new
    ScenarioTime integrates as many 0.1 s steps as the clock moved, with
@@ -169,7 +168,7 @@ startup validation proved correct on this install. Two optimisations
 cut COM round trips; both are recorded per run (`sensing_mode`,
 `orbit_batch_samples` in `summary.json`):
 
-- **(B) Combined attitude/rate** (`sensing.combine_attitude_rate`):
+- **Combined attitude/rate** (`sensing.combine_attitude_rate`):
   one `Attitude Segment Quaternions` query serves both attitude and
   rate, after a check at a sample the bridge itself wrote proves that
   its quaternion equals the validated `Attitude Quaternions`. On for
@@ -178,7 +177,7 @@ cut COM round trips; both are recorded per run (`sensing_mode`,
   (`bridge_node.py` `_apply_free_run_sensing_policy`). Off for E1, which
   compares read-back conventions (`deploy_run_cli.py`
   `write_bridge_config`).
-- **(C) Orbit batching** (`sensing.orbit_batch_samples`, 100 for
+- **Orbit batching** (`sensing.orbit_batch_samples`, 100 for
   ACAV): position and velocity for the next 100 epochs come from two
   interval queries, used only if the block validates and both ends
   agree with instantaneous reads (1e-6 m, 1e-9 m/s;
@@ -225,8 +224,7 @@ against STK's default attitude beyond the last written sample.
 - **STK graphics state** (`core/graphics_state.py`): 2D/3D window
   counts and the main window state, sampled at startup, during the run
   and at the end (`stk_graphics.json`). Closing the graphics windows
-  and minimising STK cut the E6 step from 120.3 to 70.2 ms
-  (results/_archive/phase1_performance/E6_diag_graphics), so the
+  and minimising STK cut the E6 step from 120.3 to 70.2 ms, so the
   runner requires "off" unless asked otherwise.
 - `BackendDiagnostics` on `/stk/diagnostics`: the backend's own
   counters and the validation report.
@@ -313,8 +311,7 @@ the per-step sequences are in sections 4 and 5.
 - **Terminal-epoch NO DATA.** At t = 720 s, the scenario's stop time,
   `Attitude Segment Quaternions` returns no data: the body-rate sample
   for that step is not published, the twin cannot acknowledge it, and
-  the bridge logs the missing sample (E6_P9_9fed085 seed 0 `bridge.log`,
-  lines 284-290, in results/_archive/20261019_results_cleanup/pilots/). The scheduler has written its record before then;
+  the bridge logs the missing sample. The scheduler has written its record before then;
   results are not affected.
 - **PowerShell 5.1 quote stripping.** Windows PowerShell 5.1 removes
   embedded double quotes from arguments passed to native programs, so
@@ -325,5 +322,5 @@ the per-step sequences are in sections 4 and 5.
   double quotes for the same reason.
 - **STK started through COM.** An STK Desktop started by automation
   (`AgUiApplication.exe -Embedding`) ran E6 at 95.7 ms against about
-  60 ms (one run, P10); runs refuse it
+  60 ms (one run); runs refuse it
   ([STK notes](stk_notes.md)).

@@ -44,7 +44,7 @@ Source ROS 2 first (otherwise `colcon` is not found), build, then source
 the workspace:
 
 ```powershell
-cd <path-to>\stk_ros2_ws
+cd <path-to>\stk-ros2-bridge
 C:\dev\ros2-windows\local_setup.ps1     # your ROS 2 install
 colcon build --symlink-install
 . install\local_setup.ps1               # this workspace
@@ -78,7 +78,7 @@ python src\stk_bridge\scripts\check_environment.py --backend com   # with STK op
 ```
 
 The COM check attaches to the STK Desktop that is already running; it
-does not start one (since 24b5eeb the COM backend only attaches unless
+does not start one (the COM backend only attaches unless
 `backend.com.start_stk` is set). Start STK Desktop yourself first.
 
 **Do not go on past a failing convention-validation check.** The
