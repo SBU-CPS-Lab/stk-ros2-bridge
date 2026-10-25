@@ -383,7 +383,7 @@ def parse_report_rm(messages: List[str]) -> Tuple[List[str], List[List[str]]]:
     data-provider access, and it is strictly worse -- everything arrives
     as text with no type or unit metadata, and column names depend on the
     report style. That asymmetry is the main reason the COM backend is
-    the recommended one; see docs/00_architecture.md section 1.1.
+    the recommended one; see docs/bridge/architecture.md section 1.1.
     """
     rows: List[List[str]] = []
     columns: List[str] = []

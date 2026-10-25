@@ -316,4 +316,4 @@ enter `determinism_signature`.
 
 The E6 latency breakdown comes from the bridge (BridgeStatus mean
 sense, actuate and barrier-wait times per second, with their sample
-counts), recorded by the scheduler; see [C6_analysis.md](C6_analysis.md).
+counts), recorded by the scheduler; see [analysis](analysis.md).

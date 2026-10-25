@@ -4,7 +4,7 @@
 # Install into the SAME Python environment ROS 2 Humble uses (Python 3.8 on
 # the official Windows Humble build), so both `import rclpy` and
 # `import agi.stk12` resolve in one interpreter. See
-# docs/01_installation_windows.md for the full environment setup, including
+# docs/installation.md for the full environment setup, including
 # why this must not be a separate venv from the one `local_setup.ps1`
 # activates.
 #

@@ -6,7 +6,7 @@
     stk_bridge_node over ROS 2 topics/services; stk_bridge_node's
     interfaces/core/backends layers talk to STK 12.6 over one of three
     swappable backends (COM, Engine, Connect). Hand-authored to match
-    docs/00_architecture.md section 3's ASCII diagram.
+    docs/bridge/architecture.md section 3's ASCII diagram.
   </desc>
 
   <defs>

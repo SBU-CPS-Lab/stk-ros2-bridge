@@ -16,7 +16,7 @@ twin integrates the attitude dynamics and the controller; ROS 2 carries
 telemetry, commands and the shared clock between them.
 
 The case study built on it, ACAV (Attitude-Coupled Access Verification,
-[C1_case_study_spec.md](C1_case_study_spec.md)), asks whether an imaging
+[case study](../acav/case_study.md)), asks whether an imaging
 schedule that is feasible on geometry alone is still feasible once the
 attitude dynamics are in the loop.
 
@@ -63,16 +63,16 @@ Its per-step logic is MATLAB code in `+adcs` (`simulink_step.m` is the
 Simulink adapter, `twin_step.m` one control step, `geometry_at.m` the
 causal target geometry). `run_twin_session.m` builds and runs the model
 headless (`matlab -batch`) for the automated runs. See
-[C3_adcs_twin.md](C3_adcs_twin.md).
+[ADCS twin](../matlab/adcs_twin.md).
 
 **`acav`**: `scheduler_node.py` chooses targets and scores captures;
 `deploy_run_cli.py` (`run_acav_run.py`) runs one run end to end;
 `campaign_cli.py` / `campaign_runner.py` (`run_acav_campaign`) plan,
 run, resume and report a matrix of runs; `run_record.py` defines the
 record; `metrics.py`, `capture_tracking.py` and `coupling_analysis.py`
-compute the results. See [C4_scheduler.md](C4_scheduler.md),
-[C5_experiment_harness.md](C5_experiment_harness.md) and
-[C6_analysis.md](C6_analysis.md).
+compute the results. See [scheduler](../acav/scheduler.md),
+[experiment harness](../acav/experiment_harness.md) and
+[analysis](../acav/analysis.md).
 
 ## 3. Deployment topology
 
@@ -205,7 +205,7 @@ answered only once the written attitude reaches t_i; until then the
 bridge fails the request with the prefix `attitude not yet written
 through the stop time` (`core/actuation.py` `ATTITUDE_NOT_COVERED`,
 `attitude_coverage_gap`), and the scheduler asks again
-([C4_scheduler.md](C4_scheduler.md)). Without it, access was computed
+([scheduler](../acav/scheduler.md)). Without it, access was computed
 against STK's default attitude beyond the last written sample.
 
 ## 8. Health and status
@@ -271,7 +271,7 @@ What ties a number in the paper to the run that produced it:
 
 `run_acav_campaign report` refuses to pool records whose conditions
 differ: graphics mode, twin launch mode, how STK was started, scenario,
-diagnostic labels ([C5_experiment_harness.md](C5_experiment_harness.md)).
+diagnostic labels ([experiment harness](../acav/experiment_harness.md)).
 
 ## 10. Diagram
 
@@ -307,7 +307,7 @@ the per-step sequences are in sections 4 and 5.
   physical cores; free-run results and every timing depend on that load.
 - **Message types.** After any `.msg` change, rebuild `stk_msgs` with
   colcon *and* regenerate MATLAB's message types (`setup_stk_ros`,
-  [02_matlab_setup.md](02_matlab_setup.md)); the twin's code
+  [MATLAB client](../matlab/client.md)); the twin's code
   fingerprint covers the message definitions, so a stale model is
   refused by the identity check.
 - **Terminal-epoch NO DATA.** At t = 720 s, the scenario's stop time,
@@ -326,4 +326,4 @@ the per-step sequences are in sections 4 and 5.
 - **STK started through COM.** An STK Desktop started by automation
   (`AgUiApplication.exe -Embedding`) ran E6 at 95.7 ms against about
   60 ms (one run, P10); runs refuse it
-  ([06_troubleshooting.md](06_troubleshooting.md)).
+  ([STK notes](stk_notes.md)).

@@ -98,20 +98,20 @@ target geometry propagated causally to each sub-step
 (`+adcs/geometry_at.m`) instead of held at the last published value.
 In the TwinStatus it publishes, `saturation_events` counts every
 sub-step, and `max_boresight_error_since_last_rad` is the largest error
-over the sub-steps integrated since the previous status ([03_message_reference.md](03_message_reference.md)).
+over the sub-steps integrated since the previous status ([messages](messages.md)).
 Sub-step statistics go to `twin_substeps.json`; per-wall-second counters
 to `twin_loop.csv`.
 
 **Sensing in free-run.** Combined attitude/rate (B) and orbit batching
-(C) are off ([00_architecture.md](00_architecture.md) section 6).
+(C) are off ([architecture](architecture.md) section 6).
 
 **Access in free-run.** The scheduler asks for access at
 `t_i + access_query_delay_s`; if the twin's written attitude does not
 yet reach t_i, the bridge defers the answer
-([03_message_reference.md](03_message_reference.md), `compute_access`)
+([messages](messages.md), `compute_access`)
 and the scheduler asks again on its next tick. A target whose attitude
 never reaches t_i by the end of the run is recorded `access_unverified`
-and makes the record unreportable ([C4_scheduler.md](C4_scheduler.md)).
+and makes the record unreportable ([scheduler](../acav/scheduler.md)).
 
 ## 3. Rates and costs
 
@@ -122,7 +122,7 @@ results/_archive/20261019_results_cleanup/pilots/: 60.0,
 window take about 7 minutes of stepping, plus startup. Sensing
 dominates. See
 [09_live_runs_and_results.md](09_live_runs_and_results.md) for the
-measured numbers and [C6_analysis.md](C6_analysis.md) for how they are
+measured numbers and [analysis](../acav/analysis.md) for how they are
 computed.
 
 ## 4. Why the step loop has its own thread

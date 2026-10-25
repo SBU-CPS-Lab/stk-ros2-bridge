@@ -1,7 +1,7 @@
 """Launch the bridge against a REMOTE STK over the Connect socket (T3).
 
 For the cross-OS deployment: STK 12.6 on Windows, bridge and the rest of
-the ROS 2 graph on Linux. See docs/00_architecture.md section 2 (T3) and
+the ROS 2 graph on Linux. See docs/bridge/architecture.md section 2 (T3) and
 section 1's note that Connect is the ONLY network-transparent interface
 in STK 12.6 -- there is no gRPC remoting until 12.8.
 

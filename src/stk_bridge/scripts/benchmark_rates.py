@@ -2,7 +2,7 @@
 """Measure achievable sense/actuate rates against a live backend.
 
 Every rate figure elsewhere in this project (the "1-20 Hz" ballpark in
-docs/00_architecture.md, the fast/medium/slow defaults in
+docs/bridge/architecture.md, the fast/medium/slow defaults in
 sensing_pipeline.yaml) is a general expectation, not a measurement of
 YOUR scenario. Object count, data-provider complexity, and network
 topology (T1 vs T2/T3) all change the real number. Run this before

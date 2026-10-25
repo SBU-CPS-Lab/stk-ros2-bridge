@@ -10,10 +10,10 @@ phase below reads through `acav.spec.AcavSpec` — no phase parses it
 itself.
 
 The full spec, claim, and honest limitations are in
-[`../../docs/C1_case_study_spec.md`](../../docs/C1_case_study_spec.md).
+[`../../docs/acav/case_study.md`](../../docs/acav/case_study.md).
 This README covers only this package's layout and how to run each
-phase; see that doc and `docs/C3_adcs_twin.md` / `docs/C4_scheduler.md`
-/ `docs/C5_experiment_harness.md` / `docs/C6_analysis.md` for the design
+phase; see that doc and `docs/matlab/adcs_twin.md` / `docs/acav/scheduler.md`
+/ `docs/acav/experiment_harness.md` / `docs/acav/analysis.md` for the design
 behind each one.
 
 ## Phases
@@ -29,13 +29,13 @@ behind each one.
 
 All six are implemented and offline-tested. The experiments are E1, E2,
 E3 (lockstep against free-run, with the seeded fault replay) and E6
-([`../../docs/C1_case_study_spec.md`](../../docs/C1_case_study_spec.md)
+([`../../docs/acav/case_study.md`](../../docs/acav/case_study.md)
 section 9). The final runs (E1, E3, E6 on 6c32287 (db7cfb6); E2 on 81bc202 (91f36b9); old hashes:
 [`../../docs/commit_map.md`](../../docs/commit_map.md)) and
 the earlier live evidence:
 [`../../docs/09_live_runs_and_results.md`](../../docs/09_live_runs_and_results.md).
 How to run each experiment:
-[`../../docs/08_deploy_runbook.md`](../../docs/08_deploy_runbook.md).
+[`../../docs/acav/running_campaigns.md`](../../docs/acav/running_campaigns.md).
 
 ## Running it offline (no STK, no MATLAB, no ROS)
 
@@ -67,7 +67,7 @@ ros2 run acav describe_scenario
 python scripts/export_twin_fixtures.py
 ```
 
-Then, in MATLAB (see `docs/C3_adcs_twin.md` section 6 for the tests):
+Then, in MATLAB (see `docs/matlab/adcs_twin.md` section 6 for the tests):
 
 ```matlab
 cd stk_ros2_ws\src\stk_matlab
@@ -89,7 +89,7 @@ Needs a bridge running against the same scenario (see
 its header lists every difference from `stk_bridge`'s own default,
 among them `acav_scheduler` as a second lockstep barrier participant) and, for a
 lockstep run, the MATLAB twin acking the same barrier. See
-`docs/C4_scheduler.md` for the full parameter list.
+`docs/acav/scheduler.md` for the full parameter list.
 
 ## Running a campaign
 
@@ -101,7 +101,7 @@ ros2 run acav run_acav_campaign report --experiment E6 --output-dir <folder> --r
 
 The run command is `scripts/run_acav_run.py` with the campaign's
 `{placeholders}`; the exact, checked commands for each experiment are in
-[`../../docs/08_deploy_runbook.md`](../../docs/08_deploy_runbook.md)
+[`../../docs/acav/running_campaigns.md`](../../docs/acav/running_campaigns.md)
 section 4. `report` needs no STK, no MATLAB and no ROS. A single-folder
 report writes `<folder>/figures/*.{pdf,svg,png}` unless `--no-figures`
 is given (it degrades to JSON-only if `matplotlib` is not installed);

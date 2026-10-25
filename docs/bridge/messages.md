@@ -104,4 +104,4 @@ published for it: never a zero, an identity quaternion or a repeat of
 the last value (`interfaces/ros_publishers.py` module docstring). A
 consumer must treat "no message this step" as a real state; at
 t = 720 s, the scenario's stop time, the body rate is such a case
-([00_architecture.md](00_architecture.md) section 11).
+([architecture](architecture.md) section 11).

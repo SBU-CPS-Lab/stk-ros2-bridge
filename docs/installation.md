@@ -2,9 +2,9 @@
 
 Everything runs on one Windows machine: STK 12.6 Desktop, ROS 2 Humble,
 the bridge, MATLAB R2023b and the case-study nodes (topology T1,
-[00_architecture.md](00_architecture.md) section 3). MATLAB is covered
-in [02_matlab_setup.md](02_matlab_setup.md); running experiments in
-[08_deploy_runbook.md](08_deploy_runbook.md).
+[architecture](bridge/architecture.md) section 3). MATLAB is covered
+in [MATLAB client](matlab/client.md); running experiments in
+[running campaigns](acav/running_campaigns.md).
 
 ## 1. Prerequisites
 
@@ -14,7 +14,7 @@ in [02_matlab_setup.md](02_matlab_setup.md); running experiments in
 | STK | 12.6 (2023 R1) Desktop | Integration and real-time propagator capabilities (checked at bridge startup, `core/scenario_manager.py` `_check_capabilities`). |
 | ROS 2 | Humble, Windows binaries | Official Windows install. |
 | Python | the one ROS 2's tooling uses | `agi.stk12` must be installed into the same interpreter (section 3). |
-| MATLAB | R2023b with ROS Toolbox and Simulink | See [02_matlab_setup.md](02_matlab_setup.md). |
+| MATLAB | R2023b with ROS Toolbox and Simulink | See [MATLAB client](matlab/client.md). |
 | Visual Studio Build Tools | "Desktop development with C++" | Needed by `colcon` and by MATLAB's `ros2genmsg`. |
 
 ## 2. ROS 2 Humble
@@ -55,7 +55,7 @@ source `install\local_setup.ps1` again before the next `ros2 run`:
 `ros2 run` executes the installed package, so a new module or entry
 point is not seen until then. After a change to a `.msg` file, also
 regenerate MATLAB's message types
-([02_matlab_setup.md](02_matlab_setup.md) section 3).
+([MATLAB client](matlab/client.md) section 3).
 
 ## 5. Run the offline tests
 
@@ -84,7 +84,7 @@ does not start one (since 24b5eeb the COM backend only attaches unless
 **Do not go on past a failing convention-validation check.** The
 bridge's startup validation (`core/validation.py`) proves units,
 quaternion order and the attitude command/read-back pairing on this
-install; see [06_troubleshooting.md](06_troubleshooting.md) for what
+install; see [STK notes](bridge/stk_notes.md) for what
 each failure means.
 
 ## 7. First run without STK: the mock backend
@@ -115,4 +115,4 @@ ros2 launch stk_bridge stk_bridge.launch.py
 The bridge attaches to that STK, runs convention validation (each phase
 is logged with its duration, `core/startup_phases.py`), and publishes
 telemetry only once validation has passed. For the case study, use the
-run orchestrator instead ([08_deploy_runbook.md](08_deploy_runbook.md)).
+run orchestrator instead ([running campaigns](acav/running_campaigns.md)).

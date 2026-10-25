@@ -200,7 +200,7 @@ offline file-exchange baseline) are in
 [dev/phase3_backlog.md](dev/phase3_backlog.md), not here. The repeat
 counts for the final runs, and the final runs themselves (E1, E3, E6 on
 6c32287 (db7cfb6); E2 on 81bc202 (91f36b9)), are in
-[08_deploy_runbook.md](08_deploy_runbook.md) section 8 and
+[running campaigns](running_campaigns.md) section 8 and
 [09_live_runs_and_results.md](09_live_runs_and_results.md).
 
 ## 10. Executable contracts

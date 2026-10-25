@@ -13,7 +13,7 @@ C6 does not re-derive any of them. `acav/report_figures.py` takes the
 and lays it out as a figure; nothing here computes a number a second
 way. Two independently-written computations of one quantity silently
 disagreeing is the exact failure this project keeps citing (the slew
-model, `docs/C1_case_study_spec.md`) — C6 does not add a fourth place
+model, `docs/acav/case_study.md`) — C6 does not add a fourth place
 that could happen.
 
 ```
@@ -74,7 +74,7 @@ bar the auto-layout algorithms that make sense for a flowchart do not
 apply at all — there is no "layout" to solve, only mark choice and
 color, which is what `report_style.py`/`report_figures.py` handle by
 hand. Any architecture or pipeline diagram in this project's docs (see
-`docs/00_architecture.md`) is a hand-authored SVG for the same reason.
+`docs/bridge/architecture.md`) is a hand-authored SVG for the same reason.
 
 ## 4. One figure per experiment's question
 
@@ -147,7 +147,7 @@ now asserts on bar widths. The `run` -> `report` -> figures pipeline has
 been run end to end against an injected launcher for every experiment.
 
 `report` also refuses directories it must not pool
-([C5_experiment_harness.md](C5_experiment_harness.md) section 7) before
+([experiment harness](experiment_harness.md) section 7) before
 it computes anything. The live numbers, and which records they come
 from, are in [09_live_runs_and_results.md](09_live_runs_and_results.md).
 

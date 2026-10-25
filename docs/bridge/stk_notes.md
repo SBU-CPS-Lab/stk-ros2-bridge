@@ -39,7 +39,7 @@ process exits (`bridge_exit_code` in summary.json).
   automation had started stayed in validation for more than 60 s
   (results/_archive/incidents/E5_P10_free1_3186642).
 - "no scenario is open" / "expected 'ACAV_SSS1'": build the scenario
-  first ([08_deploy_runbook.md](08_deploy_runbook.md)).
+  first ([running campaigns](../acav/running_campaigns.md)).
 
 ## `stk_process` failed
 
@@ -80,7 +80,7 @@ same at the end, and "mixed" means it changed during the run.
 The twin loaded another run's config, was built from other code, or
 runs code that differs from this checkout. Rebuild the model for this
 run (automated runs always do). After a `.msg` change, also regenerate
-MATLAB's message types ([02_matlab_setup.md](02_matlab_setup.md)).
+MATLAB's message types ([MATLAB client](../matlab/client.md)).
 
 ## The run stopped printing: QuickEdit
 
@@ -107,7 +107,7 @@ this way: check Task Manager before the next run.
 segment query's NO DATA just before it) at the end of every run is
 expected: 720 s is the scenario's stop time, and STK has no
 `Attitude Segment Quaternions` data there
-([00_architecture.md](00_architecture.md) section 11). The scheduler
+([architecture](architecture.md) section 11). The scheduler
 has already written the record.
 
 ## A JSON argument arrives broken: PowerShell 5.1
@@ -125,7 +125,7 @@ in PowerShell, or the braces are parsed as a script block.
 `run_acav_campaign report` refuses a directory whose records differ in
 graphics mode, twin launch mode, how STK was started, scenario, or that
 holds a diagnostic run; the message names each group and its runs. Move
-each group to its own directory ([C5_experiment_harness.md](C5_experiment_harness.md)).
+each group to its own directory ([experiment harness](../acav/experiment_harness.md)).
 
 # Part 2: STK 12.6 findings from bring-up
 
@@ -152,7 +152,7 @@ real-time objects; see its module docstring.
 Expected on STK 12.6 -- confirmed, not a bug in your install.
 `SetCurrentUnit("AngleRate", "rad/sec")` is rejected. The bridge
 measures the actual unit at startup instead of trusting the preference
-call; see [04_frames_and_units.md](04_frames_and_units.md).
+call; see [frames and units](frames_and_units.md).
 
 ## `quaternion_ordering` validation fails with a large error (tens of degrees)
 
@@ -163,7 +163,7 @@ validation check tries both pairings automatically and reports which
 one round-trips; if BOTH fail, compare the commanded vs. read-back
 component magnitudes (sorted) -- matching magnitudes point to a real
 ordering fault, differing magnitudes point to a frame fault. See
-[04_frames_and_units.md](04_frames_and_units.md) for the full story.
+[frames and units](frames_and_units.md) for the full story.
 
 ## "could not set Look-Ahead/Look-Behind ... Candidate properties: ['Duration', ...]"
 
@@ -194,7 +194,7 @@ to match; if extending either backend, check this order against a live
 ## MATLAB: custom message errors that look like network problems
 
 Almost always a MATLAB-release / ROS-2-distro mismatch (see
-[02_matlab_setup.md](02_matlab_setup.md)'s table). Confirm your MATLAB
+[MATLAB client](../matlab/client.md)'s table). Confirm your MATLAB
 release supports Humble before debugging anything else.
 
 ## MATLAB: `ros2genmsg` fails deep inside compilation

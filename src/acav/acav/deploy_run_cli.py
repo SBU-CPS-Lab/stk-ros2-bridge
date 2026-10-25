@@ -1358,7 +1358,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--bridge-config", required=True, metavar="PATH",
                         help="stk_bridge config with barrier_participants "
                              "including matlab_twin AND acav_scheduler "
-                             "(see docs/08_deploy_runbook.md).")
+                             "(see docs/acav/running_campaigns.md).")
     parser.add_argument("--prefix", default="stk")
     parser.add_argument("--log-dir", default="")
     parser.add_argument("--bridge-connect-timeout-s", type=float,

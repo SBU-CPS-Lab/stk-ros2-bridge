@@ -39,14 +39,14 @@ The offline suite needs no ROS, STK or MATLAB; four tests are skipped
 outside a sourced ROS 2 workspace. After any code change, repeat the
 `colcon build --symlink-install` and `. install\local_setup.ps1` lines
 before the next `ros2 run`. Then
-[01_installation_windows.md](docs/01_installation_windows.md) for STK,
-[02_matlab_setup.md](docs/02_matlab_setup.md) for MATLAB, and
-[08_deploy_runbook.md](docs/08_deploy_runbook.md) to run experiments.
+[installation](docs/installation.md) for STK,
+[MATLAB client](docs/matlab/client.md) for MATLAB, and
+[running campaigns](docs/acav/running_campaigns.md) to run experiments.
 
 ## Documentation map
 
 **New to the project?** Read in this order: this page,
-[00](docs/00_architecture.md), [C1](docs/C1_case_study_spec.md),
+[00](docs/bridge/architecture.md), [C1](docs/acav/case_study.md),
 [09](docs/09_live_runs_and_results.md).
 **Reviewing the method:** 00, 05, C1, C3, C4, C5, C6.
 **Running experiments:** 01, 02, 08, then 06 when something fails.
@@ -54,21 +54,21 @@ before the next `ros2 run`. Then
 
 | Doc | Covers |
 |---|---|
-| [00_architecture.md](docs/00_architecture.md) | The framework as built: components, both execution modes step by step, sensing, actuation, health, the provenance chain, known constraints |
-| [01_installation_windows.md](docs/01_installation_windows.md) | Installing STK, ROS 2, `agi.stk12`, the workspace; first checks |
-| [02_matlab_setup.md](docs/02_matlab_setup.md) | MATLAB, message generation, manual and automated (`matlab -batch`) twin |
-| [03_message_reference.md](docs/03_message_reference.md) | Topics, services, the access-deferral prefix, `TwinStatus` fields |
-| [04_frames_and_units.md](docs/04_frames_and_units.md) | Units, quaternions, frames, the attitude command/read-back pairing |
-| [05_time_synchronization.md](docs/05_time_synchronization.md) | Lockstep and free-run as implemented: barrier, start gate, pacer, sub-stepping |
-| [06_troubleshooting.md](docs/06_troubleshooting.md) | Failed run steps and what to do; STK 12.6 findings from bring-up |
-| [07_extending_backends.md](docs/07_extending_backends.md) | Adding a backend or capability without breaking the layering |
-| [08_deploy_runbook.md](docs/08_deploy_runbook.md) | Operator manual: checklist, scenario build, one section per experiment |
+| [architecture](docs/bridge/architecture.md) | The framework as built: components, both execution modes step by step, sensing, actuation, health, the provenance chain, known constraints |
+| [installation](docs/installation.md) | Installing STK, ROS 2, `agi.stk12`, the workspace; first checks |
+| [MATLAB client](docs/matlab/client.md) | MATLAB, message generation, manual and automated (`matlab -batch`) twin |
+| [messages](docs/bridge/messages.md) | Topics, services, the access-deferral prefix, `TwinStatus` fields |
+| [frames and units](docs/bridge/frames_and_units.md) | Units, quaternions, frames, the attitude command/read-back pairing |
+| [time synchronization](docs/bridge/time_synchronization.md) | Lockstep and free-run as implemented: barrier, start gate, pacer, sub-stepping |
+| [STK notes](docs/bridge/stk_notes.md) | Failed run steps and what to do; STK 12.6 findings from bring-up |
+| [extending backends](docs/bridge/extending_backends.md) | Adding a backend or capability without breaking the layering |
+| [running campaigns](docs/acav/running_campaigns.md) | Operator manual: checklist, scenario build, one section per experiment |
 | [09_live_runs_and_results.md](docs/09_live_runs_and_results.md) | The final runs (folders, commits, record counts, checks), then the earlier live evidence as history |
-| [C1_case_study_spec.md](docs/C1_case_study_spec.md) | The ACAV claim, vehicle, scenarios, capture criterion, experiments |
-| [C3_adcs_twin.md](docs/C3_adcs_twin.md) | The twin: reference and MATLAB, modes, how it runs in each mode, tests |
-| [C4_scheduler.md](docs/C4_scheduler.md) | The two scheduling policies, access deferral, scoring |
-| [C5_experiment_harness.md](docs/C5_experiment_harness.md) | Provenance, faults, matrices, run orchestrator, campaigns, pooling rules |
-| [C6_analysis.md](docs/C6_analysis.md) | Reports, figures, E6 latency, coupling analysis |
+| [case study](docs/acav/case_study.md) | The ACAV claim, vehicle, scenarios, capture criterion, experiments |
+| [ADCS twin](docs/matlab/adcs_twin.md) | The twin: reference and MATLAB, modes, how it runs in each mode, tests |
+| [scheduler](docs/acav/scheduler.md) | The two scheduling policies, access deferral, scoring |
+| [experiment harness](docs/acav/experiment_harness.md) | Provenance, faults, matrices, run orchestrator, campaigns, pooling rules |
+| [analysis](docs/acav/analysis.md) | Reports, figures, E6 latency, coupling analysis |
 | [commit_map.md](docs/commit_map.md) | Old -> new commit hashes after the 2026-10-19 message cleanup (trees identical); results and docs written earlier cite old hashes |
 | [dev/](docs/dev/) | Engineering history and the open backlog |
 

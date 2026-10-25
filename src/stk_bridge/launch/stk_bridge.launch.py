@@ -6,7 +6,7 @@ Usage:
 
 The backend type (com/engine/connect) comes from the config file's
 `backend.type`, not from a launch argument -- deployment topology is a
-configuration concern (see docs/00_architecture.md section 2), and
+configuration concern (see docs/bridge/architecture.md section 2), and
 having two places to set it (launch arg vs config) invites them to
 disagree silently.
 """

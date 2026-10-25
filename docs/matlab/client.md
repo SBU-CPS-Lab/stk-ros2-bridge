@@ -52,7 +52,7 @@ build_acav_twin('RunConfigPath', '<this run''s .runconfig.json>')
 
 Then open the generated `acav_twin.slx` and press Play. The runner does
 not trust the keypress: it waits for the twin's barrier ack and checks
-its identity ([00_architecture.md](00_architecture.md) section 9). Each
+its identity ([architecture](../bridge/architecture.md) section 9). Each
 run needs a fresh build: the model bakes its run-config path in.
 
 ### Automated (`--twin-launch matlab-batch`)
@@ -93,13 +93,13 @@ sessions depends on its type; this was not checked on the deploy host.
 `build_acav_twin` sets Simulink pacing to `PollingRateHz` model steps
 per wall second (default 100). About 66 steps/s are achieved on the
 deploy host at 100 Hz; 200 Hz or more busy-waits. The rate is part of
-the twin identity (`... 100Hz`). See [C3_adcs_twin.md](C3_adcs_twin.md).
+the twin identity (`... 100Hz`). See [ADCS twin](adcs_twin.md).
 
 ## 6. Clock
 
 In lockstep the twin integrates one 0.1 s step per bridge step and
 acknowledges it; in free-run it integrates as many 0.1 s sub-steps as
-ScenarioTime moved ([05_time_synchronization.md](05_time_synchronization.md)).
+ScenarioTime moved ([time synchronization](../bridge/time_synchronization.md)).
 The twin takes simulation time from the bridge's ScenarioTime, never
 from the wall clock.
 

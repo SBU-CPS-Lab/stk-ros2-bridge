@@ -283,7 +283,7 @@ class AcavScenarioBuilder:
             self._report.errors.append(
                 f"{path} has no ephemeris after propagation. Every data "
                 f"provider will return zero rows and the whole study is "
-                f"unrunnable; see docs/06_troubleshooting.md.")
+                f"unrunnable; see docs/bridge/stk_notes.md.")
 
     def _set_orbital_elements(self, path: str) -> None:
         """Assign the classical elements, then check they took.

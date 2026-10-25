@@ -106,7 +106,7 @@ Three parts of `StkBackend` that later features depend on:
 ## The gRPC path (STK 12.8+, not yet needed)
 
 STK 12.6 has no gRPC remoting -- `agi.stk12` is in-process only on this
-version (see [00_architecture.md](00_architecture.md) section 3). If this project is
+version (see [architecture](architecture.md) section 3). If this project is
 ever upgraded past STK 12.8, a `grpc_backend.py` implementing the same
 `StkBackend` contract against `agi.stk12.stkengine`'s remotable
 `STKRuntime` would slot in as a fifth backend type with **zero changes**

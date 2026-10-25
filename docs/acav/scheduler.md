@@ -42,7 +42,7 @@ format before this phase. Two small additions to `stk_msgs`:
   name and its own `boresight_error_rad`.
 
 They live in `stk_msgs` rather than a new package (see
-`docs/03_message_reference.md`'s "Application-level messages" section
+`docs/bridge/messages.md`'s "Application-level messages" section
 for the reasoning) and were verified to `colcon build` cleanly and
 round-trip through `ros2 interface show` in the `humble-desktop-full`
 container.
@@ -52,7 +52,7 @@ container.
 `/acav/setpoint` — a type that carries a quaternion, and cannot carry
 the target position `adcs.twin_step`'s `targetEci` input actually
 needs. It was never exercised (the model's signal wiring has never been
-built — see `docs/C3_adcs_twin.md` section 7), so nothing had yet
+built — see `docs/matlab/adcs_twin.md` section 7), so nothing had yet
 depended on the wrong type. Fixed as part of defining this contract,
 since C4 is where it is produced.
 
@@ -103,7 +103,7 @@ message.
 Wiring port 2 fixed it. The corrected model passes diagram update on
 this same dev box, with the same `ros2genmsg` recipe as above, and on
 the deploy machine. `build_acav_twin` now fails, rather than warns,
-when diagram update fails. See `docs/C3_adcs_twin.md` section 5.
+when diagram update fails. See `docs/matlab/adcs_twin.md` section 5.
 
 **Who computes the pointing error, and why not the scheduler.** The
 twin does, in `TwinStatus.boresight_error_rad`. It already has the
@@ -188,7 +188,7 @@ For each attempted target with image epoch t_i:
    the scheduler calls the bridge's `compute_access` from the sensor to
    the target over the hold window. If the satellite's written attitude
    does not yet reach t_i, the bridge answers with the
-   `ATTITUDE_NOT_COVERED` prefix ([03_message_reference.md](03_message_reference.md));
+   `ATTITUDE_NOT_COVERED` prefix ([messages](../bridge/messages.md));
    the scheduler records the deferral and asks again on the next tick.
    In lockstep the first request is always covered.
 3. **Outcome** (`metrics.evaluate_capture`): access at t_i and the hold
@@ -202,7 +202,7 @@ target is accounted for, or after a 15 s wall grace
 (`FINALIZE_GRACE_WALL_S`). A target still unscored then is recorded
 `access_unverified` if its access was deferred because the attitude
 never reached t_i, otherwise `no_access_answer`; either makes the
-record unreportable ([C1_case_study_spec.md](C1_case_study_spec.md)
+record unreportable ([case study](case_study.md)
 section 6).
 
 **Run-level quantities** (`capture_tracking.RunAggregate`): peak momentum
@@ -219,12 +219,12 @@ and STK version as reported by the bridge, the attitude provider
 observed on BridgeStatus, scenario digest, seed and generator version,
 code version, twin identity). The run orchestrator adds the run
 conditions afterwards (graphics mode, real-time factor, MATLAB version,
-STK process); [C5_experiment_harness.md](C5_experiment_harness.md).
+STK process); [experiment harness](experiment_harness.md).
 
 ## 6. Running it
 
 The run orchestrator starts the scheduler after the twin's identity has
-been checked (`run_acav_run.py`, [08_deploy_runbook.md](08_deploy_runbook.md)).
+been checked (`run_acav_run.py`, [running campaigns](running_campaigns.md)).
 By hand:
 
 ```

@@ -12,9 +12,9 @@ in section 8.
 ## 1. One-time setup
 
 1. STK 12.6, ROS 2 Humble, Python with `agi.stk12`, Visual Studio Build
-   Tools, and the workspace build: [01_installation_windows.md](01_installation_windows.md).
+   Tools, and the workspace build: [installation](../installation.md).
 2. MATLAB R2023b with ROS Toolbox and Simulink, and the message types:
-   `setup_stk_ros` ([02_matlab_setup.md](02_matlab_setup.md)).
+   `setup_stk_ros` ([MATLAB client](../matlab/client.md)).
 3. Check the bridge against STK once:
    `python src\stk_bridge\scripts\check_environment.py --backend com`
    (STK Desktop open; it attaches, it does not start one).
@@ -91,7 +91,7 @@ Select-String -Path <dir>\<run_id>.json -Pattern '"reportable"', '"determinism_s
 ```
 
 Every step `ok` True, and `"reportable": true`. For a failed step see
-[06_troubleshooting.md](06_troubleshooting.md) Part 1.
+[STK notes](../bridge/stk_notes.md) Part 1.
 
 Outputs per run, in the campaign folder: `<run_id>.json` (the record),
 `<run_id>.runconfig.json`, `<run_id>.logs\` (summary.json, run.log,
@@ -109,7 +109,7 @@ Measured wall time per automated run (C1 section 8): lockstep about
 ### 4.1 E1: convention mismatch
 
 Purpose: what each interface-mismatch type does to the loop, and whether
-the twin's guard sees it ([C1_case_study_spec.md](C1_case_study_spec.md)
+the twin's guard sees it ([case study](case_study.md)
 section 9). Matrix per repeat: the control; frame_pairing guard on and
 guard ablated; one guard-on run per other type (`--e1-types`, default all
 six). Lockstep, reference scenario. `plan` prints
@@ -169,7 +169,7 @@ ros2 run acav run_acav_campaign report --experiment E2 --output-dir $outE2 --sce
 For the reference scenario leave out `--scenario`. `report` refuses a
 folder that mixes scenarios. Send back one folder per scenario. To
 analyse the seeds as pairs, give one folder with `--output-dir` and the
-others with `--include-dir` ([C6_analysis.md](C6_analysis.md) section 8).
+others with `--include-dir` ([analysis](analysis.md) section 8).
 For the seeded scenarios as a whole, `run-seeds` (section 8.4) does the
 builds, runs and both reports in one command.
 
@@ -289,12 +289,12 @@ python src\acav\scripts\analyze_coupling.py results\E3_rtf1_<commit>
 ```
 
 Writes `_coupling\coupling.csv` and one `.coupling.json` per run
-([C6_analysis.md](C6_analysis.md) section 7).
+([analysis](analysis.md) section 7).
 
 ## 6. Failure handling and resume
 
 - **A run failed.** Read its `summary.json` steps and `errors`
-  ([06_troubleshooting.md](06_troubleshooting.md) Part 1). Fix the cause,
+  ([STK notes](../bridge/stk_notes.md) Part 1). Fix the cause,
   then re-issue the same `run` command: completed runs are skipped, and
   every run with a failed step (MATLAB not stopping cleanly included) is
   run again. Its previous files are renamed `*.superseded-<time>`, never

@@ -45,7 +45,7 @@ def generate_launch_description() -> LaunchDescription:
         "stk_bridge is starting. Once `ros2 topic echo /stk/status` shows "
         "state: 1 (CONNECTED), start MATLAB separately and run "
         "stk_matlab/examples/example_03_lockstep_stepping.m -- see "
-        "docs/02_matlab_setup.md."
+        "docs/matlab/client.md."
     ))
 
     return LaunchDescription([reminder, bridge, diagnostics])

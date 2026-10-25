@@ -203,7 +203,7 @@ counts go to `<run>.logs/twin_loop.csv`
 **What a status reports between publishes.** Every integration step,
 sub-steps included, feeds `saturation_events` (cumulative rising edges
 of the saturation flag) and `max_boresight_error_since_last_rad`
-([03_message_reference.md](03_message_reference.md)).
+([messages](../bridge/messages.md)).
 
 **Pacing.** Simulink pacing is on at `PollingRateHz` (default 100)
 model steps per wall second (`build_acav_twin.m`). Offline on the deploy
@@ -212,7 +212,7 @@ host, 200 Hz and above made Simulink busy-wait about one core, while
 
 **Identity.** `v3 <cfg> <build> <runtime> <polling>Hz`, fixed at reset,
 published on the first ready step and then at most once per wall second
-(`acav/twin_identity.py`; [00_architecture.md](00_architecture.md)
+(`acav/twin_identity.py`; [architecture](../bridge/architecture.md)
 section 9).
 
 **Faults** (`+adcs/wheel_fault.m`): a seeded wheel fault from the run
@@ -229,7 +229,7 @@ fault and execution mode.
 ## 6. Running and testing it
 
 Runs: manual (build, open, Play) or automated (`matlab -batch
-run_twin_session`); see [02_matlab_setup.md](02_matlab_setup.md).
+run_twin_session`); see [MATLAB client](client.md).
 
 MATLAB tests in `src/stk_matlab`, each run from that folder after
 `setup_stk_ros`:
