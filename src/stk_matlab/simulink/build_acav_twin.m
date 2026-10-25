@@ -1,5 +1,5 @@
 function modelName = build_acav_twin(options)
-%BUILD_ACAV_TWIN Construct the ACAV ADCS twin as a Simulink model.
+%BUILD_ACAV_TWIN Construct the ADCS twin used by the ACAV case study.
 %
 %   build_acav_twin()
 %   build_acav_twin('ModelName', "acav_twin", 'LockstepMode', true)
@@ -14,78 +14,56 @@ function modelName = build_acav_twin(options)
 % ---------
 %   ROS2 Subscribe  /stk/<ns>/attitude     -> AttitudeState
 %   ROS2 Subscribe  /stk/<ns>/orbit        -> OrbitState
+%   ROS2 Subscribe  /stk/<ns>/angular_rate -> AngularRate
+%   ROS2 Subscribe  /stk/scenario_time     -> ScenarioTime
 %   ROS2 Subscribe  /acav/setpoint         -> stk_msgs/TargetSetpoint,
-%                                              the scheduler's guidance
-%                                              target (C4)
+%                                              the scheduler's target
 %           |
-%   Stateflow chart "MissionMode"  NADIR -> SLEW -> SETTLE -> IMAGE,
-%           |                      SAFE reachable from anywhere
-%   MATLAB Function "GuidanceControl"  -> adcs.twin_step
+%   MATLAB Function "UnpackTelemetry"  buses -> plain numerics
 %           |
-%   Reaction wheels + rigid-body dynamics (adcs.wheels,
-%   adcs.rigid_body_step) -- the twin owns integrated attitude and body
-%   rate. STK provides orbit/access and verifies attitude readback.
+%   MATLAB Function "GuidanceControl"  -> adcs.simulink_step
+%       -> adcs.twin_step: mode logic (adcs.mission_mode), guidance,
+%          control, reaction wheels and rigid-body dynamics. The twin
+%          owns the integrated attitude and body rate; STK provides
+%          orbit and access and reads the attitude back.
 %           |
 %   ROS2 Publish   /stk/cmd/attitude       -> AttitudeCommand
-%   ROS2 Publish   /acav/twin_status       -> stk_msgs/TwinStatus (mode +
-%                                              boresight error, for the
-%                                              scheduler's capture scoring
-%                                              and SAFE detection)
+%   ROS2 Publish   /acav/twin_status       -> stk_msgs/TwinStatus (mode,
+%                                              boresight error, wheels)
+%   ROS2 Publish   /acav/twin_identity     -> run config and code identity
 %   ROS2 Publish   /stk/lockstep/ack       -> the barrier ack
 %
-% Why the chart AND adcs.mission_mode
-% -----------------------------------
-% The chart is what the paper shows and what makes the model genuinely
-% hybrid. adcs.mission_mode is the same transition logic as a function,
-% which is what test_acav_twin.m can actually exercise against the
-% Python reference. They must agree; the chart's guards below are
-% written to mirror that file line for line, and any change belongs in
-% both.
+% The Stateflow chart "MissionMode" (adcs.build_mission_chart) is built
+% into the model as the specification of the mode logic and checked
+% structurally, but it is not wired into the signal path: the executed
+% mode logic is adcs.mission_mode, called from adcs.twin_step.
 %
-% Why /acav/setpoint carries a POSITION, not an attitude
+% Why /acav/setpoint carries a position, not an attitude
 % -------------------------------------------------------
 % stk_msgs/TargetSetpoint carries the target's inertial position and a
-% has_target flag -- not a quaternion. The scheduler's whole
-% contribution to E2 is WHEN it switches targets and WHETHER it
-% attempts one at all (acav/scheduling.py); the guidance law that turns
-% "point here" into a commanded attitude, accounting for this vehicle's
-% own boresight axis and a velocity-referenced roll, stays entirely in
-% adcs.twin_step. An earlier version of this file wired the SAME topic
-% to stk_msgs/AttitudeCommand, which cannot carry a target position at
-% all -- caught before anything downstream depended on it, since the
-% signal wiring below was unbuilt at the time.
+% has_target flag. A scheduler decides when to switch targets and
+% whether to attempt one at all (acav/scheduling.py); the guidance law
+% that turns "point here" into a commanded attitude, including this
+% vehicle's boresight axis and a velocity-referenced roll, stays in
+% adcs.twin_step.
 %
 % Signal wiring
 % -------------
-% Built now that ros2genmsg can run here (see docs/C4_scheduler.md
-% section 2), matching the "keep the block thin, put substance in
-% +adcs" rule guidanceControlSource() already follows: UnpackTelemetry
-% flattens the five subscribed buses into the plain numerics
-% adcs.twin_step expects; publishing goes the other way, Blank Message
-% (a stk_msgs-typed default bus) -> Bus Assignment (writes the computed
-% fields by dotted path, e.g. "orientation.x") -> Header Assignment
-% (stamps with the node's own clock, /clock-derived under use_sim_time)
-% -> Publish -- the idiom ROS Toolbox's own examples use, since a
-% MATLAB Function block can infer a bus INPUT's type from whatever is
-% wired to it but constructing a typed bus as an ordinary function
-% OUTPUT needs explicit, version-sensitive port configuration.
+% Blocks stay thin; the substance is in +adcs. UnpackTelemetry flattens
+% the subscribed buses into the numerics adcs.twin_step expects.
+% Publishing goes the other way: Blank Message (a typed default bus) ->
+% Bus Assignment (fields by dotted path, e.g. "orientation.x") ->
+% Publish, the idiom ROS Toolbox's examples use, because constructing a
+% typed bus as a MATLAB Function output needs version-sensitive port
+% configuration. Header stamps come from addStamp (see there).
 %
 % Subscribe output 1 is the boolean IsNew flag; output 2 is the Msg bus.
 % MATLAB Function inputs must consume Msg to access message fields.
 % Diagram update below is mandatory before saving a usable model.
 % GuidanceControl calls MATLAB-hosted adcs.simulink_step in Normal mode:
 % YAML/JSON loading and dynamic slew-profile state are not code-generated.
-% This model requires MATLAB during simulation; it is not a standalone target.
-%
-% Building this wiring is what exposed a real defect in adcs.twin_step,
-% since fixed: quaternionCmd was `in.quaternion` verbatim -- the same
-% value AttitudeSub had just received -- so the published command
-% equalled the last reported state every tick and nothing in the loop
-% ever integrated the computed torque. twin_step now runs the torque
-% through adcs.wheels and adcs.rigid_body_step and publishes the
-% attitude that results, and a twin_step section in the fixtures covers
-% the orchestration that previously had no counterpart in the Python
-% reference to be cross-checked against.
+% This model requires MATLAB during simulation; it is not a standalone
+% target.
 
     arguments
         options.ModelName (1,1) string = "acav_twin"
@@ -94,17 +72,14 @@ function modelName = build_acav_twin(options)
         options.LockstepMode (1,1) logical = true
         options.SampleTime (1,1) double = 0.1
         % How often the model steps, per wall second (Simulink pacing).
-        % Unpaced, Simulink steps as fast as it can and MATLAB used about
-        % one core in every mode (live runs on 72be372). Every step polls
-        % the subscribers, so the achieved period bounds the latency this
-        % adds: on average half a period per lockstep step (66-76 ms
-        % steps) and at most one period after each free-run sample
-        % (every 0.1-0.13 s at rtf 1.0). Keep it well below 200 Hz:
-        % offline on this host, 200 Hz and above made Simulink busy-wait
-        % (about one core), while 100 Hz was held to about 66 steps/s by
-        % the Windows sleep granularity and used 0.06 cores with no
-        % traffic. The value is part of the twin identity, and the
-        % default part of the code fingerprint.
+        % Unpaced, Simulink steps as fast as it can and MATLAB uses about
+        % one core. Every step polls the subscribers, so the period bounds
+        % the latency this adds: on average half a period per lockstep step
+        % and at most one period after each free-run sample. Keep it well
+        % below 200 Hz, where Simulink was measured to busy-wait; at 100 Hz
+        % the Windows sleep granularity limits it to about 66 steps/s. The
+        % value is part of the twin identity, and the default part of the
+        % code fingerprint.
         options.PollingRateHz (1,1) double {mustBePositive, mustBeFinite} = 100
         options.SetpointTopic (1,1) string = "/acav/setpoint"
         options.TwinStatusTopic (1,1) string = "/acav/twin_status"
@@ -113,11 +88,11 @@ function modelName = build_acav_twin(options)
         % starts.
         options.TwinIdentityTopic (1,1) string = "/acav/twin_identity"
         %#ok<*STRNU>
-        % Per-run gain and fault overrides (E4, E5), baked into the
+        % Per-run gain and fault overrides, baked into the
         % GuidanceControl block so the generated model carries them.
-        % Empty is the nominal vehicle, which is every other experiment.
-        % A campaign writes one of these per run next to the run's
-        % output; see adcs.config's own help for the format.
+        % Empty is the nominal vehicle. A campaign writes one of these per
+        % run next to the run's output; see adcs.config's help for the
+        % format.
         options.RunConfigPath (1,1) string = ""
     end
 
@@ -202,18 +177,14 @@ function modelName = build_acav_twin(options)
     % ROS blocks, which need generated messages. test_acav_twin asserts
     % that SAFE latches and that its guards run first.
     %
-    % Deliberately NOT wired into the signal path below. adcs.twin_step
-    % (called from GuidanceControl) already calls adcs.mission_mode
-    % directly -- the SAME transition logic as a function -- to decide
-    % state.mode, and that decision is entangled with slew-profile
-    % initialization (a mode entry into SLEW starts a new profile) in a
-    % way the chart alone does not capture. Wiring the chart in parallel
-    % would either duplicate the mode computation with no consumer, or
-    % require restructuring GuidanceControl to take the chart's mode as
-    % an input -- a control-flow change, not a wiring one. It stays here
-    % as the paper's hybrid-model figure, built and structurally checked
-    % (build_mission_chart itself; SAFE latching, guard order) but not
-    % part of the executed loop.
+    % Not wired into the signal path below. adcs.twin_step (called from
+    % GuidanceControl) calls adcs.mission_mode, the same transition logic
+    % as a function, and the mode decision is entangled with slew-profile
+    % initialization (entering SLEW starts a new profile) in a way the
+    % chart alone does not capture. Wiring the chart in would mean
+    % restructuring GuidanceControl to take the chart's mode as an input.
+    % The chart is therefore the built and checked specification (SAFE
+    % latching, guard order), not part of the executed loop.
     adcs.build_mission_chart(modelName, 'MissionMode', [270 490 470 610]);
 
     % -- unwrap ROS messages into the plain numerics twin_step expects ---
@@ -254,14 +225,9 @@ function modelName = build_acav_twin(options)
     % comes out of the block here is the DELIVERED torque, and it is
     % diagnostic: nothing downstream of this model consumes it, since
     % STK is sent an attitude and the scheduler is sent a TwinStatus.
-    % Terminate it rather than leave an unconnected output, which the
-    % diagram-update check below would otherwise flag as an error
-    % indistinguishable from a real wiring mistake. Wheel momentum,
-    % saturation and the energy integral DO reach the campaign record --
-    % they are TwinStatus fields, published below. The torque itself is
-    % not, because nothing downstream uses it: the energy integral is
-    % the quantity the study reports, and the twin computes that itself
-    % since it is the only party holding torque and rate together.
+    % It is terminated rather than left unconnected, which the
+    % diagram-update check below would flag. Wheel momentum, saturation
+    % and the energy integral reach consumers as TwinStatus fields.
     add_block('simulink/Sinks/Terminator', [modelName '/TorqueSink'], ...
         'Position', [720 40 750 60]);
     add_line(modelName, 'GuidanceControl/1', 'TorqueSink/1');
@@ -277,8 +243,8 @@ function modelName = build_acav_twin(options)
     % builds it from ICRF position, velocity and target vectors -- so the
     % bridge must write it with AddAttitude Quat, not CBFQuat. It reads
     % back through 'Attitude Quaternions' because bridge_params_acav.yaml
-    % sets actuation.default_attitude_inertial. Sent as FALSE, every
-    % command landed in STK rotated by the Earth-rotation angle.
+    % sets actuation.default_attitude_inertial. Sent as false, every
+    % command would land in STK rotated by the Earth-rotation angle.
     add_block('simulink/Sources/Constant', ...
         [modelName '/UseInertialFrame'], 'Position', [720 210 750 230], ...
         'Value', 'true', 'OutDataTypeStr', 'boolean');
@@ -320,8 +286,8 @@ function modelName = build_acav_twin(options)
     % Carries the wheel state as well as mode and pointing error, because
     % the run-level quantities acav/metrics.py reports (peak momentum,
     % saturation events, wheel energy) have no other route out of the
-    % twin -- and the scheduler must not re-derive them, for the same
-    % reason it does not re-derive the pointing error.
+    % twin; the scheduler does not re-derive them, as it does not
+    % re-derive the pointing error.
     add_block('simulink/Signal Routing/Demux', [modelName '/DemuxMomentum'], ...
         'Position', [720 250 730 310], 'Outputs', '3');
     add_line(modelName, 'GuidanceControl/5', 'DemuxMomentum/1');
@@ -397,10 +363,9 @@ function modelName = build_acav_twin(options)
 
     % -- identity out: std_msgs/String, "v3 <cfg> <build> <runtime> <Hz>" -
     % Published on the first ready step and then about once per wall
-    % second (GuidanceControl output 12, identityDue), so the run
-    % orchestrator, which subscribes after the twin acks, sees it within
-    % its 10 s wait. GuidanceControl outputs 10 and 11 are the
-    % zero-padded bytes and their length.
+    % second (GuidanceControl output 12, identityDue), so a late
+    % subscriber sees it within seconds. GuidanceControl outputs 10 and
+    % 11 are the zero-padded bytes and their length.
     identityTextBlock = [modelName '/BuildIdentityText'];
     add_block('simulink/User-Defined Functions/MATLAB Function', ...
         identityTextBlock, 'Position', [720 720 900 760]);
@@ -448,12 +413,10 @@ end
 function requireMessages()
 %REQUIREMESSAGES Fail before building anything if stk_msgs is missing.
 %
-% Without this the build dies partway through adding blocks, leaving a
-% half-constructed model open, and the error names a mask callback
-% rather than the actual problem. Observed exactly that: "Error
-% evaluating 'MaskParameterCallback' ... Unrecognized message type
-% stk_msgs/AttitudeState", which does not tell a reader to run
-% setup_stk_ros.
+% Without this the build fails partway through adding blocks, leaving a
+% half-constructed model open, with an error that names a mask callback
+% ("Error evaluating 'MaskParameterCallback' ... Unrecognized message
+% type stk_msgs/AttitudeState") instead of saying to run setup_stk_ros.
     needed = ["stk_msgs/AttitudeState", "stk_msgs/OrbitState", ...
               "stk_msgs/AngularRate", "stk_msgs/ScenarioTime", ...
               "stk_msgs/AttitudeCommand", "stk_msgs/TargetSetpoint", ...
@@ -489,7 +452,7 @@ end
 function addSubscribe(model, name, position, topic, messageType)
     block = [model '/' name];
     add_block('ros2lib/Subscribe', block, 'Position', position);
-    % ACAV lockstep requires reliable telemetry in bridge_params_acav.yaml.
+    % Lockstep uses reliable telemetry (qos.telemetry_reliability).
     % No newer step exists to replace a lost sample while the barrier waits.
     set_param(block, 'topic', topic, 'messageType', messageType, ...
         'QOSReliability', 'Reliable', 'QOSDurability', 'Volatile');
@@ -526,11 +489,9 @@ function addBlankMessage(model, name, position, messageType)
 %
 % Both 'entityType' and 'messageType' must be set. The block's mask
 % defaults both to geometry_msgs/Point; setting 'messageType' alone
-% left 'entityType' -- and so the compiled output bus -- stuck at that
-% default for std_msgs/String specifically (confirmed empirically: two
-% stk_msgs types picked up messageType alone without complaint, so this
-% is not simply a no-op parameter, just one whose propagation cannot be
-% relied on for every message name).
+% left 'entityType', and so the compiled output bus, at that default for
+% std_msgs/String (for some stk_msgs types messageType alone was
+% enough, so its propagation cannot be relied on).
     block = [model '/' name];
     add_block('ros2lib/Blank Message', block, 'Position', position);
     set_param(block, 'entityType', messageType, 'messageType', messageType);
@@ -539,8 +500,8 @@ end
 function addBusAssignment(model, name, position, dottedFields)
 %ADDBUSASSIGNMENT A Bus Assignment writing each of dottedFields, in
 % order, from its own input port. AssignedSignals accepts comma-separated
-% dotted paths into nested buses (e.g. "orientation.x") -- confirmed
-% empirically against a generated stk_msgs bus, not assumed from docs.
+% dotted paths into nested buses (e.g. "orientation.x"), checked against
+% a generated stk_msgs bus.
     block = [model '/' name];
     add_block('simulink/Signal Routing/Bus Assignment', block, ...
         'Position', position);
@@ -549,13 +510,12 @@ end
 
 function addStamp(model, name, position, messageType)
 %ADDSTAMP Stamp a message's header from the telemetry's own sim time.
-% Deliberately NOT ros2lib/Header Assignment with InsertTimeStamp: that
-% stamps with the Simulink ROS node's clock, and nothing runs that node
-% with use_sim_time, so every stamp was wall-clock time. The bridge takes
-% an AttitudeCommand's stamp as the STK sample time and the scheduler
-% takes a TwinStatus stamp as the sample's time, so a wall-clock stamp
-% put every attitude sample years outside the scenario and every status
-% sample outside every hold window -- silently, for a whole run.
+% Not ros2lib/Header Assignment with InsertTimeStamp: that stamps with
+% the Simulink ROS node's clock, which does not follow /clock, so the
+% stamps would be wall-clock time. The bridge takes an AttitudeCommand's
+% stamp as the STK sample time and the scheduler takes a TwinStatus
+% stamp as the sample's time, so a wall-clock stamp would put every
+% sample outside the scenario.
     block = [model '/' name];
     add_block('simulink/User-Defined Functions/MATLAB Function', ...
         block, 'Position', position);
@@ -588,16 +548,13 @@ end
 function source = guidanceControlSource(runConfigPath, buildFingerprint, pollingHz)
     %GUIDANCECONTROLSOURCE The block body: a thin call into +adcs.
     %
-    % Thin on purpose. Everything of substance lives in adcs.twin_step,
-    % where test_acav_twin.m can reach it; a block full of algebra is a
-    % block nothing can test.
+    % Thin on purpose: everything of substance lives in adcs.twin_step,
+    % where test_acav_twin.m can test it.
     %
     % runConfigPath is baked in as a literal rather than read from a
     % workspace variable at run time: the model is a build artifact
     % regenerated per run anyway, and a model whose behaviour depended
-    % on whatever happened to be in the base workspace would make two
-    % runs of the same .slx mean different things -- which is precisely
-    % what E3 exists to rule out.
+    % on the base workspace would make two runs of the same .slx differ.
     %
     % buildFingerprint (adcs.code_fingerprint at build time) is baked in
     % the same way, so the identity the twin publishes can show that the
@@ -642,7 +599,7 @@ function source = unpackTelemetrySource()
     %
     % Two time quantities come out, and they are deliberately different:
     %   t                 seconds since the window start -- twin_step's
-    %                     documented contract, and what E5's fault epochs
+    %                     documented contract, and what injected fault epochs
     %                     (WheelFault.at_s) are measured against. Using
     %                     absolute epoch seconds here would make every
     %                     injected fault fire on the first step.
@@ -695,7 +652,7 @@ end
 function source = buildAckTextSource()
     %BUILDACKTEXTSOURCE The lockstep ack's payload: "matlab_twin:<step>".
     % Matches the format acav_scheduler's own ack already uses
-    % ("acav_scheduler:<step_index>", see docs/C4_scheduler.md section 5)
+    % ("acav_scheduler:<step_index>", see docs/acav/scheduler.md)
     % so a log reader can tell which participant acked a given step.
     source = strjoin({
         'function msg = fcn(stepIndex, blank)'

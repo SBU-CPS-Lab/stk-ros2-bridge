@@ -1,5 +1,5 @@
 function chart = build_mission_chart(model, blockName, position)
-%BUILD_MISSION_CHART The ACAV mission-mode chart, programmatically.
+%BUILD_MISSION_CHART The twin's mission-mode chart, programmatically.
 %
 %   chart = adcs.build_mission_chart(modelName, 'MissionMode', pos)
 %
@@ -19,12 +19,16 @@ function chart = build_mission_chart(model, blockName, position)
 %
 %   * the SAFE transitions have execution order 1, so a wheel that
 %     saturates during IMAGE trips SAFE rather than being masked by an
-%     already-satisfied hold. Written the other way round the chart is
-%     correct in every nominal run and silently fails to protect the
-%     vehicle in exactly the campaign (E5) that exists to test it;
+%     already-satisfied hold. In the other order the chart behaves
+%     correctly in nominal runs and fails to protect the vehicle in
+%     fault runs;
 %   * SAFE has no outgoing transition. An ADCS that re-armed itself the
-%     instant the trip cleared would oscillate in and out and make E5's
-%     deterministic replay meaningless.
+%     instant the trip cleared would oscillate in and out of SAFE.
+%
+% The chart is the specification of the mode logic. In the twin model
+% the mode is computed by adcs.mission_mode, called from
+% adcs.twin_step; the chart is built and checked but not wired into
+% the signal path.
 
     arguments
         model (1,:) char

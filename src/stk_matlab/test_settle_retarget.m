@@ -1,4 +1,6 @@
 function test_settle_retarget()
+%TEST_SETTLE_RETARGET A target change during SETTLE starts a new slew;
+% the same target does not.
     cfg = adcs.config(); state = adcs.initial_state();
     state.mode = 'SETTLE'; state.previousTargetKey = {true,'T1'};
     in = struct('quaternion',[0 0 0 1],'omega',[0 0 0], ...

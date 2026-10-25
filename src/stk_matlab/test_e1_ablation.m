@@ -1,4 +1,9 @@
 function test_e1_ablation()
+%TEST_E1_ABLATION The read-back ablation policy is honoured only for E1.
+%
+% With attitude_mismatch_policy 'e1_readback_ablation' the adapter must
+% consume a mismatched read-back instead of stopping, and the policy
+% must be refused for any other experiment.
     path = [tempname '.json']; cleanup = onCleanup(@() delete(path));
     raw = struct('experiment','E1','attitude_provider','ECF Attitude Quaternions', ...
         'attitude_mismatch_policy','e1_readback_ablation');

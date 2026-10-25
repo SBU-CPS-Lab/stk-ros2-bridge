@@ -5,10 +5,10 @@
 % closed-loop -- if this doesn't work, nothing downstream will either.
 %
 % Prerequisites:
-%   1. stk_ros2_ws colcon-built, sourced (install/local_setup.ps1)
+%   1. the workspace colcon-built and sourced (install/local_setup.ps1)
 %   2. ros2 launch stk_bridge stk_bridge_mock.launch.py running
 %      (mock backend needs no STK -- start here before pointing at a
-%      real install; see docs/06_troubleshooting.md if this launch
+%      real install; see docs/bridge/stk_notes.md if this launch
 %      itself does not come up healthy)
 %   3. setup_stk_ros() has been run once in this MATLAB session
 

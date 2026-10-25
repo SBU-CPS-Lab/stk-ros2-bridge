@@ -5,18 +5,13 @@ function profile = slew_profile(qStart, qFinish, alpha, omegaMax)
 %   [q, w] = p.referenceAt(t)
 %
 % Triangular below the crossover angle omegaMax^2/alpha, trapezoidal
-% above; the two agree at the crossover. This is the SAME model
-% acav/slew_model.py gives the scheduler, and sharing it is what makes
-% E2's comparison meaningful -- two independently written slew models
-% would have E2 measure their disagreement rather than the effect under
-% study (see the C1 spec).
+% above; the two agree at the crossover. It is the same model
+% acav/slew_model.py gives the scheduler, so that the scheduler's
+% slew-time estimate and the twin's reference trajectory agree.
 %
-% NOTE the limits passed in are the DERATED ones
-% (TwinConfig.profile_limits): at full authority the feedforward term
-% alone demands every newton-metre the wheels have, leaving the feedback
-% loop nothing to correct tracking error with. Measured: the largest
-% scenario slew then settled 9.8 s past the analytic bound against an
-% 8 s budget.
+% The limits passed in are the derated ones (TwinConfig.profile_limits):
+% at full authority the feedforward term alone demands all the wheel
+% torque, leaving the feedback loop nothing to correct tracking error.
 %
 % Transcribed from acav/twin_reference.py::SlewProfile.
 

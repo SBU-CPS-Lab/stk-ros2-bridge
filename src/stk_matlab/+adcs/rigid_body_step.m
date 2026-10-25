@@ -6,13 +6,11 @@ function [qOut, omegaOut] = rigid_body_step(q, omega, torqueBody, ...
 %
 % Euler's equation with the wheel momentum included in the total, so
 % gyroscopic coupling through a spinning wheel is present. It is small
-% at these momenta, but omitting it would make the twin differ from a
-% real vehicle in exactly the regime E5 explores.
+% at these momenta, but matters near wheel saturation.
 %
 % RK4 rather than Euler: at 0.1 s with a 1 rad/s bandwidth, forward
-% Euler adds a slow energy drift that reads as a controller which never
-% quite settles -- which is precisely the quantity this study reports,
-% so the integrator must not contribute to it.
+% Euler adds a slow energy drift that looks like a controller which
+% never quite settles, so the integrator would distort settling time.
 %
 % inertia is [Jxx Jyy Jzz]; products of inertia are neglected, as
 % acav_scenario.yaml documents.

@@ -74,10 +74,8 @@ classdef CommandPublisher < handle
             %
             %   pub.sendAttitude(t, [qx qy qz qw]) sends via the
             %   bridge's default reference frame (see
-            %   actuation.default_attitude_inertial in bridge_params.yaml
-            %   -- CBFQuat/'fixed' unless configured otherwise; both
-            %   command forms were confirmed to round-trip at 0.0000 deg
-            %   error on a live STK 12.6 install, see docs/03...).
+            %   actuation.default_attitude_inertial in bridge_params.yaml;
+            %   CBFQuat/'fixed' unless configured otherwise).
             %
             %   pub.sendAttitude(t, q, 'FrameId', 'icrf') selects the
             %   inertial form explicitly (AddAttitude Quat).
@@ -158,10 +156,10 @@ classdef CommandPublisher < handle
             % why a custom message was not used (trivially publishable
             % from a script or shell, no codegen dependency for this one
             % topic). Call this once per step, after this iteration's
-            % control computation is complete and any resulting commands
-            % have been published -- publishing the ack BEFORE the
-            % commands would let the bridge advance past a step whose
-            % control input has not landed yet.
+            % commands have been published. ROS 2 does not order delivery
+            % across topics, so the ack can still arrive first; set
+            % time.await_attitude_commands on the bridge to make it wait
+            % for the next-step command after the barrier releases.
             arguments
                 obj
                 participantName (1,1) string
@@ -182,7 +180,7 @@ classdef CommandPublisher < handle
             % for the common case (SSS-1 -> sss_1); scenarios with
             % ambiguous namespace collisions should set object_path
             % directly on the message instead of relying on this
-            % heuristic -- see docs/03_message_reference.md.
+            % heuristic (see docs/bridge/messages.md).
             path = char("*/Satellite/" + upper(strrep(obj.Namespace, "_", "-")));
         end
     end

@@ -1,12 +1,13 @@
 function out = twin_step(in, cfg, state)
-%TWIN_STEP One guidance-and-control step of the ACAV twin.
+%TWIN_STEP One guidance, control and dynamics step of the ADCS twin.
 %
 %   out = adcs.twin_step(in, cfg, state)
 %
 % Everything the Simulink model does between reading telemetry and
-% publishing a command, in one testable function. The model is then
-% wiring: a MATLAB Function block calling this, a Stateflow chart owning
-% the mode, and ROS 2 Subscribe/Publish blocks either side.
+% publishing a command, in one testable function, including the mode
+% logic (adcs.mission_mode). The model is then wiring: a MATLAB
+% Function block calling this through adcs.simulink_step, and ROS 2
+% Subscribe/Publish blocks either side.
 %
 % Keeping the algorithm here rather than in the block means it can be
 % exercised by test_acav_twin.m against the Python reference, and that a
@@ -25,19 +26,17 @@ function out = twin_step(in, cfg, state)
 %        .enteredAt    seconds
 %        .wheelMomentum [3]
 %        .wheelEnergyJ running integral of |tau . omega|, joules
-%        .faultApplied whether E5's one-shot saturation has been applied
+%        .faultApplied whether the one-shot saturation fault has been applied
 %        .profile      [] or a struct from adcs.slew_profile
 %        .slewStarted  seconds
 %
 % out    .torque       body torque the wheels actually DELIVERED, N m --
 %                       after torque and momentum saturation, so it is
 %                       what moved the vehicle rather than what was asked
-%        .quaternionCmd the attitude to send STK -- the ACHIEVED one, not
-%                       the reference: the whole study turns on STK
-%                       computing access from what the vehicle actually
-%                       did, so publishing the reference would quietly
-%                       reinstate the perfect-pointing assumption the
-%                       paper exists to challenge.
+%        .quaternionCmd the attitude to send STK: the achieved one, not
+%                       the reference, so that STK computes access from
+%                       what the vehicle actually did rather than from
+%                       perfect pointing.
 %        .omegaNext    body rates after this step, rad/s
 %        .state        updated state: wheel momentum and the running
 %                       wheel-energy integral as well as the mode
@@ -47,34 +46,23 @@ function out = twin_step(in, cfg, state)
 %
 % Why this function integrates the dynamics
 % -----------------------------------------
-% It did not, and that was a real defect rather than a simplification:
-% quaternionCmd was `in.quaternion` returned verbatim, so the twin read
-% an attitude from STK, computed a torque, and published back the
-% attitude it had just read. Nothing anywhere integrated that torque --
-% the loop had no integrator at all, the vehicle could never slew, and
-% every capture would have been decided by wherever it already happened
-% to point. It survived C3 because this is the one function with no
-% counterpart in acav/twin_reference.py, so no fixture could see it.
-%
-% The note that justified it -- "in the closed loop STK is the truth and
-% the dynamics are bypassed" -- misread what STK does with injected
-% attitude: AddAttitude CBFQuat stores and interpolates samples, it does
-% not propagate attitude dynamics. STK is the truth for orbit, geometry
-% and access; the vehicle's attitude RESPONSE is the twin's to compute,
-% and it is computed here.
+% STK stores and interpolates injected attitude samples (AddAttitude);
+% it does not propagate attitude dynamics. STK is the truth for orbit,
+% geometry and access, while the vehicle's attitude response is the
+% twin's to compute: this function integrates the delivered torque
+% (adcs.wheels, adcs.rigid_body_step) and returns the attitude reached.
+% Its counterpart in acav/twin_reference.py is held equal by the
+% closed-loop twin_step fixtures.
 
-    % -- E5's injected fault -------------------------------------------
+    % -- injected wheel fault -------------------------------------------
     % Applied to the state going INTO this step, before the momentum
     % guard is evaluated below, so the chart trips SAFE on the very step
-    % the fault lands rather than one step later. A one-step lag would
-    % be invisible in a plot and would make the injection epoch in the
-    % record disagree with the epoch the run actually reacted to.
+    % the fault lands rather than one step later, and the injection epoch
+    % in the record is the epoch the run reacted to.
     %
     % One-shot: the wheel is filled once and ordinary physics takes over,
     % so it can still unload. Re-filling it every step would pin it at
-    % capacity forever -- a termination rather than a fault injection,
-    % which is the same reasoning behind adcs.wheels letting a saturated
-    % wheel torque back towards zero.
+    % capacity forever.
     wheelFault = [];
     if isfield(cfg, 'wheelFault')
         wheelFault = cfg.wheelFault;
@@ -190,13 +178,10 @@ function out = twin_step(in, cfg, state)
     end
 
     if strcmp(state.mode, 'SAFE')
-        % Rate damping only: -Kd * omega, no attitude term. The point of
-        % SAFE is to stop the vehicle tumbling; commanding zero torque
-        % would leave whatever rate tripped the guard exactly where it
-        % was, and E5 exists to exercise that recovery. The Python
-        % reference commanded zero here until this was reconciled --
-        % see twin_reference.control_torque, now the single place the
-        % choice is made on that side.
+        % Rate damping only: -Kd * omega, no attitude term. SAFE stops
+        % the vehicle tumbling; commanding zero torque would leave the
+        % rate that tripped the guard where it was. The Python reference
+        % makes the same choice in twin_reference.control_torque.
         torqueRequest = -cfg.kd .* in.omega(:).';
     else
         torqueRequest = adcs.tracking_torque(in.quaternion, in.omega, ...
@@ -205,9 +190,9 @@ function out = twin_step(in, cfg, state)
 
     % -- actuators, then dynamics ---------------------------------------
     % The wheels clamp the request in torque and in momentum, and only
-    % what they could absorb reaches the body. Integrating the REQUEST
-    % instead would give the vehicle authority it does not have and make
-    % E5's saturation faults invisible.
+    % what they could absorb reaches the body. Integrating the request
+    % instead would give the vehicle authority it does not have and hide
+    % saturation.
     [torque, state.wheelMomentum, wheelsSaturated] = adcs.wheels( ...
         torqueRequest, cfg.stepS, state.wheelMomentum, cfg.maxTorqueNm, ...
         cfg.momentumCapacityNms, wheelHealth);

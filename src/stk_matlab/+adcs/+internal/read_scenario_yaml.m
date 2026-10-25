@@ -1,12 +1,10 @@
 function values = read_scenario_yaml(path)
 %READ_SCENARIO_YAML Pull the twin's fields out of acav_scenario.yaml.
 %
-% Deliberately NOT a general YAML parser. MATLAB has no bundled one, and
-% adding a dependency to the deploy machine for this is not worth it.
-% What is worth it is failing loudly when a field is missing rather than
-% quietly substituting a default -- a twin running on a default inertia
-% would produce plausible, wrong results, which is the failure mode this
-% whole project is organised against.
+% Not a general YAML parser: MATLAB has none bundled, and the twin needs
+% only a few fields. It fails when a field is missing rather than
+% substituting a default, since a twin running on a default inertia
+% would produce plausible but wrong results.
 %
 % Only scalar `key: value` lines and the one inline list the twin needs
 % are understood. If the YAML grows structure this cannot follow, the

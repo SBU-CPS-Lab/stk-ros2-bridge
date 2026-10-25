@@ -3,26 +3,27 @@ function modelName = build_twin_template(options)
 % wired to the stk_bridge ROS 2 topics, using the ROS 2 Subscribe/
 % Publish/Current Time blocks.
 %
-% A .slx is not checked into source control here -- Simulink's binary
-% model format does not diff or merge usefully, so this project keeps
-% the model as REPRODUCIBLE CODE (this function) instead, matching the
-% same "config as text, not binary" principle used throughout the
-% Python side. Run this once to generate stk_twin_template.slx locally;
-% treat the .slx as a build artifact, and re-run this function (editing
-% it, not the model) when the topic set changes.
+% No .slx is kept in source control, because Simulink's binary format
+% does not diff or merge usefully; the model is reproducible code
+% (this function). Run it to generate stk_twin_template.slx locally,
+% treat the .slx as a build artifact, and edit this function, not the
+% model, when the topic set changes.
 %
 %   modelName = build_twin_template()
 %   build_twin_template('LockstepMode', false)   % free_run-friendly variant
 %
-% The generated model:
-%   ROS2 Subscribe (attitude) -> Bus Selector -> [your control law] ->
-%   Bus Assignment -> ROS2 Publish (attitude cmd) -> ROS2 Publish (ack)
+% The generated model contains the ROS 2 endpoints of a twin:
+%   ROS 2 Subscribe (attitude) -> [your control law] ->
+%   ROS 2 Publish (attitude command), plus ROS 2 Publish (lockstep ack)
 %
-% "Your control law" is a placeholder Gain block -- replace the
-% highlighted subsystem with the actual ADCS logic. See
-% examples/example_03_lockstep_stepping.m for the equivalent pure-MATLAB
-% (non-Simulink) version of this same loop, useful for validating the
-% ROS wiring before building the Simulink model.
+% "Your control law" is a placeholder block that receives the
+% Subscribe block's message output (output 2; output 1 is the boolean
+% IsNew). The model does not compile until the placeholder is replaced
+% by a bus-aware control law that fills an stk_msgs/AttitudeCommand
+% (Bus Selector -> logic -> Blank Message -> Bus Assignment).
+% simulink/build_acav_twin.m is a complete, working example of such a
+% model; examples/example_03_lockstep_stepping.m is the equivalent
+% loop in plain MATLAB, useful for checking the ROS wiring first.
 
     arguments
         options.ModelName (1,1) string = "stk_twin_template"
@@ -39,10 +40,10 @@ function modelName = build_twin_template(options)
     open_system(modelName);
 
     set_param(modelName, 'EnableSTLDoubleBuf', 'on');   %#ok<*NASGU>
-    % use_sim_time semantics: the ROS 2 Current Time block reads /clock
-    % when the model's simulation-time source is set to follow ROS time.
-    % See docs/05_time_synchronization.md for the full explanation of
-    % why this must be true whenever the bridge is in lockstep/paced mode.
+    % Some releases offer a ROS time-source model parameter; where it does
+    % not exist, stamp messages from stk/scenario_time instead of the
+    % ROS 2 Current Time block, which returns wall-clock time (see
+    % docs/bridge/time_synchronization.md).
     try
         set_param(modelName, 'ROSTimeSource', 'ROSClock'); %#ok<TRYNC>
     catch
@@ -61,11 +62,8 @@ function modelName = build_twin_template(options)
     set_param(subBlock, 'topic', [char(base) '/attitude']);
     set_param(subBlock, 'messageType', 'stk_msgs/AttitudeState');
 
-    % -- Placeholder control law: identity gain ------------------------
-    % Replace this block with the actual ADCS control law. It is wired
-    % to pass the sensed quaternion straight to the command output so
-    % the generated model is runnable (a no-op controller) rather than
-    % broken, out of the box.
+    % -- Placeholder control law ---------------------------------------
+    % Replace this block with the actual ADCS control law (see the header).
     gainBlock = [modelName '/ControlLaw_PLACEHOLDER'];
     add_block('simulink/Math Operations/Gain', gainBlock, ...
         'Position', [280 40 400 100], 'Gain', '1');
@@ -74,11 +72,6 @@ function modelName = build_twin_template(options)
     pubBlock = [modelName '/AttitudeCmdPub'];
     add_block('ros2lib/Publish', pubBlock, ...
         'Position', [440 40 620 100]);
-    set_param(pubBlock, 'topic', [char(base(1:strlength(base) - ...
-        strlength(options.Namespace) - 1)) '/cmd/attitude']); %#ok<NASGU>
-    % (The line above derives ".../stk/cmd/attitude" from the base
-    % namespace path; verify it against config/bridge_params.yaml's
-    % topic_prefix if you rename the prefix.)
     set_param(pubBlock, 'topic', sprintf('/%s/cmd/attitude', options.Prefix));
     set_param(pubBlock, 'messageType', 'stk_msgs/AttitudeCommand');
 
@@ -98,14 +91,13 @@ function modelName = build_twin_template(options)
         annotation = sprintf(['Wire a "Constant" or "MATLAB Function" ' ...
             'block producing a std_msgs/String with data = ' ...
             '"matlab_twin:<step_index>" into LockstepAckPub.\n' ...
-            'Publish the ack AFTER AttitudeCmdPub fires for this step ' ...
-            '-- see CommandPublisher.acknowledgeStep''s help text on ' ...
-            'why the ordering matters.']);
+            'Publish the ack after AttitudeCmdPub fires for this step ' ...
+            '(see CommandPublisher.acknowledgeStep).']);
         add_block('built-in/Note', [modelName '/Note1'], ...
             'Position', [440 260 900 320], 'Text', annotation);
     end
 
-    add_line(modelName, 'AttitudeSub/1', 'ControlLaw_PLACEHOLDER/1', ...
+    add_line(modelName, 'AttitudeSub/2', 'ControlLaw_PLACEHOLDER/1', ...
         'autorouting', 'on');
     add_line(modelName, 'ControlLaw_PLACEHOLDER/1', 'AttitudeCmdPub/1', ...
         'autorouting', 'on');

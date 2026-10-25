@@ -11,10 +11,9 @@ function stkName = frames(rosFrameId)
 % hot path. If you add a frame in config/frames.yaml on the bridge side,
 % add the matching entry here.
 %
-% IMPORTANT: as of STK 12.6, 'J2000' is NOT a valid Cartesian Position
-% group member on this install (confirmed against a live inventory --
-% see docs/04_frames_and_units.md). The bridge aliases it to
-% 'MeanOfEpoch'; this table matches that choice.
+% On STK 12.6 'J2000' is not a Cartesian Position group member (see
+% docs/bridge/frames_and_units.md). The bridge aliases it to
+% 'MeanOfEpoch', and this table does the same.
 
     persistent map
     if isempty(map)

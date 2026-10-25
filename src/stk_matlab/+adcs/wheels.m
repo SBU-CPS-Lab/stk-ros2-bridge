@@ -5,7 +5,7 @@ function [delivered, momentumOut, saturated] = wheels(torqueBody, dt, ...
 %   [tau, h, sat] = adcs.wheels(tauCmd, dt, h0, tauMax, hMax, health)
 %
 % Torque- and momentum-limited. The momentum limit is the one that
-% matters: it trips SAFE and it is the fault E5 injects. Saturation is a
+% matters: it trips SAFE and it is the injected saturation fault. Saturation is a
 % hard clamp, not a soft roll-off, because that makes the failure abrupt
 % and therefore detectable -- a gentle roll-off degrades pointing
 % gradually and reads as a tuning problem.
@@ -14,8 +14,8 @@ function [delivered, momentumOut, saturated] = wheels(torqueBody, dt, ...
 % sign error here makes momentum unload where it should build and the
 % SAFE trip never fires.
 %
-% health is a per-axis derate, 1 = healthy, 0 = dead. E5 drives one axis
-% to zero.
+% health is a per-axis derate, 1 = healthy, 0 = dead (a 'failure' fault
+% drives one axis to zero).
 %
 % Transcribed from acav/twin_reference.py::ReactionWheels; agreement is
 % asserted by test_acav_twin.m against generated fixtures.

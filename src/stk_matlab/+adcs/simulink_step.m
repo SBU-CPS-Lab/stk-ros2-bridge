@@ -15,10 +15,9 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
 % rate the model was built to step at (pollingHz, e.g. "100Hz"; '-' if
 % absent). The model publishes it on /acav/twin_identity when
 % identityDue: on the first ready step after a reset, then at most once
-% per wall second, for a late listener (the run orchestrator subscribes
-% after the twin acks). acav/twin_identity.py checks it.
+% per wall second, for a late listener. acav/twin_identity.py checks it.
 %
-% Free-run (run config execution_mode "free_run", E3): samples arrive at
+% Free-run (run config execution_mode "free_run"): samples arrive at
 % irregular wall-clock-driven times. With t0 the first ready sample and
 % k the steps integrated so far, a sample at t integrates
 %   n = floor((t - t0)/stepS + 1e-6) + 1 - k
@@ -30,9 +29,9 @@ function [torque, qCmd, mode, err, momentum, saturated, energy, ready, fresh, om
 % one, held samples included, while catching up -- with its position
 % and target propagated forward to tj (adcs.geometry_at). Holding one
 % sample's geometry over every sub-step instead pulses the controller's
-% reference rate and costs captures (P2c replay, results/_analysis/p2c).
-% A sample on the step grid is used as received (dt = 0), so on-grid
-% free-run equals lockstep bit for bit. The state reached, t0 + (k+n)*stepS, lies in (t, t+stepS]; the
+% reference rate and costs captures. A sample on the step grid is used
+% as received (dt = 0), so on-grid free-run equals lockstep bit for bit.
+% The state reached, t0 + (k+n)*stepS, lies in (t, t+stepS]; the
 % command is still stamped t + stepS by the model, and the difference
 % is recorded. n > 1 occurrences, the largest n and the most negative
 % stamp offset go to <run>.logs/twin_substeps.json when they change;

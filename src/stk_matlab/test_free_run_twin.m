@@ -1,5 +1,5 @@
 function test_free_run_twin()
-%TEST_FREE_RUN_TWIN Free-run ZOH sub-stepping in adcs.simulink_step (E3).
+%TEST_FREE_RUN_TWIN Free-run ZOH sub-stepping in adcs.simulink_step.
 %
 % In free-run the bridge's clock follows the wall clock, so the twin
 % receives samples at irregular times. It keeps an integer count k of

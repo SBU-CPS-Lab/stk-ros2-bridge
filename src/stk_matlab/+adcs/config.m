@@ -5,10 +5,9 @@ function cfg = config(scenarioPath, runConfigPath)
 %   cfg = adcs.config('path/to/file.yaml')
 %   cfg = adcs.config([], 'run.json')      % with per-run overrides
 %
-% The second argument is how a CAMPAIGN varies the twin between runs.
-% E4 sweeps the gains and E5 injects a wheel fault, and neither is a
-% property of the scenario -- the scenario is the same in every run of
-% both. So they arrive as a small JSON written per run by
+% The second argument is how a campaign varies the twin between runs:
+% controller gains and an injected wheel fault are not properties of
+% the scenario, so they arrive as a small JSON written per run by
 % acav/campaign_runner.py:
 %
 %   {"gains": {"natural_frequency_rad_s": 1.2,
@@ -17,20 +16,16 @@ function cfg = config(scenarioPath, runConfigPath)
 %    "fault": {"axis": 0, "at_s": 123.456, "health": 0.0,
 %              "kind": "saturation", "seed": 5}}
 %
-% Both keys are optional. The field names are the RECORD's, not this
-% struct's, because that file is written from the run record and read
-% back by it -- translating names at the boundary once is better than
-% two spellings drifting apart.
+% Both keys are optional. The field names are the run record's, not
+% this struct's, so that names are translated once, at this boundary.
 %
-% The YAML is THE contract (C1). Nothing in the twin may carry its own
-% copy of a value the scheduler also uses: a quantity that can drift
-% between them turns E2 into a measurement of their disagreement rather
-% than of the effect under study.
+% The YAML is the single source of scenario values. The twin keeps no
+% copy of a value the scheduler also uses, so the two cannot drift
+% apart.
 %
-% Values NOT in the YAML because they are the twin's own design -- the
-% control gains and the profile authority -- are set here and are the
-% quantities E4 sweeps. Their defaults were chosen by measurement, not
-% taste: see acav/twin_reference.py::TwinConfig.
+% The twin's own design values (control gains and profile authority)
+% are not in the YAML; their defaults are set here and documented in
+% acav/twin_reference.py::TwinConfig.
 
     if nargin < 1 || isempty(scenarioPath)
         here = fileparts(fileparts(mfilename('fullpath')));
@@ -61,12 +56,12 @@ function cfg = config(scenarioPath, runConfigPath)
     cfg.windowDurationS = raw.window_duration_s;
     cfg.settleEstimateS = raw.settle_estimate_s;
 
-    % -- twin design parameters (E4 sweeps these) ---------------------
+    % -- twin design parameters ---------------------------------------
     cfg.naturalFrequencyRadS = 1.0;
     cfg.dampingRatio = 0.707;
     cfg.profileAuthority = 0.8;
 
-    % -- per-run overrides (E4's gains, E5's fault) -------------------
+    % -- per-run overrides (gains, wheel fault) -----------------------
     cfg.wheelFault = [];
     cfg.attitudeMismatchPolicy = 'strict';
     % Which run config was loaded: sha256 of the exact bytes parsed, and
@@ -81,9 +76,8 @@ function cfg = config(scenarioPath, runConfigPath)
     % seconds a free-run sub-step propagates, that is metres at most.
     cfg.earthRateRadS = 7.292115e-5;
     % That rotation is right only for targets fixed to the Earth. The
-    % scenario places them on the ground (C2 creates STK ground
-    % targets), and anything else must fail here rather than be
-    % propagated as if it were.
+    % scenario places them on the ground (as STK targets), and anything
+    % else must fail here rather than be propagated as if it were.
     if ~isfield(raw, 'central_body') || ~strcmp(raw.central_body, 'Earth') || ...
             ~isfield(raw, 'target_placement') || ...
             ~strcmp(raw.target_placement, 'ground_track_relative')
@@ -107,8 +101,8 @@ function cfg = config(scenarioPath, runConfigPath)
     cfg.kd = 2 * cfg.dampingRatio * wn * cfg.inertia;
 
     % Actuator limits about the x axis: the largest inertia, and the
-    % axis every cross-track slew in this study turns about. Same call
-    % the scheduler makes.
+    % axis every cross-track slew turns about. Same call the scheduler
+    % makes.
     cfg.alphaRadS2 = cfg.maxTorqueNm / cfg.inertia(1);
     cfg.omegaMaxRadS = cfg.momentumCapacityNms / cfg.inertia(1);
     % Derated limits for the reference profile -- see slew_profile.m.
@@ -119,11 +113,9 @@ end
 function cfg = applyRunConfig(cfg, runConfigPath)
 %APPLYRUNCONFIG Merge one run's gain and fault overrides into cfg.
 %
-% Missing file is an ERROR, not a silent default. A campaign that asked
-% for a gain sweep and got the nominal gains on every point would
-% produce a perfectly flat surface and read as a finding -- and the run
-% record would claim gains the twin never used. Failing to start is the
-% cheaper outcome by a wide margin.
+% A missing file is an error, not a silent default: a run that asked
+% for overrides and silently got the nominal values would record
+% settings the twin never used.
     if ~isfile(runConfigPath)
         error('adcs:config:NoRunConfig', ...
             ['run config not found at %s. This file carries the ' ...

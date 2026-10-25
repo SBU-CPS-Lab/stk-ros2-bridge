@@ -19,7 +19,7 @@ client.waitUntilConnected(30.0);
 targetQuaternion = [0, 0, 0.3826834, 0.9238795];   % 45 deg about Z
 kp = 0.5;   % proportional gain, dimensionless per this toy law
 dt = 0.2;   % script loop period, seconds -- NOT the bridge's step_s;
-            % see docs/05_time_synchronization.md on why these differ.
+            % see docs/bridge/time_synchronization.md on why these differ.
 
 fprintf('Driving toward target quaternion [%.4f %.4f %.4f %.4f]\n', ...
     targetQuaternion);

@@ -1,13 +1,11 @@
 classdef quat
-%QUAT Quaternion algebra for the ACAV twin, in the study's conventions.
+%QUAT Quaternion algebra for the ADCS twin, in the bridge's conventions.
 %
-% A transcription of acav/attitude.py. The conventions are NOT restated
-% here as prose to be trusted -- they are fixed by fixtures generated
-% from that module and replayed by test_acav_twin.m. If this file and
-% the Python reference ever disagree, that test fails on the deploy
-% machine, which is the whole point: a sign error in quaternion algebra
-% does not crash, it flies the twin smoothly to the wrong attitude and
-% reads as a control-design finding.
+% A transcription of acav/attitude.py. The conventions are fixed by
+% fixtures generated from that module and replayed by test_acav_twin.m,
+% so that the two implementations cannot silently disagree: a sign
+% error in quaternion algebra does not crash, it steers the twin
+% smoothly to the wrong attitude.
 %
 % Conventions, all asserted by fixtures:
 %   order      [x y z w] -- vector part first, matching the bridge and
@@ -56,10 +54,9 @@ classdef quat
         function [axis, angleRad] = toAxisAngle(q)
             %TOAXISANGLE Shortest-way-round axis and angle in [0, pi].
             %
-            % The sign flip is load-bearing: q and -q are the same
-            % attitude, and a controller handed the long-way-round error
-            % slews 350 deg to reach a 10 deg target. It does arrive, so
-            % nothing looks wrong.
+            % The sign flip matters: q and -q are the same attitude, and
+            % a controller handed the long-way-round error slews 350 deg
+            % to reach a 10 deg target.
             q = adcs.quat.normalize(q);
             if q(4) < 0
                 q = -q;
@@ -114,7 +111,7 @@ classdef quat
             % footprint, so a twin settled in boresight but not in roll
             % still images the target. STK's access computation cares
             % only about the boresight, so the capture criterion must
-            % too -- scoring total attitude error would fail targets the
+            % too; scoring total attitude error would fail targets the
             % sensor actually sees.
             if nargin < 3
                 boresightBody = [0 0 1];
@@ -133,7 +130,7 @@ classdef quat
             %
             % TRIAD. primaryBody is aimed exactly at primaryInertial and
             % the secondary pair removes the remaining freedom about it.
-            % Every commanded attitude in the study is built this way.
+            % Every commanded attitude of the twin is built this way.
             pB = primaryBody(:).'  / norm(primaryBody);
             pI = primaryInertial(:).' / norm(primaryInertial);
             sB = secondaryBody(:).' / norm(secondaryBody);
@@ -155,10 +152,9 @@ classdef quat
             % B' * I has, as its rows, the body axes expressed in
             % inertial components -- which is exactly the
             % inertial-to-body matrix. No further transpose: taking one
-            % here produces the inverse rotation, which is a valid
-            % attitude pointing the boresight ~180 deg away, and nothing
-            % downstream complains. Verified against the Python
-            % reference over random geometries before shipping.
+            % here produces the inverse rotation, a valid attitude that
+            % points the boresight ~180 deg away. Checked against the
+            % Python reference over random geometries.
             B = [b1; b2; b3];
             I = [i1; i2; i3];
             q = adcs.quat.fromRotation(B.' * I);

@@ -34,10 +34,9 @@ function busInfo = stk_bus_definitions()
     elems(end+1) = makeElem('header_frame_id', 1, 'string');
     elems(end+1) = makeElem('object_path', 1, 'string');
     % Order is (x,y,z,w), matching geometry_msgs/Quaternion AND STK's
-    % Q1..Q4 (see core/conversions.py's quaternion contract) -- do not
-    % reorder to (w,x,y,z) to "match" some other convention; that would
-    % silently invert the scalar/vector convention this whole bridge was
-    % built to get right.
+    % Q1..Q4 (see core/conversions.py's quaternion contract). Do not
+    % reorder to (w,x,y,z): that silently swaps the scalar and vector
+    % parts.
     elems(end+1) = makeElem('quaternion_xyzw', 4, 'double');
     elems(end+1) = makeElem('is_extrapolated', 1, 'boolean');
     busInfo.AttitudeState = makeBus('STK_AttitudeState', elems);

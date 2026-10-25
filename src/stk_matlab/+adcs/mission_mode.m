@@ -9,16 +9,17 @@ function [modeOut, enteredAt] = mission_mode(modeIn, enteredAtIn, nowS, ...
 % against the same fixtures as everything else, and (b) the chart and
 % this agree by construction rather than by inspection.
 %
-% ORDERING IS LOAD-BEARING. The SAFE guards are evaluated FIRST and
+% Ordering matters: the SAFE guards are evaluated first and
 % unconditionally, so a wheel that saturates during IMAGE trips SAFE
-% rather than being masked by an already-satisfied hold. Written the
-% other way round the chart behaves correctly in every nominal run and
-% silently fails to protect the vehicle in exactly the campaign (E5)
-% that exists to test it.
+% rather than being masked by an already-satisfied hold.
 %
 % SAFE latches. An ADCS that re-armed the instant the trip condition
-% cleared would oscillate in and out of SAFE and make E5's deterministic
-% replay meaningless; recovery is an operator action.
+% cleared would oscillate in and out of SAFE; recovery is an operator
+% action.
+%
+% This function is what the twin executes (from adcs.twin_step); the
+% Stateflow chart built by adcs.build_mission_chart specifies the same
+% logic.
 %
 % Transcribed from acav/twin_reference.py::update_mode.
 

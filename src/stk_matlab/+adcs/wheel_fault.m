@@ -1,16 +1,14 @@
 function [health, saturates] = wheel_fault(fault, t)
-%WHEEL_FAULT The injected wheel fault's effect at time t. E5's treatment.
+%WHEEL_FAULT The injected wheel fault's effect at time t.
 %
 %   [health, saturates] = adcs.wheel_fault(fault, t)
 %
-% fault  [] for a healthy vehicle (every experiment except E5), or a
+% fault  [] for a healthy vehicle, or a
 %        struct with:
 %          .axis    0, 1 or 2 -- ZERO-BASED, because it comes straight
 %                   from the run record that acav/fault_injection.py
 %                   wrote. Converted to a MATLAB index here and nowhere
-%                   else; doing it at each use site is how one call site
-%                   ends up faulting the wrong wheel while every other
-%                   one is right.
+%                   else.
 %          .atS     seconds from the window start
 %          .health  derate applied to a FAILURE, 0 = dead
 %          .kind    'saturation' | 'failure'
@@ -22,19 +20,16 @@ function [health, saturates] = wheel_fault(fault, t)
 %            stays a pure function of (fault, t) and a replay makes the
 %            same decision at the same instant.
 %
-% The two kinds do different things, and which is which was measured
-% rather than reasoned about:
+% The two kinds behave differently (as measured with the reference):
 %
-%   'saturation'  fills the wheel to capacity. The chart's momentum
-%                 guard trips SAFE. This is what C1 section 9 specifies
-%                 for E5.
+%   'saturation'  fills the wheel to capacity. The momentum guard trips
+%                 SAFE.
 %   'failure'     derates the wheel so it delivers no torque. Pointing
-%                 collapses -- 23 deg to 178 deg over a minute in the
-%                 reference -- and NO guard fires, because the error is
+%                 degrades (23 deg to 178 deg over a minute in the
+%                 reference) and no guard fires, because the error is
 %                 about the dead axis and the controller asks the other
-%                 two wheels for almost nothing. A real gap in the
-%                 vehicle's fault detection, worth reporting as such,
-%                 but not what E5 was asked to inject.
+%                 two wheels for almost nothing: a gap in this vehicle's
+%                 fault detection.
 %
 % Transcribed from acav/fault_injection.py::WheelFault; agreement is
 % asserted by test_acav_twin.m against generated fixtures.
@@ -51,9 +46,8 @@ function [health, saturates] = wheel_fault(fault, t)
     end
 
     % Inclusive at the epoch, so a fault landing exactly on a step
-    % boundary lands ON that step rather than depending on a
-    % floating-point comparison -- the kind of one-step ambiguity that
-    % makes two supposedly identical replays diverge.
+    % boundary lands on that step rather than depending on a
+    % floating-point comparison, which could make two replays diverge.
     if t < fault.atS
         return
     end

@@ -1,10 +1,9 @@
 function state = initial_state()
 %INITIAL_STATE The twin's state at the start of a run.
 %
-% Explicit rather than implicit so that a run is reproducible: E3
-% measures determinism, and a state that inherits whatever was left in
-% the workspace from the previous run would put variance into the very
-% quantity being measured.
+% Explicit rather than implicit so that a run is reproducible: a state
+% inherited from whatever the previous run left in the workspace would
+% make repeated runs differ.
     state = struct( ...
         'mode', 'NADIR', ...
         'enteredAt', 0, ...

@@ -55,7 +55,8 @@ classdef BridgeClient < handle
             % scripts. In LOCKSTEP mode the actual command timestamp
             % that matters is the bridge's simulation time, obtained
             % from client.Telemetry's message headers or from
-            % client.Status, NOT wall time; see docs/05_time_synchronization.md.
+            % client.Status, not wall time; see
+            % docs/bridge/time_synchronization.md.
             t = posixtime(datetime('now', 'TimeZone', 'UTC'));
         end
 

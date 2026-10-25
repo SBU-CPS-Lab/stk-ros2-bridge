@@ -5,14 +5,13 @@ function torque = tracking_torque(q, omega, qRef, omegaRef, kp, kd)
 %
 %   tau = -Kp .* sign(qe_w) .* qe_v  -  Kd .* (w - wRef)
 %
-% The sign(qe_w) term is not cosmetic. Without it the controller takes
-% the long way round a 350 deg error, arrives, and reports a settling
-% time three times the model's -- and nothing in the telemetry looks
-% wrong. The feedforward lets the loop track the reference profile
-% rather than lag it, which is what keeps achieved slew times near the
-% analytic bound.
+% The sign(qe_w) term selects the short way round: without it the
+% controller can take the long way round a 350 deg error, which still
+% converges but triples the settling time. The feedforward lets the
+% loop track the reference profile rather than lag it, which keeps
+% achieved slew times near the analytic bound.
 %
-% Kp and Kd are PER AXIS. The bus inertia spans 0.041 to 0.123 kg m^2;
+% Kp and Kd are per axis. The bus inertia spans 0.041 to 0.123 kg m^2;
 % one scalar gain would make z three times faster than x and the
 % response direction-dependent for no physical reason.
 %

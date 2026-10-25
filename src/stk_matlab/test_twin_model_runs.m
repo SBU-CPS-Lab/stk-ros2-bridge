@@ -2,11 +2,11 @@ function test_twin_model_runs()
 %TEST_TWIN_MODEL_RUNS Build the Simulink twin and run it for 1 s.
 %
 % A diagram update checks the wiring, not what happens when the model
-% runs: d97800c passed it, then stopped at the first step of every live
-% run ("Class mismatch for variable 'saturationEvents'. Expected
-% 'uint32', Actual 'double'"). This runs the built model -- with no ROS
-% traffic every step is "not ready", which still calls adcs.simulink_step
-% and checks each output's class -- so such an error fails here.
+% runs; a block output of the wrong class (e.g. "Class mismatch for
+% variable 'saturationEvents'. Expected 'uint32', Actual 'double'")
+% passes it and fails only at the first step. This runs the built model:
+% with no ROS traffic every step is "not ready", which still calls
+% adcs.simulink_step and checks each output's class.
 %
 % Needs the generated stk_msgs message types (setup_stk_ros) and takes
 % about two minutes (the build).

@@ -1,4 +1,6 @@
 function test_target_rate_reset()
+%TEST_TARGET_RATE_RESET The reference-rate history is kept for the same
+% target and reset when the target changes.
     cfg = adcs.config();
     pos = [6878137 0 0]; vel = [0 7500 0]; target = [6378137 0 0];
     q = adcs.quat.align(cfg.boresightBody, (target-pos)/norm(target-pos), [1 0 0], vel);

@@ -8,22 +8,20 @@ function setup_stk_ros(varargin)
 %   setup_stk_ros('WorkspacePath', P) points at a specific colcon
 %   workspace root instead of inferring it from this file's location.
 %
-% PREREQUISITES (see docs/02_matlab_setup.md for the full walkthrough):
+% PREREQUISITES (see docs/installation.md for the full walkthrough):
 %   1. ROS Toolbox installed, MATLAB release matched to ROS 2 Humble
 %      (R2023b or R2024a -- see MathWorks' ROS Toolbox System
 %      Requirements; a mismatched distro produces custom-message
 %      failures that look like network problems, not version problems).
 %   2. On Windows, ros2genmsg needs an MSVC toolchain discoverable by
 %      MATLAB: install Visual Studio Build Tools with the "Desktop
-%      development with C++" workload FIRST. This is a real, separate
-%      prerequisite from ROS Toolbox itself and the error message if
-%      it's missing does not say "install MSVC" -- it fails deep inside
-%      message generation with a compiler-not-found error.
+%      development with C++" workload first. When it is missing,
+%      message generation fails with a compiler-not-found error that
+%      does not mention MSVC.
 %   3. ROS_DOMAIN_ID must match whatever the bridge node's ROS 2
-%      environment uses. If STK/the bridge run on Windows alongside
-%      MATLAB (topology T1, the default), this is usually automatic; for
-%      T2/T3 (bridge on Linux) set it explicitly as an environment
-%      variable before starting MATLAB.
+%      environment uses. With STK, the bridge and MATLAB on one Windows
+%      host this is usually automatic; otherwise set it as an
+%      environment variable before starting MATLAB.
 
     p = inputParser;
     addParameter(p, 'WorkspacePath', '', @ischar);
@@ -67,8 +65,7 @@ function setup_stk_ros(varargin)
     % was pointed at. colcon skips build/ and install/ by name but not
     % that one, so it then discovers stk_msgs twice and the workspace
     % build fails on a duplicate package name. A COLCON_IGNORE marker at
-    % the top of the generated tree is the standard remedy; verified
-    % against colcon on Humble.
+    % the top of the generated tree prevents that.
     msgGenRoot = fullfile(msgRoot, 'matlab_msg_gen');
     if ~isfolder(msgGenRoot)
         mkdir(msgGenRoot);
@@ -82,13 +79,10 @@ function setup_stk_ros(varargin)
     versionInfo = fullfile(genFolder, 'src', 'VersionInfo.mat');
     alreadyBuilt = isfolder(installFolder) && isfile(versionInfo);
 
-    % Existence is not enough. Editing a .msg and re-running this used
-    % to print "Setup complete" while leaving every generated class on
-    % the OLD definition -- so a Simulink model wired to a new field
-    % failed with "unable to find selected signal", naming the model
-    % rather than the stale package. Compare timestamps instead: any
-    % .msg newer than the build marker means the generated code no
-    % longer describes the messages in the tree.
+    % Existence is not enough: after a .msg edit the generated classes
+    % would keep the old definition, and a Simulink model using a new
+    % field would fail with "unable to find selected signal". Any .msg
+    % newer than the build marker therefore triggers regeneration.
     staleMsgs = {};
     if alreadyBuilt
         built = dir(versionInfo);
