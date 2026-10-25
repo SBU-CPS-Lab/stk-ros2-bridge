@@ -20,10 +20,9 @@ Static transforms
 -----------------
 The inertial-to-inertial relationships (``icrf`` -> ``mean_of_epoch``,
 etc.) are *not* published as identity. They are small but non-zero
-rotations, and publishing identity would quietly assert they are the
-same frame. Where the bridge cannot compute the true rotation it omits
-the edge, leaving the tree disconnected there -- an honest gap that
-``tf2_echo`` reports, rather than a wrong answer it does not.
+rotations, and publishing identity would assert they are the same
+frame. Where the bridge cannot compute the true rotation it omits the
+edge, leaving the tree disconnected there, which ``tf2_echo`` reports.
 """
 
 from __future__ import annotations

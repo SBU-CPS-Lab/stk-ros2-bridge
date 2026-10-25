@@ -36,7 +36,7 @@ class TestClockAdvanceTiming:
             timing.record(ms)
         assert timing.summary_line() == (
             "clock advance summary: executed 3, mean 20.0 ms, max 30.0 ms "
-            "(on the COM worker, inside E6's sense phase)")
+            "(on the COM worker, inside the sense phase)")
 
     def test_summary_line_without_samples(self):
         assert ClockAdvanceTiming().summary_line() == (
@@ -138,4 +138,4 @@ class TestReporting:
             node._log_sensing_summaries(final=True)
         assert caplog.records[-1].getMessage() == (
             "clock advance summary: executed 1, mean 8.0 ms, max 8.0 ms "
-            "(on the COM worker, inside E6's sense phase)")
+            "(on the COM worker, inside the sense phase)")

@@ -69,11 +69,11 @@ LOGGER = logging.getLogger(__name__)
 STARTUP_REPUBLISH_S = 2.0
 #: Free-run start gate: how often to check for the participants' acks.
 FREE_RUN_GATE_POLL_S = 0.05
-#: How often the step rate and E6's phase breakdown are logged.
+#: How often the step rate and the phase breakdown are logged.
 TIMING_LOG_PERIOD_S = 60.0
 #: Lockstep steps between "running" sensing summary lines. The final
-#: lines are logged at the terminal epoch: run_acav_run.py may stop the
-#: bridge before stop() runs (E6-BC-1), so stop() alone is not enough.
+#: lines are logged at the terminal epoch, because a run orchestrator
+#: may terminate the bridge before stop() runs.
 SUMMARY_EVERY_STEPS = 1000
 
 
@@ -180,12 +180,10 @@ class StkBridgeNode:
         self._step_lock = threading.Lock()
         self._loop_iterations = 0
         self._last_status_wall = 0.0
-        #: E6's latency breakdown. See core/step_timing.py for why this
-        #: is a windowed accumulator rather than a running lifetime mean.
+        #: Step latency breakdown, windowed (see core/step_timing.py).
         self._timings = PhaseTimings()
-        #: The same breakdown, summed over a longer window and written to
-        #: the log, so a run that never produces a record (it aborted, or
-        #: the scheduler failed) still leaves its step rate behind.
+        #: The same breakdown over a longer window, written to the log, so
+        #: an aborted run still leaves its step rate behind.
         self._timing_log = {"wall": time.monotonic(), "step": 0,
                             "sense": 0.0, "actuate": 0.0,
                             "barrier_wait": 0.0, "samples": 0}
@@ -196,7 +194,7 @@ class StkBridgeNode:
         self._advance_ms = (0.0, 0)
         self._clock_timing = ClockAdvanceTiming()
         #: STK's graphics state, a recorded run condition (see
-        #: core/graphics_state.py); the runner reads the file.
+        #: core/graphics_state.py).
         self._graphics_log = GraphicsLog(
             str(config.get("graphics_state_file") or ""))
         self._commanded_paths: Set[str] = set()
@@ -214,9 +212,9 @@ class StkBridgeNode:
     def start(self) -> None:
         """Connect, validate, then wire up ROS. Order is load-bearing.
 
-        Only the status publisher exists before validation, so the
-        runner sees STARTING while the bridge connects and validates;
-        commands, services and telemetry still wait for validation.
+        Only the status publisher exists before validation, so observers
+        see STARTING while the bridge connects and validates; commands,
+        services and telemetry wait for validation.
         """
         from stk_bridge.interfaces import qos as qos_module
 
@@ -263,8 +261,7 @@ class StkBridgeNode:
             self._apply_free_run_sensing_policy()
             self._scenario_stop = self._read_scenario_stop()
             # Before the interfaces exist, so before CONNECTED is
-            # published: the runner checks this sample right after
-            # bridge_connected.
+            # published.
             self._sample_graphics("startup")
             if self.sensing_config.orbit_batch_samples > 1:
                 self._attach_orbit_batch()
@@ -287,8 +284,8 @@ class StkBridgeNode:
     def _inertial_sample_written(self, path, when) -> bool:
         """Did this bridge write an inertial attitude sample for ``when``?
 
-        (B) verifies the segment provider only at such an epoch; same
-        1e-6 s match as _check_attitude_landed.
+        The combined read verifies the segment provider only at such an
+        epoch; same 1e-6 s match as _check_attitude_landed.
         """
         written = self.actuation.last_attitude(path)
         return (written is not None
@@ -346,9 +343,7 @@ class StkBridgeNode:
     def _sample_graphics(self, phase: str, index=None) -> None:
         """Record STK's graphics state (startup, running or end).
 
-        A read that fails is recorded as "unavailable" with its error,
-        which the runner refuses like any other state that is not the
-        one the run requires.
+        A read that fails is recorded as "unavailable" with its error.
         """
         log = getattr(self, "_graphics_log", None)
         if log is None:
@@ -365,7 +360,7 @@ class StkBridgeNode:
         LOGGER.info("STK graphics (%s): %s", phase, describe(entry))
 
     def _attach_orbit_batch(self) -> None:
-        """(C): lockstep only, and only with a stop time STK confirms."""
+        """Orbit batching: lockstep only, and only with a stop time STK confirms."""
         from stk_bridge.core.orbit_batch import OrbitBatch, stop_time_problem
         from stk_bridge.core.time_sync import ExecutionMode
 
@@ -420,8 +415,8 @@ class StkBridgeNode:
         self.sensing.attach_diagnostic(self._diagnostic)
         LOGGER.warning(
             "EQUIVALENCE DIAGNOSTIC ON: published values are unchanged, "
-            "but extra queries inflate every timing -- this run is not an "
-            "E6 measurement. Writing to %s (scenario stop time %s)",
+            "but extra queries inflate every timing -- this run is not a "
+            "timing measurement. Writing to %s (scenario stop time %s)",
             self.sensing_config.equivalence_diagnostic_dir, stop)
 
     def _build_interfaces(self, qos_profiles: Dict[str, object]) -> None:
@@ -477,7 +472,7 @@ class StkBridgeNode:
         """BridgeStatus STARTING, while startup is still running.
 
         The message has no field for the phase; it is in
-        startup_phases_file, which the runner reads.
+        startup_phases_file.
         """
         from stk_bridge.core.health import BridgeState
 
@@ -523,7 +518,7 @@ class StkBridgeNode:
 
         def advance(backend):
             # Timed where it executes: on the worker, ahead of this step's
-            # sensing queries -- so inside E6's sense phase. Reporting only.
+            # sensing queries, so inside the sense phase. Reporting only.
             started = time.perf_counter()
             try:
                 backend.set_current_time(when)
@@ -624,9 +619,8 @@ class StkBridgeNode:
                     for channel in required)):
                 raise LockstepCommandError(self.time_sync.step_index + 1,
                                            "required command was not accepted by STK")
-        # 2. Advance. Not one of E6's three reported phases (it is STK's
-        #    own clock update), but timed for the log: it is part of what
-        #    a step costs.
+        # 2. Advance. Not one of the three reported phases (it is STK's
+        #    own clock update), but timed for the log.
         advance_started = time.perf_counter()
         now = self.time_sync.step(step_size or None)
         total, count = self._advance_ms
@@ -641,21 +635,15 @@ class StkBridgeNode:
         self._run_rate_groups()
         self._publish_status(now)
         self._sensing_summary_checkpoint(now)
-        # 4. Wait for acknowledgement. Timed for E6, though this
-        #    iteration's wait lands in the NEXT status publish's window
-        #    -- see core/step_timing.py's module docstring for why that
-        #    one-window lag is immaterial to a multi-minute mean.
-        #    A step-1 wait that needed the startup retry is NOT recorded:
-        #    it is minutes of launch latency (a human starting MATLAB,
-        #    the scheduler's process start), and as one sample in a
-        #    ~7200-step run it would add several ms to the reported
-        #    mean barrier wait -- the order of the quantity E6 measures.
+        # 4. Wait for acknowledgement. This wait lands in the next status
+        #    window (see core/step_timing.py). A step-1 wait that needed
+        #    the startup retry is not recorded: it is launch latency (e.g.
+        #    MATLAB starting), and one such sample would bias the mean
+        #    barrier wait of a whole run by milliseconds.
         #    While waiting at step 1 for late participants, the step is
         #    republished every STARTUP_REPUBLISH_S rather than once per
-        #    barrier timeout: a participant that joins late (the
-        #    scheduler, started only once the twin acks) sees nothing
-        #    until the next republish, and at a 30 s barrier timeout that
-        #    was ~30 s of dead time per run.
+        #    barrier timeout, so a participant that joins late sees it
+        #    within seconds.
         started = time.perf_counter()
         waited_for_startup = False
         startup_wait = (
@@ -670,8 +658,8 @@ class StkBridgeNode:
             except LockstepBarrierTimeoutError as exc:
                 if not startup_wait:
                     raise
-                # Republish the SAME initial step for late joiners. Never
-                # reset the barrier or advance STK while MATLAB starts.
+                # Republish the same initial step for late joiners; never
+                # reset the barrier or advance STK while participants start.
                 waited_for_startup = True
                 wall = time.monotonic()
                 if wall - self._last_startup_log >= 30.0:
@@ -680,7 +668,7 @@ class StkBridgeNode:
                                 "participants: %s", exc)
                 self._publish_clock(now)
                 # Same epoch: replay its original samples, without COM work
-                # competing with the scheduler's startup geometry queries.
+                # competing with participants' startup queries.
                 for path, samples in getattr(self, '_startup_samples', {}).items():
                     self.publishers[path].publish_samples(samples)
                 self._publish_status(now)
@@ -698,12 +686,10 @@ class StkBridgeNode:
 
         A participant publishes its attitude command and its barrier ack
         on two topics, and ROS 2 does not order delivery across topics.
-        When the ack wins, the barrier releases, the bridge steps and
-        senses before the command lands, and STK -- holding no sample at
-        that time -- reports its BASIC attitude (nadir) instead: a jump of
-        up to 180 deg in one step. The twin then integrated from that
-        jump. On the third live run this happened on 7% of steps and spun
-        the vehicle up to ~800 deg/s. Waiting here removes the race
+        If the ack arrives first, the barrier releases and the bridge
+        steps and senses before the command lands; STK, holding no sample
+        at that time, then reports its basic attitude (for example nadir),
+        a jump of up to 180 deg in one step. Waiting here removes the race
         whatever order the two messages arrive in.
 
         Only objects that have been commanded this session are waited
@@ -735,12 +721,11 @@ class StkBridgeNode:
         """Start the clock; in free-run, held at t = 0 behind a gate.
 
         Free-run time follows the wall clock, so without the gate the
-        window ran on through the MATLAB handoff and the scheduler's
-        target resolution. With time.wait_for_startup_participants and
-        declared participants, a free-run clock starts paused at exactly
-        t = 0 and _free_gate_iteration opens it once all have acked.
-        Lockstep starts exactly as before (its own startup wait is in
-        _lockstep_iteration).
+        scenario would advance while participants are still starting. With
+        time.wait_for_startup_participants and declared participants, a
+        free-run clock starts paused at exactly t = 0 and
+        _free_gate_iteration opens it once all have acked. Lockstep has its
+        own startup wait in _lockstep_iteration.
         """
         from stk_bridge.core.time_sync import ExecutionMode
 
@@ -800,11 +785,11 @@ class StkBridgeNode:
         time.sleep(FREE_RUN_GATE_POLL_S)
 
     def _apply_free_run_sensing_policy(self) -> None:
-        """Free-run: (B) explicitly off, whatever the config says.
+        """Free-run: the combined read is off, whatever the config says.
 
-        (B) verifies only at an epoch where this bridge wrote an inertial
-        sample, which a free-run sense epoch never is, so it would stay
-        "pending" all run. Lockstep is untouched.
+        The combined read verifies only at an epoch where this bridge wrote
+        an inertial sample, which a free-run sense epoch never is, so it
+        would stay "pending" all run.
         """
         from stk_bridge.core.time_sync import ExecutionMode
 
@@ -814,7 +799,7 @@ class StkBridgeNode:
                       "inertial sample was written, which a free-run sense "
                       "epoch never is; attitude and rate are read separately")
             self.sensing.disable_combine(reason)
-            LOGGER.info("combined attitude/rate (B) is off %s", reason)
+            LOGGER.info("combined attitude/rate read is off %s", reason)
 
     def _write_startup_gate(self, record) -> None:
         self._write_json_file("startup_gate_file", record)
@@ -836,10 +821,8 @@ class StkBridgeNode:
         if gate is not None:
             self._free_gate_iteration(gate)
             return
-        # No barrier wait outside lockstep -- see BridgeStatus.msg's own
-        # field comment: step_samples tells a consumer that phase was
-        # never measured this run rather than implying a suspiciously
-        # fast zero.
+        # No barrier wait outside lockstep; BridgeStatus.step_samples
+        # tells consumers the phase was not measured.
         pacer = self._free_run_pacer()
         scheduled = (pacer.begin(self.time_sync.sim_seconds())
                      if pacer is not None else None)
@@ -848,11 +831,10 @@ class StkBridgeNode:
             self._apply_commands()
         with self._timings.timed("sense"):
             self._sense_and_publish(now)
-        # After sensing, with the same `now`: the twin steps only when the
-        # telemetry it holds is stamped with the latest ScenarioTime, so a
-        # clock published before sensing left it unable to step for a
-        # whole sensing time per cycle (E3 at rtf 1.0 on 4b26de0: 31 % of
-        # samples answered). Lockstep and the start gate keep their order.
+        # After sensing, with the same `now`: a participant that steps
+        # only when its telemetry carries the latest ScenarioTime would
+        # otherwise wait a whole sensing time per cycle. Lockstep and the
+        # start gate keep their order.
         self._publish_clock(now)
         # Marked at the cycle's scheduled start, so the slower groups keep
         # their configured rates.
@@ -873,7 +855,8 @@ class StkBridgeNode:
 
     def _free_run_pacer(self):
         """The free-run pacer at the fastest rate group's period, or None
-        when no group is enabled (then the old next-due sleep applies)."""
+        when no group is enabled (then the loop sleeps until the next
+        group is due)."""
         pacer = getattr(self, "_free_pacer", None)
         if pacer is None:
             from stk_bridge.core.free_run_pacer import FreeRunPacer
@@ -997,11 +980,11 @@ class StkBridgeNode:
         """Lockstep only: re-read fast channels that a sensing pass missed.
 
         A lockstep participant that needs all three fast channels for a
-        step (the ACAV twin does -- it waits for attitude, orbit and rate
+        step (an ADCS twin typically waits for attitude, orbit and rate
         stamped with the same step) never acks a step where one of them
-        failed to read, and the run aborts 30 s later naming the
-        participant. One retry absorbs a transient STK hiccup; a channel
-        still missing after it is reported rather than left silent.
+        failed to read, and the run aborts at the barrier timeout. One
+        retry absorbs a transient STK failure; a channel still missing
+        after it is reported.
         """
         from stk_bridge.core.time_sync import ExecutionMode
 
@@ -1042,7 +1025,7 @@ class StkBridgeNode:
         """Log the 1st, 10th, 100th, ... occurrence of one kind of problem.
 
         Enough to see that it happens and how often, without one line
-        per step for a two-hour run.
+        per step.
         """
         count = self._warn_counts.get(key, 0) + 1
         self._warn_counts[key] = count
@@ -1050,7 +1033,7 @@ class StkBridgeNode:
             LOGGER.log(level, message + " [occurrence %d]", *args, count)
 
     def _log_timing_summary(self, timings) -> None:
-        """Every TIMING_LOG_PERIOD_S, log the step rate and E6's breakdown."""
+        """Every TIMING_LOG_PERIOD_S, log the step rate and phase breakdown."""
         acc = self._timing_log
         samples = int(timings.get("step_samples", 0))
         for phase in ("sense", "actuate", "barrier_wait"):
@@ -1134,8 +1117,8 @@ class StkBridgeNode:
         self.health.update_from_sensing(self.sensing.statistics())
 
     def _run_rate_groups(self, sim_time_s=None) -> None:
-        # Lockstep passes nothing: the step's own simulation time, as
-        # before. Free-run passes its cycle's scheduled start.
+        # Lockstep passes nothing (the step's own simulation time);
+        # free-run passes its cycle's scheduled start.
         self.scheduler.run_due(
             self.time_sync.sim_seconds() if sim_time_s is None
             else sim_time_s,
@@ -1253,12 +1236,10 @@ def main(args=None) -> None:
 
     node.declare_parameter("config_file", "")
     # Do NOT declare use_sim_time here. rclpy pre-declares it for every
-    # node (confirmed on Humble: declaring it raises
-    # ParameterAlreadyDeclaredException and the node never starts), and
-    # the bridge has no use for it anyway -- it is the clock *source*,
-    # stamping every message from STK time rather than from
-    # node.get_clock(). It is the downstream consumers that need
-    # use_sim_time, and the launch files set it for them.
+    # node (on Humble declaring it raises
+    # ParameterAlreadyDeclaredException), and the bridge does not need
+    # it: it is the clock source and stamps every message from STK time.
+    # Downstream consumers need use_sim_time; the launch files set it.
 
     config_path = node.get_parameter("config_file").value
     config = load_config(config_path)

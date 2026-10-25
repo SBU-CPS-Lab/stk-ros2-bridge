@@ -1,24 +1,22 @@
-"""STK's graphics state during a run, as a recorded run condition.
+"""STK's graphics state during a run, recorded as a run condition.
 
-STK's 2D and 3D Graphics windows redraw on every lockstep step. On
-2026-10-15 (code f2f5746) closing every one of them and minimising STK
-cut an E6 step from 120.3 to 70.2 ms with an identical determinism
-signature, so timing from runs in different graphics states must never
-be pooled.
+STK's 2D and 3D Graphics windows redraw on every lockstep step. Closing
+all of them and minimising STK was measured to reduce a lockstep step
+from about 120 ms to 70 ms with identical results, so timings from runs
+in different graphics states should not be pooled.
 
-A state is read from STK Desktop through documented, read-only calls
-(ComBackend.graphics_state):
+The state is read from STK Desktop through documented, read-only calls
+(``ComBackend.graphics_state``)::
 
     {"windows_2d": int, "windows_3d": int,
      "main_window": "minimized" | "normal" | "maximized", "visible": bool}
 
-"off" is exactly the measured condition -- no 2D window, no 3D window and
-the main window minimised; which of those matters was not separated.
+"off" means no 2D window, no 3D window and the main window minimised.
 Anything else is "on"; no state at all is "unavailable".
 
-The bridge samples at startup, every SUMMARY_EVERY_STEPS steps and at
-the terminal epoch, and rewrites the file after each sample (GraphicsLog);
-the run orchestrator reads it (summarize).
+The bridge samples at startup, every ``SUMMARY_EVERY_STEPS`` steps and at
+the terminal epoch, and rewrites the file after each sample
+(``GraphicsLog``); a run orchestrator reads it with ``summarize``.
 """
 
 import json

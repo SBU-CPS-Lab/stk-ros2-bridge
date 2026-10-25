@@ -4,30 +4,29 @@ Implements the full :class:`~stk_bridge.backends.base.StkBackend` contract
 against a two-body Kepler propagator and an in-memory object store, so
 that:
 
-* CI can exercise ``core/`` and ``interfaces/`` end to end without STK.
-* Phases 3-5 can be developed and demonstrated before an STK install is
-  available.
-* The lockstep/time-sync logic can be tested deterministically, which is
-  effectively impossible against a real STK where timing varies run to run.
-* Bugs can be triaged as "bridge logic" versus "STK interaction" by
-  swapping the backend and re-running.
+* tests can exercise ``core/`` and ``interfaces/`` end to end without STK;
+* the lockstep and time-sync logic can be tested deterministically;
+* a problem can be attributed to bridge logic or to STK by swapping the
+  backend and re-running.
 
-It deliberately reproduces STK's awkward behaviours rather than an
-idealised interface, because those are what the rest of the bridge must
-cope with:
+It reproduces STK's awkward behaviours rather than an idealised
+interface, because those are what the rest of the bridge must cope with
+(a mock kinder than STK lets tests pass that the real system fails):
 
-* ``set_position`` and ``add_attitude_*`` are append-only and *silently
-  drop* non-monotonic samples, exactly as STK does. The mock counts the
-  drops so tests can assert that ``core/actuation.py``'s guard caught
-  them first.
-* ``add_attitude_angular_velocity`` refuses (raises) unless at least one
-  attitude sample already exists for the object, mirroring the documented
-  NACK.
-* Grouped data providers require a ``group_element``, and omitting it
-  raises the same ``QueryError`` the COM backend raises.
+* ``add_attitude_quaternion`` rejects non-monotonic samples, as STK 12.6
+  does; ``set_position`` drops and counts them, so tests can assert that
+  ``core/actuation.py``'s guard caught them first.
+* Switching to the RealTime propagator discards the analytic ephemeris.
+* Past the newest real-time attitude sample the basic attitude is
+  reported, not the last sample.
+* ``add_attitude_angular_velocity`` refuses unless an attitude sample
+  already exists for the object, as the Connect command does.
+* Grouped data providers require a ``group_element``.
+* Arbitrary Connect commands are acknowledged without effect.
+* Unplaced static objects have no position.
 
-Defaults model **SSS-1** in a nominal sun-synchronous LEO so that a fresh
-mock scenario is immediately useful for ADCS work.
+The defaults model a satellite named SSS-1 in a ~500 km sun-synchronous
+LEO.
 """
 
 from __future__ import annotations
@@ -65,10 +64,8 @@ MU_EARTH = 3.986004418e14
 #: Equatorial radius, m.
 R_EARTH = 6378137.0
 
-#: SSS-1 nominal orbit. A ~500 km sun-synchronous circular LEO, which is
-#: the regime the ADCS twin is being designed for. Values are
-#: placeholders for scenario bring-up, not published elements -- replace
-#: with the real TLE in config/scenario_defaults.yaml.
+#: Default orbit: a ~500 km sun-synchronous circular LEO. Placeholder
+#: elements for development, not a published orbit.
 SSS1_DEFAULTS = {
     "semi_major_axis_m": R_EARTH + 500_000.0,
     "eccentricity": 0.0,
@@ -103,8 +100,7 @@ class _MockObject:
     #: that gives them a position at all.
     geodetic: Optional[Tuple[float, float, float]] = None
     #: Conic half-angle in radians once set. None means the sensor is
-    #: still at STK's wide default -- which is a real state, not an
-    #: error, and one the verifier has to be able to detect.
+    #: still at STK's wide default, a state callers must be able to detect.
     cone_half_angle_rad: Optional[float] = None
     #: ("terrain"|"constant", value) once a mask is applied.
     az_el_mask: Optional[Tuple[str, float]] = None
@@ -220,17 +216,11 @@ class MockBackend(StkBackend):
     def _has_position_ephemeris_at(self, obj: _MockObject, when: float) -> bool:
         """Does this object have POSITION ephemeris covering ``when``?
 
-        Reproduces the behaviour that broke Phase 3 bring-up on a real
-        STK 12.6 install: switching a satellite to the **RealTime orbit
+        Reproduces STK 12.6: switching a satellite to the **RealTime orbit
         propagator discards its analytic ephemeris**. The object then has
-        data only within Look-Behind..Look-Ahead of the samples actually
-        injected, so a query at scenario epoch -- before any sample --
-        returns zero rows rather than an extrapolated state.
-
-        Without this, the mock silently propagates a Kepler orbit for a
-        real-time object and every test passes while the real system
-        fails. A mock that is kinder than production is worse than no
-        mock at all.
+        data only within Look-Behind..Look-Ahead of the injected samples,
+        so a query at the scenario epoch, before any sample, returns zero
+        rows rather than an extrapolated state.
         """
         if obj.propagator != PropagatorType.REALTIME.value:
             return True
@@ -243,22 +233,12 @@ class MockBackend(StkBackend):
     def _has_attitude_ephemeris_at(self, obj: _MockObject, when: float) -> bool:
         """Does this object have ATTITUDE data covering ``when``?
 
-        Deliberately INDEPENDENT of :meth:`_has_position_ephemeris_at`.
-        Real-time orbit (``SetPropagator RealTime``) and real-time
-        attitude (``SetAttitude Standard``) are separate STK channels --
-        see stk_msgs/AttitudeCommand.msg's docstring, present since
-        Phase 1. An object can have real-time attitude with the ORBIT
-        still on a normal propagator, or vice versa, and a satellite
-        whose attitude channel is active but has received no position
-        samples must still report attitude, not an empty result borrowed
-        from the wrong channel's coverage.
-
-        This split was added after exactly that cross-contamination
-        produced a failing integration test: an object prepared for
-        real-time control (orbit switched to RealTime, attitude enabled)
-        that received only attitude commands reported NO attitude data,
-        because the single shared coverage check was keyed off position
-        samples that were never sent.
+        Independent of :meth:`_has_position_ephemeris_at`: real-time orbit
+        (``SetPropagator RealTime``) and real-time attitude (``SetAttitude
+        Standard``) are separate STK channels. An object can have
+        real-time attitude while its orbit stays on a normal propagator,
+        or the reverse, and must still report attitude when it has
+        received no position samples.
         """
         if not obj.realtime_attitude_enabled:
             return True
@@ -347,15 +327,10 @@ class MockBackend(StkBackend):
         """ECI->ECF rotation about z at ``when``. Quaternion (x,y,z,w).
 
         The Earth Rotation Angle (IERS 2010) at ``when`` as UTC -- no
-        precession or nutation, which is irrelevant here. What matters is
-        that the ANGLE is realistic from the first second of a scenario,
-        because that is what makes a frame mis-pairing visible. An
-        earlier version started the angle at zero at the scenario epoch,
-        so pairing an Earth-fixed attitude with an inertial read-back
-        cost 0.04 deg after 10 s and ~3 deg after a 12-minute run, while
-        on real STK it was ~100 deg from the first step -- which is how
-        the ACAV loop ran commanding in one frame and reading in the
-        other without a single offline test noticing.
+        precession or nutation, which do not matter here. The angle is
+        realistic from the first second of a scenario (not zero at its
+        epoch), so that pairing an Earth-fixed attitude with an inertial
+        read-back is wrong by tens of degrees offline, as it is on STK.
         """
         julian_ut1 = when / 86400.0 + 2440587.5
         turns = 0.7790572732640 + 1.00273781191135448 * (julian_ut1 - 2451545.0)
@@ -377,11 +352,9 @@ class MockBackend(StkBackend):
             return (0.0, 0.0, 0.0, 1.0)
         stamp, quaternion, was_inertial = max(candidates, key=lambda s: s[0])
         if when - obj.attitude_samples[-1][0] > 1e-6:
-            # PAST the newest real-time sample, STK 12.6 does not hold it:
-            # on the third live run it reported its basic attitude instead
-            # (228 of 265 such reads; the other 37 held the last sample).
-            # A mock that held it made a missing command harmless offline,
-            # while live it was a jump of up to 180 deg.
+            # Past the newest real-time sample STK 12.6 mostly reports the
+            # object's basic attitude rather than holding the last sample,
+            # so a missing command is a large jump, not a harmless hold.
             return (0.0, 0.0, 0.0, 1.0)
         if was_inertial == inertial:
             return quaternion
@@ -434,12 +407,10 @@ class MockBackend(StkBackend):
         if name == "attitude segment quaternions":
             return self._columns(query, times, self._segment_columns(obj),
                                  coverage=self._has_attitude_ephemeris_at)
-        # NOTE: deliberately absent. A live STK 12.6 inventory has NO
-        # "Body Axes Angular Velocity" provider -- body rates come from
-        # "Attitude Segment Quaternions" instead. Serving a provider real
-        # STK lacks would let the discovery path pass here and fail
-        # there, which is the whole failure mode this mock exists to
-        # prevent.
+        # No "Body Axes Angular Velocity" provider: STK 12.6 has none,
+        # body rates come from "Attitude Segment Quaternions". Serving
+        # a provider STK lacks would let provider discovery pass here
+        # and fail on STK.
         if name == "lla state":
             self._require_group(query, {"Fixed", "Detic"})
             return self._columns(query, times, self._lla_columns(obj),
@@ -537,17 +508,10 @@ class MockBackend(StkBackend):
                            ) -> Tuple[float, float, float]:
         """Rotate a Fixed-frame vector to inertial if that was requested.
 
-        Placed (geodetic) objects -- targets, facilities -- are static
-        only in the Fixed frame; their inertial position is
-        time-varying because the Earth rotates under them. Without this,
-        a "Cartesian Position/ICRF" query on a target returned the same
-        frozen value a "Fixed" query would, which is a plausible-looking
-        wrong answer for exactly the class of caller (a scheduler
-        computing an inertial line of sight to a ground target) this
-        mock exists to support developing against. Reuses the SAME
-        Earth-rotation model already applied to attitude in
-        ``_attitude_at``, for the same reason: fidelity does not matter
-        here, only that it is non-identity and time-varying.
+        Placed (geodetic) objects such as targets and facilities are
+        static only in the Fixed frame; their inertial position changes
+        as the Earth rotates. Uses the same Earth-rotation model as
+        ``_attitude_at``.
         """
         if not group_element or group_element.strip().lower() == "fixed":
             return fixed
@@ -582,14 +546,10 @@ class MockBackend(StkBackend):
     def _require_positionable(obj: _MockObject, provider: str) -> None:
         """Refuse to invent a position for an unplaced static object.
 
-        Without this the orbit propagator answers for anything, so an
-        unplaced target reports the SATELLITE's position -- a plausible
-        answer for the wrong object, which is the exact class of silent
-        wrongness this mock exists to expose rather than imitate.
-
-        Applies to every position provider, not just LLA State: a caller
-        that falls back from one provider to another must not find the
-        second one more accommodating than the first.
+        Without this check an unplaced target would report a propagated
+        orbit, a plausible answer for the wrong object. Applies to every
+        position provider, so a caller falling back from one provider to
+        another gets the same refusal.
         """
         if obj.object_type == "Satellite" or obj.geodetic is not None:
             return
@@ -630,10 +590,8 @@ class MockBackend(StkBackend):
     def list_data_providers(self, object_path: str) -> Dict[str, List[str]]:
         """Advertise exactly the providers query_data_provider implements.
 
-        Kept deliberately in sync with the dispatch table in
-        :meth:`query_data_provider`: a mock that claims providers it
-        cannot serve would let a discovery bug pass tests and fail only
-        against real STK.
+        Kept in sync with the dispatch table in :meth:`query_data_provider`,
+        so that provider discovery behaves as it does on STK.
         """
         self._obj(object_path)
         frames = ["TrueOfDateRotating", "Fixed", "ICRF", "MeanOfDate",
@@ -709,9 +667,8 @@ class MockBackend(StkBackend):
         obj = self._obj(object_path)
         stamp = when.epoch_seconds
         if obj.position_samples and stamp <= obj.position_samples[-1][0]:
-            # Silent drop, exactly as STK does. core/actuation.py should
-            # have caught this before it ever reached a backend; the
-            # counter lets tests prove that it did.
+            # Dropped and counted. core/actuation.py should catch this
+            # before it reaches a backend; the counter lets tests check.
             obj.dropped_positions += 1
             return
         obj.position_samples.append((stamp, position_m))
@@ -767,8 +724,7 @@ class MockBackend(StkBackend):
                                f"quaternion is not unit-norm (|q|={norm:.6f})")
         stamp = when.epoch_seconds
         if obj.attitude_samples and stamp <= obj.attitude_samples[-1][0]:
-            # STK 12.6 NACKs this rather than dropping silently (confirmed
-            # on a live install), so raise instead of counting quietly.
+            # STK 12.6 rejects (NACKs) a non-monotonic attitude sample.
             obj.dropped_attitudes += 1
             raise CommandError(
                 "AddAttitude", object_path,
@@ -806,18 +762,14 @@ class MockBackend(StkBackend):
                         timeout_s: Optional[float] = None) -> ConnectResponse:
         """Accept anything, echo it back, change almost nothing.
 
-        Returning ACK for arbitrary commands is intentional, and is
-        itself one of STK's behaviours worth reproducing: an ACK means
-        the command parsed, never that it had an effect. Anything that
-        checks whether a Connect command *worked* must measure the
-        result, not read the return value.
+        Acknowledging arbitrary commands reproduces an STK behaviour: an
+        ACK means the command parsed, not that it had an effect. Code that
+        needs to know whether a Connect command worked must measure the
+        result.
 
-        The single exception is ``SetPosition ... Geodetic``, which is
-        interpreted rather than merely acknowledged. Static objects have
-        no other way to acquire a position, so without this a target's
-        placement could not be read back and verified offline at all --
-        and the round-trip through a stored position is what catches an
-        argument-order or angle-unit error in the caller.
+        The exception is ``SetPosition ... Geodetic``, which is
+        interpreted, because static objects have no other way to acquire
+        a position and their placement must be readable offline.
         """
         self._maybe_set_geodetic(command)
         return ConnectResponse(command=command, ack=True,
@@ -827,11 +779,9 @@ class MockBackend(StkBackend):
     def _maybe_set_geodetic(self, command: str) -> None:
         """Interpret `SetPosition <path> Geodetic <lat> <lon> <alt>`.
 
-        Values are taken as radians and metres, matching the SI unit
-        contract the backends declare. A caller passing degrees is
-        therefore stored as degrees-interpreted-as-radians and reads
-        back somewhere absurd -- which is what real STK does too, and
-        what the verifier's placement check is looking for.
+        The mock takes the values as radians and metres. STK 12.6 consumes
+        degrees for this command, so callers measure the angle unit
+        instead of assuming it (see ``acav/stk_queries.py``).
         """
         tokens = command.split()
         if len(tokens) < 6 or tokens[0].lower() != "setposition":
@@ -861,9 +811,8 @@ def _geodetic_to_ecef(latitude_rad: float, longitude_rad: float,
                       altitude_m: float) -> Tuple[float, float, float]:
     """WGS84 geodetic to Earth-fixed Cartesian, metres.
 
-    The inverse of what acav/stk_queries.py does when it falls back from
-    LLA State to Cartesian Position. Both directions have to exist here
-    or that fallback path is untested against anything.
+    Lets a caller that reads a placed object's Cartesian position (for
+    example as a fallback from LLA State) be tested against the mock.
     """
     f = 1.0 / 298.257223563
     e2 = f * (2.0 - f)

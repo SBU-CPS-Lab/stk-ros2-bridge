@@ -29,11 +29,8 @@ def generate_launch_description() -> LaunchDescription:
     with open(base_config_path) as handle:
         config = yaml.safe_load(handle)
 
-    # Override just the backend selection and the validation-fatal set
-    # that assumes a real STK's exact behaviour (e.g. STK 12.6 NACKing
-    # out-of-order attitude, which the mock also does -- see
-    # mock_backend.py -- but future scenario tweaks should not have to
-    # remember to keep both in sync).
+    # Override only the backend selection and the validation checks that
+    # assume a real STK's exact behaviour.
     config["backend"] = {"type": "mock",
                          "mock": {"satellite_name": "SSS-1"}}
     config["scenario"]["scenario_path"] = ""

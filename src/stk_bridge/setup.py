@@ -20,17 +20,16 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="Your Name",
-    maintainer_email="you@example.org",
+    maintainer="Mohammadamin Alizadeh",
+    maintainer_email="mohammada.alizadeh@mail.sbu.ac.ir",
     description=(
-        "Bidirectional ROS 2 bridge for AGI/Ansys STK 12.6, driving a "
-        "MATLAB/Simulink satellite digital twin."
+        "Bidirectional ROS 2 bridge for AGI/Ansys STK 12.6 with "
+        "free-run, paced and lockstep execution."
     ),
-    license="Apache-2.0",
+    license="MIT",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            # Phase 5 populates nodes/*.py with the classes referenced here.
             "bridge_node = stk_bridge.nodes.bridge_node:main",
             "clock_node = stk_bridge.nodes.clock_node:main",
             "diagnostics_node = stk_bridge.nodes.diagnostics_node:main",

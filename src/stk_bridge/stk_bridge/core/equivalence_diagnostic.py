@@ -2,22 +2,22 @@
 
 Observes, never changes what is published. At each lockstep step it
 compares, at the same epoch, the values the sensing loop just read with
-the values two proposed optimisations would use instead
-(``docs/dev/phase1_e6_impact_analysis.md`` sections 2, 4 and 9):
+the values the two read optimisations would use instead:
 
-* (B) the quaternion columns of the 'Attitude Segment Quaternions'
-  result the rate read already fetched, against 'Attitude Quaternions'
-  -- no extra query;
-* (C) the row for this epoch from an orbit block (two interval queries
-  per block of ``block_samples`` epochs, :mod:`core.orbit_block`),
-  against the instantaneous position and velocity.
+* the combined attitude/rate read: the quaternion columns of the
+  'Attitude Segment Quaternions' result the rate read already fetched,
+  against 'Attitude Quaternions' (no extra query);
+* orbit batching: the row for this epoch from an orbit block (two
+  interval queries per block of ``block_samples`` epochs,
+  :mod:`core.orbit_block`), against the instantaneous position and
+  velocity.
 
-One JSON line per step goes to ``equivalence_diagnostic.jsonl``; a
+One JSON line per step goes to ``equivalence_diagnostic.jsonl`` and a
 summary (max, mean, count, exact zeros, first epoch over each tolerance)
 to ``equivalence_diagnostic_summary.json``, rewritten every block and at
-the terminal epoch because the run owner may hard-terminate the bridge.
-The extra queries and file writes inflate the bridge's timings: a run
-with the diagnostic on is never an E6 measurement.
+the terminal epoch in case the bridge is terminated. The extra queries
+and file writes inflate the bridge's timings, so runs with the diagnostic
+on are not timing measurements.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from stk_bridge.core.orbit_block import (
 
 LOGGER = logging.getLogger(__name__)
 
-#: The agreed bar for "no change in results" (analysis, decision Q6).
+#: The bar for "no change in results".
 TOLERANCES = {"angle_rad": 1e-12, "dr_m": 1e-6, "dv_mps": 1e-9}
 
 JSONL_NAME = "equivalence_diagnostic.jsonl"
@@ -96,7 +96,7 @@ class _Metric:
 
 
 class EquivalenceDiagnostic:
-    """Per-step comparison of the current sensing path with (B) and (C)."""
+    """Per-step comparison of the current reads with the optimised ones."""
 
     def __init__(self, output_dir: str, epoch: StkTime,
                  stop_time: Optional[StkTime], step_s: float,
@@ -104,8 +104,7 @@ class EquivalenceDiagnostic:
         if not output_dir:
             raise ValueError(
                 "sensing.equivalence_diagnostic needs "
-                "sensing.equivalence_diagnostic_dir (run_acav_run.py sets "
-                "it to the run's log directory)")
+                "sensing.equivalence_diagnostic_dir")
         os.makedirs(output_dir, exist_ok=True)
         self._dir = output_dir
         self._epoch = epoch
@@ -225,7 +224,7 @@ class EquivalenceDiagnostic:
         return {
             "equivalence_diagnostic": True,
             "note": ("diagnostic run: timings are inflated by the extra "
-                     "queries and file writes; never an E6 measurement"),
+                     "queries and file writes; not a timing measurement"),
             "tolerances": dict(TOLERANCES),
             "block_samples": self._block_samples,
             "stop_time_utcg": (proto.format_utcg(self._stop)

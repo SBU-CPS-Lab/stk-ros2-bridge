@@ -6,8 +6,8 @@
 #
 # Every section here has a matching *_config.from_config() in core/ --
 # see that module's docstring for the authoritative meaning of each key.
-# This file documents the OPERATIONAL choices for the SSS-1 digital twin;
-# it does not repeat design rationale already in the source.
+# This file documents operational choices for an example satellite
+# (SSS-1); it does not repeat design rationale already in the source.
 
 topic_prefix: stk
 log_level: INFO
@@ -60,7 +60,7 @@ scenario:
 
 # ---------------------------------------------------------------------------
 # Startup convention validation. See core/validation.py.
-# Do not disable in production -- see that module's docstring for why.
+# Do not disable for real runs; see that module's docstring.
 # ---------------------------------------------------------------------------
 validation:
   enabled: true
@@ -88,12 +88,12 @@ sensing:
   enable_link_budget: false
   access_pairs: []
   # Opt-in, observe-only comparison of the current reads with the
-  # proposed optimisations (core/equivalence_diagnostic.py). It
-  # inflates every timing; enable it only in a per-run copy.
+  # optimised reads (core/equivalence_diagnostic.py). It inflates every
+  # timing; enable it only for a diagnostic run.
   equivalence_diagnostic: false
-  # (B) Off in the generic bridge. See core/sensing.py.
+  # Combined attitude/rate read; off by default. See core/sensing.py.
   combine_attitude_rate: false
-  # (C) Orbit batching off in the generic bridge (1 = disabled).
+  # Orbit batching; off by default (1 = disabled). See core/orbit_batch.py.
   orbit_batch_samples: 1
   # rate_groups: see sensing_pipeline.yaml (merged at load time by anyone
   # consuming both files; the bridge node reads rate_groups from here too
@@ -107,11 +107,10 @@ sensing:
 # Actuation. See core/actuation.py.
 # ---------------------------------------------------------------------------
 actuation:
-  # false: AddAttitude CBFQuat (central-body-fixed). Confirmed against a
-  # live STK 12.6 install to round-trip correctly via the
-  # 'ECF Attitude Quaternions' provider. Flip to true to use the inertial
-  # pair (AddAttitude Quat / 'Attitude Quaternions') instead -- both were
-  # confirmed to round-trip at 0.0000 deg error on validation.
+  # false: AddAttitude CBFQuat (central-body-fixed), read back through
+  # 'ECF Attitude Quaternions'. true: the inertial pair (AddAttitude Quat /
+  # 'Attitude Quaternions'). Both round-trip exactly on STK 12.6; startup
+  # validation selects the read-back provider that matches this setting.
   default_attitude_inertial: false
   coalesce: true
 

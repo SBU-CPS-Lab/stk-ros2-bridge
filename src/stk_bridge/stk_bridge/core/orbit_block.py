@@ -1,10 +1,9 @@
 """Read a block of orbit states with two interval queries, and validate it.
 
-The equivalence diagnostic uses this to compare interval reads with the
-instantaneous reads the sensing loop makes; HPOP orbit batching (C) is to
-reuse it unchanged. It never interpolates or propagates: every row is
-STK's own, and the block is only usable if STK returned exactly the
-requested epochs.
+Used by orbit batching and by the equivalence diagnostic, which compares
+interval reads with the instantaneous reads the sensing loop makes. It
+never interpolates or propagates: every row is STK's own, and a block is
+usable only if STK returned exactly the requested epochs.
 
 The epoch grid
 --------------
@@ -13,8 +12,8 @@ Lockstep time is ``epoch + sim_time`` with ``sim_time += step`` each step
 millisecond (``connect_protocol.format_utcg``). A block therefore names
 its epochs by millisecond (:func:`epoch_ms`), and a row belongs to a
 step when both name the same millisecond. Blocks never contain an epoch
-at or after the scenario stop time: the terminal epoch is read
-instantaneously, as it is today.
+at or after the scenario stop time; the terminal epoch is read
+instantaneously.
 """
 
 from __future__ import annotations
@@ -134,7 +133,7 @@ def read_orbit_block(backend: StkBackend, object_path: str, frame: str,
 
     ``epochs`` is a :func:`block_epochs` result. Problems are collected in
     ``OrbitBlock.issues`` rather than raised, so a diagnostic can still
-    measure a block that (C) would reject; (C) calls
+    measure a block that orbit batching would reject; orbit batching calls
     :meth:`OrbitBlock.raise_if_invalid`. A failed STK query raises
     ``QueryError`` as usual.
     """

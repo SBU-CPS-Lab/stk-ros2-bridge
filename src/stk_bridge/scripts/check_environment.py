@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Verify the local environment against what stk_bridge assumes.
 
-Run this **before** investing in Phases 3-6. It is the cheapest way to
-find out that an assumption baked into the backends does not hold on your
-particular STK 12.6 install, and it is designed to tell you *what* is
-wrong rather than just failing.
+Run this on a new install before starting the bridge. It is the
+cheapest way to find out that an assumption baked into the backends does
+not hold on your STK 12.6 install, and it reports *what* is wrong rather
+than just failing.
 
     python scripts/check_environment.py
     python scripts/check_environment.py --backend connect --host 10.0.0.5
@@ -354,7 +354,7 @@ def run_live_checks(backend_type: str, host: str, port: int) -> None:
                    "fails, re-check the SetAttitude/AddAttitude command "
                    "spellings against your STK 12.6 Connect documentation.")
 
-    # Phase 3: run the full convention self-test suite. This is the same
+    # The full convention self-test suite. This is the same
     # code path bridge_node uses at startup, so passing here means the
     # bridge will start; failing here means it would refuse to.
     if satellite:

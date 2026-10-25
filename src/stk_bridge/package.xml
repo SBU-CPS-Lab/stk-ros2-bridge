@@ -3,8 +3,8 @@
   <name>stk_bridge</name>
   <version>0.1.0</version>
   <description>Bidirectional ROS 2 bridge for STK 12.6.</description>
-  <maintainer email="you@example.org">Your Name</maintainer>
-  <license>Apache-2.0</license>
+  <maintainer email="mohammada.alizadeh@mail.sbu.ac.ir">Mohammadamin Alizadeh</maintainer>
+  <license>MIT</license>
   <buildtool_depend>ament_python</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>stk_msgs</exec_depend>

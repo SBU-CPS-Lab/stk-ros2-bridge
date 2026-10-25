@@ -1,19 +1,20 @@
 """Fixed-rate pacing for the free-run loop, anchored at cycle starts.
 
-The free-run loop used to sleep until the rate groups' next due time,
-and the groups mark their run with the time AFTER sensing, so every
-cycle cost its work plus a whole period. Here cycle k is scheduled at
-start_0 + k * period: a cycle that finishes early sleeps until the next
-scheduled start; one that overruns is followed at once, with the
-schedule rebased to that moment (no catch-up burst, no negative sleep),
-and is counted. Times are simulation seconds, so a real-time factor is
-handled by the caller's sleep (TimeSync.sleep_until_next).
+Cycle k is scheduled at ``start_0 + k * period``, measured from the start
+of each cycle rather than from the end of its work, so the period does
+not grow by the cost of sensing. A cycle that finishes early sleeps until
+the next scheduled start; one that overruns is followed at once, the
+schedule is rebased to that moment (no catch-up burst) and the overrun is
+counted. Times are simulation seconds; the caller's sleep
+(``TimeSync.sleep_until_next``) applies the real-time factor.
 
 Free-run only: the lockstep loop never sleeps and never uses this.
 """
 
 
 class FreeRunPacer:
+    """Schedules free-run cycles at a fixed period and counts overruns."""
+
     def __init__(self, period_s: float):
         if period_s <= 0.0:
             raise ValueError(f"pacing period must be > 0, got {period_s}")

@@ -2,7 +2,7 @@
 
 Pure functions and a stateful response reader, with no socket and no STK
 dependency, so the whole protocol layer is unit-testable offline (see
-``test/test_connect_protocol.py``, Phase 6).
+``test/test_connect_protocol.py``).
 
 Protocol summary
 ----------------
@@ -14,27 +14,22 @@ control flags currently in force (set via ``ConControl``):
   draws a literal ``ACK`` or ``NACK`` message. AGI's documentation is
   explicit that these are asymmetric with respect to data: *if a command
   that should return data instead returns NACK, the command failed and no
-  data follows*. The reader below therefore stops immediately on NACK
-  rather than blocking for a data block that will never arrive -- getting
-  this wrong is the classic way a Connect client hangs.
+  data follows*. The reader therefore stops immediately on NACK instead of
+  blocking for a data block that will never arrive.
 
 * **Data-returning commands** reply with a header of the form
   ``<COMMANDNAME> <bytecount>`` followed by the payload, or for
   multi-message replies a count header followed by that many message
   lines, each itself prefixed ``<COMMANDNAME> <bytecount>``.
 
-Confidence note
----------------
-The ACK/NACK semantics, the ``<name> <bytecount> <data>`` single-message
-shape, and the multi-message shape are documented by AGI. The exact
-field count of the multi-message *count header* is shown only in a
-truncated documentation example, so :func:`parse_message_header` is
-written tolerantly: it accepts either ``<NAME> <count> <bytes>`` or
-``<NAME> <bytes>`` and lets the reader disambiguate by what follows.
-``scripts/probe_connect.py`` (Phase 6) dumps raw framing from a live STK
-12.6 so this can be tightened from observation rather than inference.
-Until then the tolerant path is the correct engineering choice: it
-degrades to "read what's there" instead of desynchronising the stream.
+Header tolerance
+----------------
+The ACK/NACK semantics and the single- and multi-message shapes are
+documented by AGI, but the field count of the multi-message *count
+header* is not fully specified. :func:`parse_message_header` therefore
+accepts either ``<NAME> <count> <bytes>`` or ``<NAME> <bytes>`` and lets
+the reader disambiguate by what follows, so an unexpected header degrades
+to "read what is there" instead of desynchronising the stream.
 """
 
 from __future__ import annotations
@@ -86,8 +81,7 @@ def format_utcg(when: StkTime, decimals: int = 3) -> str:
 
     STK accepts a leading zero on the day, but emits none; this function
     matches STK's own output so that round-tripping a time through
-    ``format_utcg(parse_utcg(s)) == s`` holds for STK-produced strings,
-    which several Phase 6 tests assert.
+    ``format_utcg(parse_utcg(s)) == s`` holds for STK-produced strings.
     """
     if decimals < 0 or decimals > 6:
         raise ValueError("decimals must be in [0, 6]")

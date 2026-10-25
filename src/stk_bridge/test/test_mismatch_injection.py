@@ -16,7 +16,7 @@ writes to or reads from STK:
 
 Off by default; with it off, every message published is identical to
 the previous implementation's: the reference is the fixture
-fixtures/publisher_messages_d065fa4.json, written from commit d065fa4
+fixtures/publisher_messages.json, written from commit d065fa4
 (before any of this existed) by running this file with --write.
 
 ROS is faked: message classes record attributes, builtin_interfaces
@@ -43,7 +43,7 @@ from stk_bridge.backends.base import (
 from stk_bridge.core.frames import FrameRegistry
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "fixtures", "publisher_messages_d065fa4.json")
+                       "fixtures", "publisher_messages.json")
 SAT = "*/Satellite/SSS-1"
 EPOCH = 1717237800.123456
 QUAT = (0.1, -0.2, 0.3, math.sqrt(1 - 0.01 - 0.04 - 0.09))

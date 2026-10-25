@@ -9,11 +9,9 @@ The propagation rule
 --------------------
 A satellite created through ``Children.New`` has a propagator and default
 orbital elements but **no ephemeris**, and every data provider on it
-returns zero rows until ``Propagate()`` runs. That is not obvious, it
-raises nothing, and it cost a full debugging cycle during bring-up. So
-:meth:`ScenarioManager.ensure_propagated` is called on every object the
-sensing pipeline will read, and its result is asserted rather than
-assumed.
+returns zero rows until ``Propagate()`` runs, without raising anything.
+:meth:`ScenarioManager.ensure_propagated` is therefore called on every
+object the sensing pipeline will read, and its result is checked.
 """
 
 from __future__ import annotations

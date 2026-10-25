@@ -1,8 +1,9 @@
-"""E1 interface-mismatch injection on the published telemetry.
+"""Interface-mismatch injection on the published telemetry.
 
-Opt-in (``sensing.inject_mismatch``), off in every shipped config, and
-applied only to what SatellitePublishers.publish_samples publishes --
-the telemetry the twin reads. What the bridge writes to and reads from
+A fault-injection aid for testing how consumers react to convention
+errors. Opt-in (``sensing.inject_mismatch``), off in every shipped
+configuration, and applied only to what
+``SatellitePublishers.publish_samples`` publishes. What the bridge writes to and reads from
 STK is untouched, and the startup validation never sees it: each type
 models a consumer that read a correct interface with the wrong
 convention.
@@ -18,8 +19,8 @@ convention.
                           TAI - UTC offset); /clock and ScenarioTime
                           are not shifted
 
-The frame-pairing mismatch, E1's original treatment, is not here: it is
-a read-back provider choice (``sensing.force_attitude_provider``).
+A frame-pairing mismatch is not injected here: it is a read-back provider
+choice (``sensing.force_attitude_provider``).
 """
 
 from __future__ import annotations

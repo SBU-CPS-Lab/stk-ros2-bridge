@@ -1,4 +1,4 @@
-"""(C) Lockstep orbit reads served from audited STK interval blocks.
+"""Lockstep orbit reads served from audited STK interval blocks.
 
 Each lockstep step reads position and velocity from STK. HPOP has already
 propagated the orbit, so asking for the next ``samples`` epochs in two
@@ -7,12 +7,12 @@ trips. HPOP stays the source: nothing is interpolated or propagated
 here, and a row is used only for the exact millisecond STK returned it
 for.
 
-A block (``core/orbit_block.py``, unchanged) is used only if
+A block (``core/orbit_block.py``) is used only if
 
 * the object's propagator is confirmed HPOP or TwoBody,
 * its UTCG grid, row counts and values validate, and
 * both of its ends agree with instantaneous STK reads within the audit
-  tolerances (strict defaults: 1e-6 m, 1e-9 m/s; analysis decision Q6).
+  tolerances (strict defaults: 1e-6 m, 1e-9 m/s).
 
 Otherwise the block's epochs are read instantaneously, exactly as
 without batching, and the fallback is logged. Blocks never contain an
@@ -23,10 +23,10 @@ Rows are kept per (object, frame) for one backend revision
 (``StkBackend.revision``): scenario or object lifecycle, propagation,
 orbit writes, SetAttitude Standard / ClearData and raw Connect commands
 drop them; attitude samples do not. That is valid only while no force
-depends on attitude -- confirmed for the ACAV scenario by the live
-force-model inspection (spherical drag and SRP). External edits to the
-scenario in STK cannot change the revision: disable batching for runs
-that need them, or for an attitude-dependent force model.
+depends on attitude (spherical drag and SRP models do not). External
+edits to the scenario in STK do not change the revision: disable
+batching for runs that need them, or for an attitude-dependent force
+model.
 """
 
 from __future__ import annotations
@@ -62,8 +62,8 @@ def stop_time_problem(epoch: StkTime, stop: Optional[StkTime],
                       expected_window_s: Optional[float]) -> Optional[str]:
     """Why batching must stay off for this stop time, or None.
 
-    Decision Q4: the stop time comes from STK; when the scenario window
-    is known it must agree to the millisecond.
+    The stop time comes from STK; when the scenario window is known it
+    must agree to the millisecond.
     """
     if stop is None:
         return "the scenario stop time could not be read from STK"

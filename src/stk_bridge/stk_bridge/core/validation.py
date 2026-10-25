@@ -1,64 +1,51 @@
 """Startup convention self-tests.
 
-Runs against the *live* backend before the bridge publishes anything, and
-verifies empirically what the rest of the code would otherwise assume.
-Every check here exists because getting it wrong produces output that is
-wrong but entirely plausible -- the worst failure mode a digital twin can
-have, because nothing looks broken.
+Runs against the live backend before the bridge publishes anything and
+checks empirically what the rest of the code would otherwise assume. Each
+check guards a convention whose violation produces output that is wrong
+but plausible.
 
 Checks performed
 ----------------
-1. **Data providers return data.** Observed failing on a live STK 12.6
-   install during bring-up: a freshly created satellite returned zero
-   columns and zero rows, and because the query itself raised nothing the
-   emptiness was invisible. This check is first because everything
-   downstream is meaningless without it.
+1. **Data providers return data.** An unpropagated satellite returns zero
+   rows without raising anything; everything downstream depends on this.
 2. **Distance is metres.** Confirms ``configure_units`` took effect by
-   checking orbital radius magnitude. A 1000x error here is survivable
-   only if detected.
+   checking the orbital radius magnitude.
 3. **Angular rate scale.** STK 12.6 rejects
    ``SetCurrentUnit("AngleRate", "rad/sec")``, so the reported unit is
-   *measured* by commanding a known body rate and reading it back rather
-   than assumed either way.
-4. **Quaternion element ordering.** Verifies that STK's Q1..Q4 maps to
-   ROS ``(x, y, z, w)`` by injecting a known non-symmetric rotation and
-   checking it round-trips. A quaternion with the scalar part in the
-   wrong slot still normalises, still looks like a valid rotation, and is
-   simply wrong.
-5. **Monotonicity enforcement.** Confirms STK really does silently drop
-   out-of-order samples, so that ``core/actuation.py``'s guard is doing
-   necessary work rather than defending against a phantom.
+   *measured* by commanding a known body rate and reading it back.
+4. **Quaternion element ordering and attitude pairing.** Verifies that
+   STK's Q1..Q4 maps to ROS ``(x, y, z, w)`` by injecting a known
+   asymmetric rotation, and determines which read-back provider matches
+   the configured attitude command form.
+5. **Monotonicity.** Records how STK handles an out-of-order attitude
+   sample (STK 12.6 rejects it).
+6. **Geodetic angle units and ClearData.** Latitude and longitude are
+   radians, and the real-time attitude history can be cleared.
 
 Isolation
 ---------
 The validator creates and owns a **dedicated, disposable satellite**
-rather than testing whatever object the caller names. This is not
-fastidiousness -- it was a real bug. An earlier version validated a
-caller-supplied object that had already been switched to the RealTime
-orbit propagator and already had attitude samples injected at the exact
-timestamps the checks wanted to use. Both produced failures that looked
-like STK defects and were actually test contamination:
+rather than testing an object the caller names, because a working
+object's state would contaminate the checks:
 
 * Switching a satellite to the **RealTime orbit propagator discards its
   analytic ephemeris**. The object then has data only inside
-  Look-Ahead/Look-Behind of whatever samples have been injected, so a
-  query at scenario epoch returns zero rows. Orbit-state checks must run
-  on a normally-propagated object.
+  Look-Ahead/Look-Behind of the injected samples, so a query at the
+  scenario epoch returns zero rows.
 * Real-time attitude is **append-only with strictly increasing
-  timestamps**, and STK 12.6 returns a NACK (not a silent drop) for an
-  out-of-order sample. Re-using a timestamp another test already
-  consumed therefore fails hard.
+  timestamps**, and STK 12.6 rejects an out-of-order sample.
 
-So: the validator makes its own satellite, propagates it, leaves the
-orbit propagator alone, allocates every attitude timestamp from a
+The validator therefore creates its own satellite, propagates it, leaves
+the orbit propagator alone, allocates every attitude timestamp from a
 monotonic counter, and deletes the object afterwards.
 
 Policy
 ------
 Failures raise :class:`ConventionValidationError` and are fatal at
-startup by default. Individual checks can be downgraded to warnings via
-config for a deliberately degraded run (visualisation-only, say), but the
-default is to refuse to start rather than to publish unverified data.
+startup by default. Individual checks can be downgraded to warnings in
+the configuration for a deliberately degraded run (visualisation only,
+for example).
 """
 
 from __future__ import annotations
@@ -122,9 +109,8 @@ class ValidationReport:
     #: silent and only core/actuation.py's guard makes it visible.
     monotonicity_is_observable: bool = False
     #: Provider name that round-tripped attitude correctly, and the
-    #: command form it pairs with. core/sensing.py (Phase 4) reads these
-    #: rather than hardcoding a pairing, so the bridge uses whatever this
-    #: install actually supports.
+    #: command form it pairs with. core/sensing.py reads these rather than
+    #: hardcoding a pairing.
     attitude_provider: str = ""
     attitude_command_inertial: bool = False
     #: Provider that supplied a readable body angular rate, if any.
@@ -187,12 +173,10 @@ class ConventionValidator:
         #: Optional core.startup_phases.StartupPhases: each check is
         #: timed as "validation/<check>".
         self._phases = phases
-        #: The attitude command form actuation is configured to use. When
-        #: both pairings round-trip (they do on STK 12.6), the one that
-        #: matches it must win: the sensing side reads through whichever
-        #: provider validation reports, and the actuation side commands in
-        #: the configured form, so a tie resolved the other way leaves the
-        #: bridge commanding in one frame and reading back in another.
+        #: The attitude command form actuation is configured to use. Both
+        #: pairings round-trip on STK 12.6, so a tie is resolved in favour of
+        #: this form; otherwise the bridge would command in one frame and read
+        #: back in another.
         self._prefer_inertial = prefer_inertial_attitude
         self._requested_path = (conv.canonical_object_path(test_object_path)
                                 if test_object_path else None)
@@ -323,16 +307,12 @@ class ConventionValidator:
     def _check_attitude_clear(self) -> str:
         """Does ``SetAttitude ClearData`` really drop real-time samples?
 
-        It must, for any run on a reused scenario: STK keeps an object's
-        real-time attitude samples across bridge sessions, and NACKs any
-        new sample earlier than the newest one it holds. The first live
-        run to reuse a scenario (2026-09-27) had every attitude command
-        rejected for the first 58 s of simulation time -- exactly as far
-        as the previous attempt had got -- while STK replayed that
-        attempt's attitude and the twin fought it into SAFE. The
-        actuation path now clears the history before an object's first
-        command; this check proves the clear works on this install,
-        rather than assuming a command that returns ACK did anything.
+        Required for runs on a reused scenario: STK keeps an object's
+        real-time attitude samples across bridge sessions and rejects any
+        new sample earlier than the newest one it holds, while replaying
+        the old samples. The actuation path clears the history before an
+        object's first command; this check confirms the clear works on
+        this install instead of trusting its ACK.
         """
         epoch = self._backend.get_scenario_epoch()
         later = self._next_stamp(epoch)
@@ -361,9 +341,8 @@ class ConventionValidator:
         A satellite created through ``Children.New`` carries a propagator
         and default orbital elements but generates no ephemeris until
         propagated. Every data provider on it then returns zero rows.
-        Rather than merely detect that, this check fixes it where it can,
-        because an unpropagated object is a setup omission, not a
-        misconfiguration the operator needs to reason about.
+        This check propagates the object where it can, since that is a
+        setup omission rather than a misconfiguration.
         """
         propagate = getattr(self._backend, "propagate", None)
         if propagate is None:
@@ -431,17 +410,9 @@ class ConventionValidator:
         Cartesian position, whose unit the distance check has just
         established.
 
-        This exists because the assumption failed on a live STK 12.6
-        install and nothing noticed. ``SetCurrentUnit("Angle", "rad")``
-        was accepted, and "LLA State" went on reporting degrees --
-        because **Latitude and Longitude are separate unit dimensions
-        from Angle**, and only Angle was being set. The bridge published
-        LLASample values 57x too large while its own logs said units
-        were SI.
-
-        Fatal by default: a digital twin fed degrees-labelled-radians
-        produces plausible, wrong, silently-accepted results, which is
-        the failure mode this whole validation pass exists to prevent.
+        On STK 12.6 **Latitude and Longitude are unit dimensions separate
+        from Angle**: with only Angle set to radians, "LLA State" reports
+        degrees while the unit call succeeds. Fatal by default.
         """
         epoch = self._backend.get_scenario_epoch()
         cartesian, cmap = dp.execute(
@@ -517,13 +488,10 @@ class ConventionValidator:
 
         Both read-back providers are **ungrouped** on 12.6 -- they take
         no reference-frame argument -- so a mismatched pairing does not
-        error. It silently returns an attitude that differs by the
-        Earth-rotation angle at the sample epoch: tens of degrees, and
-        indistinguishable from a real attitude. That is exactly what a
-        naive version of this check produced (a 99 deg "ordering error"
-        that was actually a frame error), so rather than assume a
-        pairing, both are tried and the one that round-trips is recorded
-        on the report for ``core/sensing.py`` to use.
+        error. It returns an attitude that differs by the Earth-rotation
+        angle at the sample epoch, tens of degrees, which looks like a real
+        attitude. Both pairings are therefore tried and the one that
+        round-trips is recorded on the report for ``core/sensing.py``.
 
         The test rotation has four distinct non-zero components, so a
         genuine element-ordering fault still cannot hide behind a
@@ -701,10 +669,8 @@ class ConventionValidator:
                 "\n  providers available on this object:\n" + inventory
             )
 
-        # data.provider_name is the name that actually resolved, which
-        # may be one of the spec's alternatives -- reporting the spec's
-        # primary name here would tell the operator to look for a
-        # provider this install does not have.
+        # Report the provider name that actually resolved, which may be
+        # one of the spec's alternatives.
         self._report.angular_rate_provider = data.provider_name
         read = dp.first_value(data, spec, mapping, "wz",
                               angle_rate_scale=conv.AngleRateScale(factor=1.0))
@@ -733,12 +699,11 @@ class ConventionValidator:
         )
 
     def _check_monotonicity(self) -> str:
-        """Confirm STK silently drops out-of-order samples.
+        """Record how STK handles an out-of-order attitude sample.
 
-        If this ever stops being true, ``core/actuation.py``'s
-        monotonicity guard becomes unnecessary overhead -- but far more
-        likely, a failure here means the guard is protecting against
-        something subtler than assumed, which is worth knowing.
+        STK 12.6 rejects it with a NACK; a backend that drops it silently
+        is reported as such. ``core/actuation.py``'s monotonicity guard
+        applies either way.
         """
         epoch = self._backend.get_scenario_epoch()
         newer = self._next_stamp(epoch)
@@ -754,11 +719,8 @@ class ConventionValidator:
         except StkBridgeError as exc:
             self._report.monotonicity_is_observable = True
             return (f"STK rejected the out-of-order sample explicitly "
-                    f"({type(exc).__name__}). Confirmed on STK 12.6: the "
-                    f"rejection is a NACK, not a silent drop, so failures "
-                    f"are observable. core/actuation.py's guard still runs "
-                    f"first so the drop is counted rather than merely "
-                    f"logged.")
+                    f"({type(exc).__name__}), so rejections are observable. "
+                    f"core/actuation.py's guard runs first and counts them.")
         self._report.monotonicity_is_observable = False
         return ("out-of-order sample accepted without error -- this backend "
                 "drops it silently, so core/actuation.py's guard is the "

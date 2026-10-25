@@ -9,11 +9,9 @@ objects.
 Absence is information
 ----------------------
 Nothing is published for a channel that returned no sample. The
-alternative -- republishing the last value with a fresh timestamp -- is
-the single most dangerous thing a bridge like this can do, because a
-frozen state is indistinguishable from a held attitude and a controller
-will happily integrate against it. A consumer that sees no message knows
-it has no state; a consumer that sees a stale message believes it does.
+alternative, republishing the last value with a fresh timestamp, would
+make a frozen state indistinguishable from a held attitude. A consumer
+that sees no message knows it has no state.
 
 The ``is_extrapolated`` flag carries the weaker version of the same
 warning: the sample is real but came from STK's real-time propagator
@@ -89,16 +87,17 @@ class SatellitePublishers:
             SatelliteState, f"{base}/state", telemetry)
 
         self._published = 0
-        #: E1 interface mismatch for everything publish_samples sends
-        #: (core/mismatch_injection.py); empty for every nominal run.
+        #: Optional interface mismatch applied to everything publish_samples
+        #: sends (core/mismatch_injection.py); empty by default.
         from stk_bridge.core.mismatch_injection import check
         self._mismatch = check(mismatch)
         if self._mismatch:
             LOGGER.warning(
-                "E1 MISMATCH INJECTED into %s telemetry: %r. The twin will "
-                "read this interface with the wrong convention. This is an "
-                "E1 treatment; if you did not set it deliberately, clear "
-                "sensing.inject_mismatch.", self._path, self._mismatch)
+                "INTERFACE MISMATCH INJECTED into %s telemetry: %r. "
+                "Consumers will read this interface with the wrong "
+                "convention. This is a fault-injection setting; if you did "
+                "not set it deliberately, clear sensing.inject_mismatch.",
+                self._path, self._mismatch)
         LOGGER.info("publishers created for %s under %s/", self._path, base)
 
     @property
@@ -400,13 +399,7 @@ class BridgePublishers:
         message.python_version = info.python_version
         message.agi_stk_wheel_version = info.agi_stk_wheel_version
         message.mean_command_latency_ms = worker.last_latency_ms
-        # Masked to 32 bits: the field is diagnostic-only
-        # (BackendDiagnostics.msg), but threading.get_ident() is only
-        # GUARANTEED to fit a native thread handle, which is 32 bits on
-        # Windows -- where this bridge normally runs -- but can exceed
-        # uint32 on 64-bit Linux (observed running the mock backend in
-        # a container: an unmasked id here raised
-        # "must be an unsigned integer in [0, 4294967295]" and took
-        # down the free-run loop's status publish on every iteration).
+        # Masked to 32 bits: the field is uint32 and diagnostic only,
+        # and threading.get_ident() can exceed 32 bits on 64-bit Linux.
         message.com_apartment_thread_id = worker.thread_id & 0xFFFFFFFF
         self._pub_diagnostics.publish(message)

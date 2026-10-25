@@ -47,9 +47,8 @@ class EngineBackend(ComBackend):
     """Headless STK Engine, in-process with this Python interpreter."""
 
     def __init__(self, no_graphics: bool = True):
-        # Skip ComBackend.__init__'s desktop-specific arguments by
-        # initialising the grandparent contract directly, then setting
-        # the fields ComBackend's methods rely on.
+        # ComBackend's desktop arguments do not apply to an in-process
+        # engine; only the backend type and info differ.
         super().__init__(attach_to_existing=False, visible=False,
                          user_control=False)
         self._backend_type = BackendType.ENGINE

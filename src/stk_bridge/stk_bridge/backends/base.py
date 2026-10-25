@@ -4,50 +4,43 @@ This module defines the *only* contract between STK and the rest of the
 bridge. Everything in ``core/``, ``interfaces/``, and ``nodes/`` is written
 against ``StkBackend`` and the dataclasses declared here; none of them may
 import ``agi.stk12``, ``win32com``, ``pythoncom``, or ``socket``-level
-Connect machinery. See docs/00_architecture.md section 1.1.
+Connect machinery. See docs/bridge/architecture.md.
 
 Units contract
 --------------
 **Backends return SI.** Every backend calls :meth:`StkBackend.configure_units`
-during ``connect()``, which forces STK's own UnitPreferences to metres,
-metres/second, radians, and seconds. STK then reports SI natively and there
-is no unit conversion left to get wrong downstream.
+during ``connect()``, which sets STK's unit preferences to metres,
+metres/second, radians and seconds and reads every preference back, so
+STK reports SI and no conversion is needed downstream. Configuring STK
+once, instead of converting each data provider, also keeps raw Connect
+output (``ExecuteConnect``) consistent with the typed output.
 
-This supersedes the note in the Phase 1 ``.msg`` docstrings that said the
-km->m conversion happens in ``core/conversions.py``. It does not, and
-should not: converting inside the bridge means every new data provider is
-a fresh opportunity to forget a factor of 1000, whereas configuring STK
-once is a single point of control that also makes raw Connect output
-(e.g. from ``ExecuteConnect``) consistent with typed output. Those msg
-comments are corrected in Phase 6.
+Exceptions, handled inside the backends and invisible to callers:
 
-Two documented exceptions, both handled *inside* the backends and never
-visible to callers:
-
-* ``AddAttitude AngVels`` takes degrees/second regardless of unit
-  preferences (fixed by the Connect command definition). Backends accept
-  rad/s and convert on the way out.
-* ``AddAttitude Euler``/``YPR`` take degrees. Not used by the live control
-  path (which is quaternion-based), but noted for completeness.
+* STK 12.6 rejects an SI angle-rate preference; the backends measure the
+  angle-rate scale at startup and convert body rates.
+* Connect commands that take angles (``SetState Classical``,
+  ``SetPosition ... Geodetic``, ``AddAttitude AngVels`` and others)
+  consume degrees whatever the angle preference is; backends accept
+  radians and convert on the way out.
 
 Time contract
 -------------
 All times crossing this interface are :class:`StkTime` -- a thin wrapper
 around a UTC Unix epoch float. Backends are responsible for formatting to
 STK's UTCG strings ("1 Jun 2024 12:00:00.000") and parsing them back.
-ROS ``builtin_interfaces/Time`` conversion is Phase 3's job
-(``core/conversions.py``), deliberately kept out of the backend layer so
-backends stay testable without a ROS installation.
+Conversion to ROS ``builtin_interfaces/Time`` happens in
+``core/conversions.py``, outside the backend layer, so backends stay
+testable without ROS.
 
 Quaternion contract
 -------------------
 All quaternions crossing this interface are ``(x, y, z, w)`` -- vector
 part first, scalar last -- matching both ``geometry_msgs/Quaternion`` and
 STK's documented Q1..Q4 ordering. Backends are responsible for reordering
-if a specific API they wrap disagrees. ``core/validation.py`` (Phase 3)
-verifies this against the live backend at startup and raises
-``ConventionValidationError`` rather than letting an unverified assumption
-propagate into control output.
+if a specific API they wrap disagrees. ``core/validation.py`` checks the
+order against the live backend at startup and raises
+``ConventionValidationError`` if it does not hold.
 """
 
 from __future__ import annotations
@@ -94,6 +87,8 @@ class PropagatorType(str, Enum):
 
 
 class EclipseCondition(str, Enum):
+    """Solar illumination condition, as named by STK's lighting providers."""
+
     UMBRA = "Umbra"
     PENUMBRA = "Penumbra"
     SUNLIT = "Direct Sun"
@@ -170,6 +165,8 @@ class BackendCapabilities:
 
 @dataclass
 class BackendInfo:
+    """Identity of a connected backend, for status and diagnostics."""
+
     backend_type: BackendType
     stk_version: str = "unknown"
     python_version: str = "unknown"
@@ -213,6 +210,8 @@ class AngularRateSample:
 
 @dataclass
 class LLASample:
+    """Geodetic position at one instant; angles in radians."""
+
     time: StkTime
     latitude_rad: float
     longitude_rad: float
@@ -221,12 +220,16 @@ class LLASample:
 
 @dataclass
 class EclipseSample:
+    """Lighting condition at one instant."""
+
     time: StkTime
     condition: EclipseCondition
 
 
 @dataclass
 class AccessIntervalData:
+    """One access interval between two objects."""
+
     start: StkTime
     stop: StkTime
 
@@ -237,6 +240,8 @@ class AccessIntervalData:
 
 @dataclass
 class LinkBudgetData:
+    """RF link budget figures of one link at one instant."""
+
     carrier_to_noise_db: float = 0.0
     eb_no_db: float = 0.0
     margin_db: float = 0.0
@@ -247,6 +252,8 @@ class LinkBudgetData:
 
 @dataclass
 class ObjectInfo:
+    """One object of the current scenario."""
+
     object_path: str
     object_type: str
     propagator_type: str = ""
@@ -262,10 +269,9 @@ class DataProviderQuery:
 
     ``group_element`` selects the sub-provider for grouped providers --
     e.g. provider "Cartesian Position" is a *group* whose members are
-    reference frames ("ICRF", "Fixed", "J2000"). Getting this wrong is one
-    of the most common STK scripting errors, so the two are separate
-    fields here rather than a single dotted string that callers assemble
-    (and mis-assemble) themselves.
+    reference frames ("ICRF", "Fixed", ...). The provider and the group
+    member are separate fields rather than one dotted string, because
+    confusing the two is a common STK scripting error.
     """
 
     object_path: str
@@ -349,11 +355,10 @@ class StkBackend(abc.ABC):
 
     Implementations must be usable as context managers and must be safe to
     call from a single thread only. Thread confinement is the caller's
-    responsibility -- ``core/com_thread.py`` (Phase 3) owns the STA thread
-    that serializes access for the COM/Engine backends. Backends do not
-    take locks internally, because doing so would silently mask the
-    apartment-threading violations we specifically want to surface during
-    development.
+    responsibility: ``core/com_thread.py`` owns the STA thread that
+    serializes access for the COM and Engine backends. Backends take no
+    locks, so that apartment-threading violations surface instead of
+    being masked.
     """
 
     def __init__(self, backend_type: BackendType):
@@ -509,11 +514,9 @@ class StkBackend(abc.ABC):
         """Execute one data provider query.
 
         This is the single primitive on which all typed sensing in
-        ``core/sensing.py`` is built. Backends implement it once; they do
-        not implement per-quantity getters. That keeps the surface small
-        enough that the Connect and COM implementations can be held to the
-        same observable behaviour, which ``test_mock_backend.py`` and the
-        Phase 6 conformance tests rely on.
+        ``core/sensing.py`` is built. Backends implement it once instead
+        of per-quantity getters, which keeps the surface small enough for
+        all backends to be held to the same observable behaviour.
         """
 
     def list_data_providers(self, object_path: str) -> Dict[str, List[str]]:
@@ -522,13 +525,10 @@ class StkBackend(abc.ABC):
         Returns ``{provider_name: [group_member, ...]}`` with an empty
         list for ungrouped providers.
 
-        Guessing provider and element names across STK versions does not
-        scale -- every wrong guess costs a round trip to a live install
-        to discover. Enumeration turns that into a single query whose
-        answer is authoritative for *this* install, which is what
-        ``core/validation.py`` uses to report real options when a spec
-        fails to match, and what ``data_providers.discover()`` uses to
-        resolve a provider by keyword rather than exact spelling.
+        Provider and element names differ between STK versions, so the
+        bridge asks the install instead of guessing: ``core/validation.py``
+        reports the real options when a spec fails to match, and
+        ``data_providers.discover()`` resolves providers by keyword.
 
         Default implementation returns ``{}`` (unsupported); backends
         that can enumerate override it.
@@ -559,11 +559,11 @@ class StkBackend(abc.ABC):
                      ) -> None:
         """Append one real-time position sample (``SetPosition``).
 
-        Append-only: STK silently ignores samples whose time is not
+        Append-only: STK does not accept a sample whose time is not
         strictly greater than the last accepted sample for this object.
-        Backends do NOT guard against this -- ``core/actuation.py`` owns
-        the monotonicity check so that the rejection is counted and
-        logged rather than lost. See ``MonotonicityViolationError``.
+        Backends do not guard against this; ``core/actuation.py`` owns the
+        monotonicity check so that rejections are counted and logged
+        (see ``MonotonicityViolationError``).
         """
 
     @abc.abstractmethod
@@ -578,21 +578,19 @@ class StkBackend(abc.ABC):
 
     # -- sensors -----------------------------------------------------------
     #
-    # Concrete, not abstract: every backend can at least issue the
-    # Connect form, and a backend with the Object Model available
-    # overrides with the typed path. Sensor geometry lives here rather
-    # than in a caller because reading a cone angle back requires the
-    # Object Model, which only backends/ may touch.
+    # Concrete, not abstract: every backend can issue the Connect form,
+    # and backends with the Object Model override with the typed path.
+    # Reading geometry back requires the Object Model, which only
+    # backends/ may touch.
 
     def set_sensor_cone(self, object_path: str, half_angle_rad: float,
                         angular_resolution_rad: float = 0.017453) -> str:
         """Make a sensor a simple cone of the given half-angle.
 
-        Returns a label describing how it was applied, for the caller's
-        report. Raises :class:`CommandError` if nothing worked, with
-        every attempt's reason in the message -- a bare failure here
-        leaves the sensor at STK's default half-angle, which is wide
-        enough that pointing error stops mattering.
+        Returns a label describing how it was applied. Raises
+        :class:`CommandError` with every attempt's reason if nothing
+        worked, since a sensor left at STK's default half-angle would make
+        pointing error irrelevant.
         """
         reasons = []
         for label, command in (
@@ -617,17 +615,13 @@ class StkBackend(abc.ABC):
                        value: float = 0.0) -> str:
         """Apply an azimuth/elevation mask to a static object.
 
-        ``mode`` is ``"terrain"``, ``"none"`` or ``"file"``. Those are
-        the only kinds STK has: a live 12.6 install reports
-        ``AgEAzElMaskType`` members ``eAzElMaskNone``, ``eMaskFile`` and
-        ``eTerrainData``, and nothing else.
+        ``mode`` is ``"terrain"``, ``"none"`` or ``"file"``, the only
+        members of STK 12.6's ``AgEAzElMaskType`` (``eAzElMaskNone``,
+        ``eMaskFile``, ``eTerrainData``).
 
-        In particular there is **no constant-elevation mask**. A minimum
-        elevation is an access *constraint*, a separate mechanism
-        reached through ``SetConstraint``, and conflating the two costs
-        a live run: the verifier spent one trying to apply a constant
-        mask as an experimental control, failing, and then having
-        nothing to compare terrain against.
+        There is no constant-elevation mask: a minimum elevation is an
+        access *constraint*, a separate mechanism set through
+        ``SetConstraint``.
 
         Returns a label describing how it was applied; raises
         :class:`CommandError` with every attempt's reason if nothing
@@ -658,10 +652,9 @@ class StkBackend(abc.ABC):
     def get_az_el_mask(self, object_path: str) -> Optional[str]:
         """The mask type STK currently holds, or None if unreadable.
 
-        Only backends with the Object Model can answer. Worth having:
-        it separates "the command did not apply" from "the mask applied
-        and made no difference", which are different problems with the
-        same symptom.
+        Only backends with the Object Model can answer. It separates
+        "the command did not apply" from "the mask applied and made no
+        difference".
         """
         return None
 
@@ -669,10 +662,9 @@ class StkBackend(abc.ABC):
                                        ) -> Optional[float]:
         """The sensor's configured cone half-angle, or None if unreadable.
 
-        Only backends with the Object Model can answer this. It matters
-        because it separates "the command did not apply" from "the
-        command applied in the wrong unit" without needing to infer the
-        cone from access geometry.
+        Only backends with the Object Model can answer. It separates "the
+        command did not apply" from "the command applied in the wrong
+        unit" without inferring the cone from access geometry.
         """
         return None
 
@@ -731,6 +723,7 @@ class StkBackend(abc.ABC):
     # -- convenience (concrete, shared) ------------------------------------
 
     def require_connected(self) -> None:
+        """Raise :class:`BackendUnavailableError` unless connected."""
         from stk_bridge.exceptions import BackendUnavailableError
 
         if not self._connected:

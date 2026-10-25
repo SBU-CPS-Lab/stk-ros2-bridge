@@ -1,9 +1,11 @@
 """Simulation-time ownership and the lockstep barrier.
 
 The bridge is the clock authority for the whole ROS graph. It advances
-STK's scenario time, publishes the result on ``/clock``, and every other
-node -- MATLAB/Simulink included -- runs with ``use_sim_time:=true`` so
-all timestamps derive from one source.
+STK's scenario time and publishes it on ``/clock`` and on
+``ScenarioTime``. Other nodes take their time from these (ROS nodes with
+``use_sim_time:=true``; a Simulink model, whose ROS node does not follow
+``/clock``, stamps from ``ScenarioTime``), so all timestamps derive from
+one source.
 
 Execution modes
 ---------------

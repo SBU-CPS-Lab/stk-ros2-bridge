@@ -99,8 +99,8 @@ class CommandInbox:
                     self._pending[key] = command
                     self._changed.notify_all()
                     return
-                # Not coalescing: keep the oldest so ordering is
-                # preserved, and let the drain apply them in sequence.
+                # Not coalescing: the first command for this key is kept
+                # until the next drain and later ones are discarded.
                 return
             self._pending[key] = command
             self._order.append(key)

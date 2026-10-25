@@ -11,30 +11,23 @@ ROS input                     STK mechanism
 ``/stk/cmd/angular_velocity``  ``AddAttitude AngVels``
 ============================  ==========================================
 
-Why the monotonicity guard stays
---------------------------------
-Validation against a live STK 12.6 install confirmed that out-of-order
-attitude samples are **NACKed**, not silently dropped -- better than
-originally assumed, and recorded on the validation report as
-``monotonicity_is_observable``. The guard is kept anyway, for three
-reasons that survive that finding:
+The monotonicity guard
+----------------------
+STK 12.6 rejects (NACKs) out-of-order attitude samples; the validation
+report records this as ``monotonicity_is_observable``. The dispatcher
+still checks ordering itself, because:
 
-1. It converts a round trip into a local rejection. At 10 Hz with a
-   controller that occasionally re-sends, the saved COM calls matter.
-2. It gives a *counter* (``dropped_*``) rather than a log line, so
-   ``BridgeStatus`` can report the rate of loss instead of an operator
-   having to grep.
-3. It is uniform across backends. The Connect backend's behaviour was
-   not separately confirmed, and the ``SetPosition`` path was not tested
-   for NACK-vs-silent at all, so relying on STK to complain would make
-   correctness backend-dependent.
+1. a local rejection saves a COM round trip;
+2. it yields a counter (``dropped_*``) that ``BridgeStatus`` reports;
+3. it behaves the same on every backend and channel, including
+   ``SetPosition``, whose handling of out-of-order samples is not
+   documented.
 
 Ordering constraint on angular velocity
 ---------------------------------------
 ``AddAttitude AngVels`` requires at least one prior attitude sample for
 the object, or STK rejects it. The dispatcher enforces this ordering
-itself rather than letting the rejection surface as a mysterious
-NACK several layers up.
+itself, so the rejection carries an explicit message.
 """
 
 from __future__ import annotations
@@ -60,7 +53,7 @@ LOGGER = logging.getLogger(__name__)
 
 #: Start of the ComputeAccess failure message meaning "the satellite's
 #: written attitude does not reach the requested stop time yet; ask
-#: again". The scheduler matches on it (acav/scheduler_node.py).
+#: again". Clients match on it (e.g. acav/scheduler_node.py).
 ATTITUDE_NOT_COVERED = "attitude not yet written through the stop time"
 
 #: Same tolerance as the bridge's other written-sample matches: epoch
@@ -72,10 +65,10 @@ def attitude_coverage_gap(actuation, object_path: str,
                           stop: StkTime) -> str:
     """Why access over ``[.., stop]`` must wait; empty when it need not.
 
-    STK reports a satellite's attitude beyond its newest real-time
-    sample as something other than the twin's (near nadir in this
-    study), so access computed over an epoch the written attitude does
-    not reach yet is computed against an attitude the twin never had.
+    Beyond its newest real-time sample STK reports a satellite's basic
+    attitude (for example nadir), so access computed over an epoch the
+    written attitude does not reach yet would use an attitude the
+    controller never commanded.
     ``object_path`` may be a sensor; its satellite's attitude is the one
     checked. An object this bridge has never written attitude for is not
     checked: nothing it could wait for is coming.
@@ -160,19 +153,13 @@ class ActuationDispatcher:
     def reset(self, object_path: Optional[str] = None) -> None:
         """Forget this dispatcher's own last-stamp bookkeeping.
 
-        This clears LOCAL state only. It does not touch STK -- callers
-        must call ``backend.clear_attitude_data()`` (or
+        This clears local state only. Callers must first clear the STK
+        side with ``backend.clear_attitude_data()`` (or
         ``ScenarioManager.reset()``, which does that for every real-time
-        object) BEFORE this, not after. Calling this alone leaves the
-        guard willing to accept an earlier timestamp while STK itself
-        still remembers the newer one and will reject it -- a real
-        failure mode, not a hypothetical: see
-        test_actuation.py::test_reset_alone_does_not_clear_stk_side_data,
-        added after this exact gap surfaced in the test suite.
-
-        The correct order, and the one ``interfaces/ros_services.py``'s
-        ``ResetScenario`` handler follows: clear STK-side data first,
-        then call this to match the guard's memory to it.
+        object); otherwise the guard accepts an earlier timestamp that STK
+        still rejects (see
+        test_actuation.py::test_reset_alone_does_not_clear_stk_side_data).
+        The ``ResetScenario`` service follows this order.
         """
         if object_path is None:
             self._objects.clear()

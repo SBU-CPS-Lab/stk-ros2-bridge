@@ -1,10 +1,10 @@
 # Frame registry configuration. See core/frames.py.
 #
-# BUILTIN_FRAMES already covers everything confirmed present on a live
-# STK 12.6 install (icrf, fixed, inertial, mean_of_epoch, mean_of_date,
-# true_of_date, true_of_date_rotating, lvlh, vvlh, body) -- this file is
-# for ALIASES and mission-specific additions only. Do not redeclare a
-# builtin frame here; FrameRegistry.add_alias refuses to shadow one.
+# BUILTIN_FRAMES already covers the frames STK 12.6 offers (icrf, fixed,
+# inertial, mean_of_epoch, mean_of_date, true_of_date,
+# true_of_date_rotating, lvlh, vvlh, body); this file is for aliases and
+# mission-specific additions only. Do not redeclare a builtin frame here;
+# FrameRegistry.add_alias refuses to shadow one.
 
 frames:
   tf_prefix: ""

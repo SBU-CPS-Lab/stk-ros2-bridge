@@ -1,10 +1,10 @@
 """Execution time of the STK clock advance, for reporting only.
 
-The bridge submits `Animate * SetValues ... Reset` to the single-thread
-COM worker without waiting (nodes/bridge_node.py `_advance_stk_clock`),
-so the step's first sensing query queues behind it and E6's "sense"
-phase includes this execution. Recorded on the worker thread, read on
-the loop thread: a small lock keeps the two consistent.
+The bridge submits ``Animate * SetValues ... Reset`` to the COM worker
+without waiting (``nodes/bridge_node.py`` ``_advance_stk_clock``), so the
+step's first sensing query queues behind it and the reported "sense"
+phase includes this time. Values are recorded on the worker thread and
+read on the loop thread, hence the lock.
 """
 
 import threading
@@ -46,4 +46,4 @@ class ClockAdvanceTiming:
             return "clock advance summary: executed 0"
         return (f"clock advance summary: executed {count}, mean "
                 f"{total / count:.1f} ms, max {peak:.1f} ms (on the COM "
-                f"worker, inside E6's sense phase)")
+                f"worker, inside the sense phase)")

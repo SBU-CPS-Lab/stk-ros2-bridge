@@ -1,9 +1,9 @@
 """Backend construction from configuration.
 
 The single place where a backend *type* string becomes a concrete object.
-Keeping this in one function means the deployment topology (T1-T4 in
-docs/00_architecture.md section 2) is genuinely a config change: nothing
-else in the bridge names a concrete backend class.
+Nothing else in the bridge names a concrete backend class, so the
+deployment topology (docs/bridge/architecture.md) is a configuration
+change.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ _BUILDERS = {
 def create_backend(config: Optional[Dict[str, Any]] = None) -> StkBackend:
     """Build a backend from a ``backend:`` config block.
 
-    Expected shape (see ``config/bridge_params.yaml``, Phase 6)::
+    Expected shape (see ``config/bridge_params.yaml``)::
 
         backend:
           type: com          # com | engine | connect | mock | auto
@@ -53,9 +53,8 @@ def create_backend(config: Optional[Dict[str, Any]] = None) -> StkBackend:
 
     ``type: auto`` picks the best available backend for the current
     platform, preferring fidelity over convenience: COM on Windows,
-    Engine elsewhere, and never Mock -- silently substituting fake
-    physics for real STK would be the single most dangerous default this
-    bridge could have.
+    Engine elsewhere, and never Mock: substituting an analytic model for
+    STK must always be an explicit choice.
     """
     config = config or {}
     backend_config = config.get("backend", config)
@@ -83,11 +82,10 @@ def create_backend(config: Optional[Dict[str, Any]] = None) -> StkBackend:
 def _autodetect() -> str:
     """Choose a backend for this platform without connecting to anything.
 
-    Deliberately does not probe (no socket attempts, no COM activation):
-    autodetection runs before logging is fully configured and a hanging
-    probe here would look like a silent startup failure. Probing belongs
-    in ``scripts/check_environment.py``, which exists to be run
-    explicitly.
+    It does not probe (no socket attempts, no COM activation): it runs
+    before logging is fully configured, and a hanging probe would look
+    like a silent startup failure. ``scripts/check_environment.py``
+    probes explicitly.
     """
     if platform.system() == "Windows":
         return BackendType.COM.value

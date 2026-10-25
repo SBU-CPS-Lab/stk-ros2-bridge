@@ -45,13 +45,13 @@ def _node(mode, state="pending"):
     return node
 
 
-def test_free_run_turns_b_off_with_one_info_line(caplog):
+def test_free_run_turns_the_combined_read_off_with_one_info_line(caplog):
     node = _node(ExecutionMode.FREE_RUN)
     with caplog.at_level(logging.INFO):
         node._apply_free_run_sensing_policy()
     assert node.sensing.state == "off"
     lines = [r for r in caplog.records
-             if "combined attitude/rate (B) is off in free-run" in
+             if "combined attitude/rate read is off in free-run" in
              r.getMessage()]
     assert len(lines) == 1 and lines[0].levelno == logging.INFO
 

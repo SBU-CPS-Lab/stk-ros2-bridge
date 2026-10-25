@@ -48,10 +48,8 @@ class ServiceServers:
                  callback_group=None):
         """``context`` bundles the pieces handlers need.
 
-        Passed as one object rather than a dozen constructor arguments
-        because handlers legitimately need access to most of the node's
-        state, and threading each through individually makes adding a
-        service a five-file change.
+        Passed as one object rather than many constructor arguments,
+        because handlers need most of the node's state.
         """
         from stk_msgs.srv import (
             ComputeAccess,

@@ -1,10 +1,9 @@
 """Exception taxonomy for stk_bridge.
 
-Every exception a backend implementation (Phase 2) can raise is declared
-here so that core/ and interfaces/ (Phases 3-5) can catch by category
-without importing anything backend-specific -- in particular, without
-importing agi.stk12, win32com, or pythoncom, which are Windows-COM-only and
-must stay confined to backends/. See docs/00_architecture.md section 1.
+Every exception a backend can raise is declared here, so that ``core/``
+and ``interfaces/`` can catch by category without importing anything
+backend-specific (``agi.stk12``, ``win32com`` and ``pythoncom`` stay
+confined to ``backends/``; see docs/bridge/architecture.md).
 
 Design intent
 -------------
@@ -94,9 +93,8 @@ class CommandError(BackendError):
     was rejected or NACKed by STK.
 
     Distinct from ConnectionLostError: the backend is fine, this specific
-    command was invalid or rejected. core/actuation.py surfaces this as a
-    per-sample drop (see AttitudeCommand.msg / PositionCommand.msg
-    docstrings) rather than tearing down the connection.
+    command was invalid or rejected. core/actuation.py counts it as a
+    dropped sample rather than tearing down the connection.
     """
 
     def __init__(self, command: str, object_path: str, reason: str):
@@ -112,13 +110,11 @@ class MonotonicityViolationError(CommandError):
     """A SetPosition/AddAttitude sample arrived with a timestamp <= the
     last accepted timestamp for this object.
 
-    Raised by core/actuation.py's own pre-flight guard BEFORE the command
-    reaches the backend, since STK itself silently drops these rather than
-    NACKing them (see AttitudeCommand.msg). Keeping this as a distinct,
-    locally-raised exception -- rather than letting STK's silence pass
-    unnoticed -- is precisely why BridgeStatus.dropped_attitude_samples /
-    dropped_position_samples exist as counters instead of being inferred
-    from NACK counts.
+    Raised by core/actuation.py before the command reaches the backend, so
+    an out-of-order sample is counted locally
+    (``BridgeStatus.dropped_attitude_samples`` /
+    ``dropped_position_samples``) independently of how a backend reports
+    it.
     """
 
     def __init__(self, object_path: str, rejected_stamp: float,
@@ -148,6 +144,8 @@ class QueryError(BackendError):
 
 
 class ObjectNotFoundError(BackendError):
+    """The object path does not name an object in the current scenario."""
+
     def __init__(self, object_path: str):
         self.object_path = object_path
         super().__init__(f"STK object not found: {object_path!r}")
@@ -182,9 +180,9 @@ class ConnectNackError(ConnectProtocolError):
 class ConventionValidationError(StkBridgeError):
     """Raised by core/validation.py's startup self-test when a frame,
     quaternion-order, or unit assumption does not hold against the live
-    backend. This is a fail-fast: bridge_node.py treats this as fatal at
-    startup rather than continuing with an unverified convention -- see
-    docs/00_architecture.md section 3.5 on why this check exists at all.
+    backend. bridge_node.py treats it as fatal at startup rather than
+    continuing with an unverified convention (see
+    docs/bridge/design_decisions.md).
     """
 
 
@@ -212,9 +210,8 @@ class LockstepCommandError(StkBridgeError):
 class LockstepBarrierTimeoutError(StkBridgeError):
     """A lockstep step did not receive acknowledgement from all configured
     barrier participants within the configured timeout. Raised by
-    core/time_sync.py; nodes/clock_node.py decides whether to retry, skip,
-    or abort the run based on bridge_params.yaml's
-    lockstep.on_barrier_timeout policy.
+    core/time_sync.py when the ``time.on_barrier_timeout`` policy is
+    ``abort``; the bridge node then stops the step loop.
     """
 
     def __init__(self, step_index: int, missing_participants: list):

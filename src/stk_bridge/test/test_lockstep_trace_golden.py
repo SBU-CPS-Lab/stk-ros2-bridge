@@ -24,7 +24,7 @@ from stk_bridge.core.time_sync import TimeSync, TimeSyncConfig
 from stk_bridge.nodes.bridge_node import StkBridgeNode
 
 GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                      "fixtures", "lockstep_trace_48813ac.json")
+                      "fixtures", "lockstep_trace.json")
 EPOCH = 1717237800.0
 STEPS = 250
 

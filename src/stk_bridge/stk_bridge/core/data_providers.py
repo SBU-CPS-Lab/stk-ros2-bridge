@@ -12,17 +12,13 @@ Two problems this module exists to solve
 version, object type, and installed report styles: the same quantity may
 be ``"x"``, ``"X"``, or ``"Cartesian X"``. Every spec therefore declares
 *candidate* names per field and :func:`resolve_columns` picks whichever
-the live install actually returned. Pinning one spelling produces a
-bridge that works on the developer's machine and nowhere else.
+the live install actually returned.
 
 **2. Empty results are silent.** A data provider queried on an object
-with no ephemeris returns zero rows and raises nothing. This was observed
-on a live STK 12.6 install during Phase 2 bring-up: a freshly created
-satellite returned no columns at all, and because the query itself
-succeeded the failure was invisible. :func:`execute` therefore treats an
-empty result as an error by default, with a message that names the
-likely cause -- an unpropagated object -- rather than letting zero rows
-propagate into the control loop as though they were data.
+with no ephemeris returns zero rows and raises nothing (on STK 12.6 a
+freshly created, unpropagated satellite returns no columns at all).
+:func:`execute` therefore treats an empty result as an error by default,
+with a message that names the likely cause, an unpropagated object.
 """
 
 from __future__ import annotations
@@ -130,12 +126,10 @@ ATTITUDE_QUATERNION = ProviderSpec(
     key="attitude_quaternion",
     provider_name="Attitude Quaternions",
     provider_alternatives=("Attitude Quaternion",),
-    # UNGROUPED. Confirmed against a live STK 12.6 inventory: this
-    # provider takes no reference-frame group member and always reports
-    # attitude relative to the central body INERTIAL axes. Passing a
-    # frame here was silently ignored, which is how an ECF-commanded
-    # attitude came to be compared against an inertial read-back and
-    # produced a ~99 deg "ordering" error that was really a frame error.
+    # Ungrouped on STK 12.6: the provider takes no reference-frame
+    # member and always reports attitude relative to the central body's
+    # inertial axes. A frame argument is silently ignored, so comparing
+    # it with an Earth-fixed command is wrong by the Earth-rotation angle.
     group_element=None,
     fields=(
         TIME_FIELD,
@@ -178,8 +172,7 @@ ECF_ATTITUDE_QUATERNION = ProviderSpec(
 #: attitude quaternion and angular velocity of the vehicle's body axes
 #: computed with respect to the vehicle's central body inertial
 #: coordinate system", with q1..q3 the vector part and q4 the scalar.
-#: One query for both quantities is also one round trip instead of two,
-#: which matters on the fast rate group.
+#: One query for both quantities is one round trip instead of two.
 ATTITUDE_SEGMENT = ProviderSpec(
     key="attitude_segment",
     provider_name="Attitude Segment Quaternions",
@@ -235,13 +228,12 @@ LLA_STATE = ProviderSpec(
     description="Geodetic position. Angles in radians once units are SI.",
 )
 
-#: NOTE: on STK 12.6 "Lighting Times" is GROUPED, with one member per
-#: condition ("Sunlight", "Penumbra", "Umbra", and Subpoint variants),
-#: each returning START/STOP intervals -- NOT a single provider with a
-#: "Condition" column. Determining the instantaneous condition therefore
-#: means querying the members and testing interval membership, which
-#: core/sensing.py does. The group_element is supplied explicitly by the
-#: caller rather than via "<frame>", since these members are conditions.
+#: On STK 12.6 "Lighting Times" is grouped, with one member per
+#: condition ("Sunlight", "Penumbra", "Umbra" and Subpoint variants),
+#: each returning start/stop intervals rather than a "Condition" column.
+#: core/sensing.py queries the members and tests interval membership.
+#: The caller supplies the group_element, since the members are
+#: conditions, not frames.
 LIGHTING = ProviderSpec(
     key="lighting",
     provider_name="Lighting Times",

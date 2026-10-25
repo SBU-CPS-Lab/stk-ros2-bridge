@@ -5,7 +5,7 @@
 # canonical source to sweep.
 #
 # Guidance for choosing rates (see core/rate_group.py for the scheduling
-# semantics, and docs/00_architecture.md section 3.3 for the design):
+# semantics, and docs/bridge/architecture.md for the design):
 #
 #   fast    Control-relevant: orbit, attitude, body rate. Bounded above by
 #           whatever benchmark_rates.py measures as the sustained COM/

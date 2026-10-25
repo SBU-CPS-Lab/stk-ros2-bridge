@@ -11,10 +11,8 @@ STK's Object Model offers no way to interrupt a running ``RunMCS`` or
 coverage computation from another thread. So cancellation here means
 "stop at the next checkpoint the bridge controls" -- between steps for
 ``RunScenario``, before dispatch for the others -- and the goal is
-reported ``canceled`` only once that point is actually reached. An
-action server that accepted a cancel it could not honour, and returned
-immediately while STK kept working, would leave the caller believing the
-scenario had stopped while it silently advanced.
+reported ``canceled`` only once that point is reached, never while STK
+is still working.
 """
 
 from __future__ import annotations

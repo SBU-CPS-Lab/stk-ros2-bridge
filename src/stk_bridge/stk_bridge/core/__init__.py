@@ -19,6 +19,16 @@ Modules
 ``scenario_manager``  Scenario lifecycle, propagation, capability gating.
 ``health``            Bridge state machine and reconnection policy.
 ``ephemeris_writer``  STK .e / CCSDS OEM writers for the batch path.
+``step_timing``       Windowed sense / actuate / barrier-wait timing.
+``clock_timing``      Timing of STK clock advances.
+``free_run_pacer``    Wall-clock pacing of free-run cycles.
+``orbit_block``       Reading and validating blocks of orbit rows.
+``orbit_batch``       Lockstep orbit reads served from validated blocks.
+``attitude_equivalence``   Comparison of attitude read paths.
+``equivalence_diagnostic`` Opt-in check that optimised reads match direct ones.
+``graphics_state``    Recording STK's graphics state during a run.
+``startup_phases``    Timing of the bridge's startup phases.
+``mismatch_injection`` Opt-in interface-mismatch injection for fault studies.
 """
 
 from stk_bridge.core import conversions  # noqa: F401

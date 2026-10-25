@@ -1,17 +1,13 @@
 """Where the bridge's startup time goes, recorded as it happens.
 
-Launch to CONNECTED took 43.7-76.1 s over 40 runs, and one run (P10
-live session, 3186642) was killed by the runner's timeout while its
-log was still inside convention validation. bridge.log only had
-timestamps, from which the phases had to be rebuilt by hand.
-
-StartupPhases times each phase (nested phases are allowed, for the
-validation checks), logs each duration, and rewrites its JSON file at
-every change, so a bridge killed part-way through still says which
-phase it was in and since when. ``on_change`` is called with the
-current (innermost open) phase at every change; the bridge publishes
-BridgeStatus STARTING from it. The runner reads the file into the
-run's summary.json.
+Startup to CONNECTED takes tens of seconds on a typical install, most of
+it in convention validation. ``StartupPhases`` times each phase (nested
+phases are allowed, for the validation checks), logs each duration and
+rewrites its JSON file at every change, so a bridge stopped part-way
+through still says which phase it was in and since when. ``on_change``
+is called with the current (innermost open) phase at every change; the
+bridge publishes BridgeStatus STARTING from it. A run orchestrator can
+read the file into its own summary.
 
 File shape::
 

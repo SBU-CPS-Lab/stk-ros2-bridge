@@ -4,8 +4,9 @@ Different traffic wants different guarantees, and ROS 2's defaults suit
 none of the three kinds this bridge carries:
 
 **Telemetry** (position, attitude, rates) defaults to best-effort with
-depth 1 for streaming. ACAV lockstep explicitly selects reliable delivery:
-its current sample cannot become obsolete until all participants ack it.
+depth 1 for streaming. Lockstep deployments can select reliable delivery
+(``qos.telemetry_reliability: reliable``): a step's sample does not
+become obsolete until every participant has acknowledged it.
 
 **Commands** (position/attitude/rate injection) are reliable with a
 small queue. A dropped command is a real loss -- STK's real-time

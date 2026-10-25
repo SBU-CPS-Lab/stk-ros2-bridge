@@ -2,8 +2,7 @@
 
 Consumes the :class:`~stk_bridge.core.validation.ValidationReport` rather
 than hardcoding provider names, so the pipeline uses whatever the live
-install actually supports. On the STK 12.6 install this was developed
-against, validation resolves:
+install supports. On STK 12.6 validation resolves:
 
 * attitude   -> ``ECF Attitude Quaternions`` (pairs with ``AddAttitude
   CBFQuat``; the inertial pair ``Attitude Quaternions`` + ``AddAttitude
@@ -23,9 +22,9 @@ injected sample legitimately returns nothing.
 
 The pipeline therefore distinguishes the two: for a real-time object an
 empty result marks the channel **stale** and increments a counter; for
-any other propagator it is still an error. Publishing the last-known
-sample with a fresh timestamp would be the dangerous alternative -- a
-frozen state that looks live.
+any other propagator it is still an error. The last-known sample is
+never republished with a fresh timestamp, which would make a frozen
+state look live.
 """
 
 from __future__ import annotations
@@ -90,41 +89,36 @@ class SensingConfig:
     enable_access: bool = False
     enable_link_budget: bool = False
     #: Force a specific attitude read-back provider, overriding the one
-    #: validation proved correct. Empty (the default) means "use the
-    #: validated one", which is the only setting a real run should use.
+    #: validation selected. Empty (the default) uses the validated one.
     #:
-    #: This exists to make the ACAV case study's E1 runnable: it injects
-    #: the convention bug found during the bridge's own bring-up -- an
-    #: inertial read-back provider paired against a central-body-fixed
-    #: command form -- so the study can measure what that costs. The
-    #: mismatch differs by the Earth-rotation angle and nothing errors,
-    #: which is precisely why it is worth an experiment and precisely
-    #: why it must be impossible to switch on by accident. See
-    #: docs/C1_case_study_spec.md section 9.
+    #: A fault-injection setting: pairing a read-back provider with the
+    #: wrong command form is wrong by the Earth-rotation angle and raises
+    #: nothing, so it is useful for studying how consumers react (the ACAV
+    #: case study uses it) and must never be switched on by accident.
     force_attitude_provider: str = ""
-    #: E1 only: an interface mismatch applied to the published telemetry
-    #: (core/mismatch_injection.py). Empty, the default, publishes
-    #: exactly what was read. Never active in a nominal run.
+    #: Fault injection: an interface mismatch applied to the published
+    #: telemetry (core/mismatch_injection.py). Empty, the default,
+    #: publishes exactly what was read.
     inject_mismatch: str = ""
     #: Opt-in, observe-only comparison of the current reads with the
-    #: alternatives (B) and (C) would use; see
-    #: core/equivalence_diagnostic.py. Off in every shipped config.
+    #: alternative reads the optimisations below use (see
+    #: core/equivalence_diagnostic.py). Off in every shipped config.
     equivalence_diagnostic: bool = False
-    #: Where it writes; run_acav_run.py sets the run's log directory.
+    #: Directory the equivalence diagnostic writes to.
     equivalence_diagnostic_dir: str = ""
-    #: (B): read 'Attitude Segment Quaternions' once per step for both
-    #: attitude and rate, after proving at a written sample that its
-    #: quaternion equals the validated 'Attitude Quaternions'. Off by
-    #: default; on for ACAV. See SensingPipeline._update_combine_state.
+    #: Combined attitude/rate read: one 'Attitude Segment Quaternions'
+    #: query per step for both attitude and rate, used once its quaternion
+    #: is shown to equal the validated 'Attitude Quaternions' at a written
+    #: sample. Off by default. See SensingPipeline._update_combine_state.
     combine_attitude_rate: bool = False
-    #: (C): epochs per audited orbit block (core/orbit_batch.py). 1, the
-    #: default, disables batching; ACAV uses 100. Lockstep only.
+    #: Orbit batching: epochs per audited orbit block
+    #: (core/orbit_batch.py). 1, the default, disables batching. Lockstep
+    #: only.
     orbit_batch_samples: int = 1
     #: Block-end audit tolerances against instantaneous reads (strict).
     orbit_batch_audit_position_m: float = 1e-6
     orbit_batch_audit_velocity_mps: float = 1e-9
-    #: Scenario window the STK stop time must match, when known
-    #: (run_acav_run.py writes it from the scenario specification).
+    #: Scenario window the STK stop time must match, when known.
     orbit_batch_expected_window_s: Optional[float] = None
 
     @classmethod
@@ -178,8 +172,7 @@ def _match_attitude_spec(name: str):
     """The provider spec ``name`` refers to, or None.
 
     Matches the canonical name or any of a spec's known alternatives,
-    case-insensitively, because STK's provider naming drifts by version
-    exactly like everything else in this project.
+    case-insensitively, because STK's provider naming varies by version.
     """
     wanted = (name or "").strip().lower()
     if not wanted:
@@ -231,10 +224,10 @@ class SensingPipeline:
         self._rate_spec = self._select_rate_spec()
         #: Equivalence diagnostic, when attached: observes only.
         self._diagnostic = None
-        #: (C) orbit batch, when attached.
+        #: Orbit batch, when attached.
         self._orbit_batch = None
         self._last_raw: Dict[str, tuple] = {}
-        #: (B) state: "off" (not configured or unsupported), "pending"
+        #: Combined attitude/rate read state: "off" (not configured or unsupported), "pending"
         #: (separate reads; verify at the next written sample), "active"
         #: (one segment query for both channels) or "rejected" (the
         #: segment quaternion disagreed; separate reads until the backend
@@ -245,7 +238,7 @@ class SensingPipeline:
         #: The segment result shared within one read_all call.
         self._combined: Dict[str, object] = {}
         self._combined_fallbacks = 0
-        #: End-of-run accounting for (B); see combine_summary_line.
+        #: End-of-run accounting for the combined read; see combine_summary_line.
         self._combine_counts = {"steps_combined": 0, "steps_separate": 0,
                                 "verifications": 0,
                                 "verifications_passed": 0, "mismatches": 0,
@@ -270,7 +263,7 @@ class SensingPipeline:
 
     def set_attitude_write_probe(self, probe) -> None:
         """``probe(object_path, when) -> bool``: did the bridge write an
-        inertial attitude sample for exactly this epoch? (B) verifies
+        inertial attitude sample for exactly this epoch? The combined read verifies
         only at such epochs; without a probe it never activates."""
         self._attitude_write_probe = probe
 
@@ -279,7 +272,7 @@ class SensingPipeline:
         """The provider queried for the published attitude.
 
         BridgeStatus reports it. In combined mode that is the segment
-        provider (decision Q2); its terminal-epoch NO DATA fallback to
+        provider; its terminal-epoch NO DATA fallback to
         'Attitude Quaternions' is per step and logged, not reported here.
         """
         if self._combine_state == "active":
@@ -288,7 +281,7 @@ class SensingPipeline:
 
     @property
     def sensing_mode(self) -> str:
-        """"combined_attitude_rate" while (B) is active, else "separate"."""
+        """"combined_attitude_rate" while the combined read is active, else "separate"."""
         return ("combined_attitude_rate" if self._combine_state == "active"
                 else "separate")
 
@@ -302,23 +295,18 @@ class SensingPipeline:
     def _select_attitude_spec(self) -> dp.ProviderSpec:
         """Pick the attitude provider validation proved works.
 
-        Falls back to the ECF spec, which is the correct counterpart to
-        the ``CBFQuat`` command form the actuation path uses by default.
-        Choosing arbitrarily would risk the ECI/ECF mismatch that reads
-        back a plausible-but-wrong rotation.
-
-        ``force_attitude_provider`` overrides all of this, for E1 only --
-        see the field's own documentation.
+        Falls back to the ECF spec, the counterpart of the ``CBFQuat``
+        command form the actuation path uses by default.
+        ``force_attitude_provider`` overrides the selection (see the
+        field's documentation).
         """
         forced = (self._config.force_attitude_provider or "").strip()
         if forced:
             spec = _match_attitude_spec(forced)
             if spec is None:
-                # Loudly, rather than falling back to the validated
-                # provider: a typo here would produce a run that looks
-                # like an E1 treatment, behaves like the nominal control,
-                # and reports that mis-pairing the provider costs
-                # nothing. A wrong finding is worse than a failed start.
+                # Fail rather than fall back to the validated provider: a
+                # typo would otherwise give a run that is labelled as forced
+                # but behaves like a nominal one.
                 raise ConventionValidationError(
                     f"force_attitude_provider={forced!r} does not name a "
                     f"known attitude read-back provider. Expected one of: "
@@ -328,7 +316,7 @@ class SensingPipeline:
                 "validation. Attitude will be read back through a "
                 "provider that may not pair with the command form in "
                 "use, and the error is the Earth-rotation angle with "
-                "nothing raising. This is an E1 fault-injection setting: "
+                "nothing raising. This is a fault-injection setting: "
                 "if you did not set it deliberately, clear "
                 "sensing.force_attitude_provider.",
                 spec.provider_name)
@@ -360,10 +348,10 @@ class SensingPipeline:
         # provider carries rates alongside the quaternion.
         return dp.ATTITUDE_SEGMENT
 
-    # -- (B) combined attitude/rate ----------------------------------------
+    # -- combined attitude/rate read ----------------------------------------
 
     def _initial_combine_state(self) -> str:
-        """Whether (B) may activate at all in this session."""
+        """Whether the combined read may activate at all in this session."""
         if not self._config.combine_attitude_rate:
             return "off"
         reasons = []
@@ -455,7 +443,7 @@ class SensingPipeline:
         result = shared["result"]
         if result is None or result[0].row_count == 0:
             # Segment NO DATA (e.g. the terminal epoch): attitude for this
-            # step comes from 'Attitude Quaternions', as without (B).
+            # step comes from 'Attitude Quaternions', as without the combined read.
             self._combined_fallbacks += 1
             if str(self._combined_fallbacks).rstrip("0") == "1":
                 LOGGER.warning(
@@ -484,7 +472,7 @@ class SensingPipeline:
         return self._rate_sample(dp.ATTITUDE_SEGMENT, data, mapping, when)
 
     def combine_statistics(self) -> Dict[str, object]:
-        """(B) accounting for the whole session, for the end-of-run line."""
+        """Combined-read accounting for the whole session, for the end-of-run line."""
         stats: Dict[str, object] = {
             "configured": bool(self._config.combine_attitude_rate),
             "state": self._combine_state}
@@ -500,12 +488,12 @@ class SensingPipeline:
         return self._combine_state
 
     def disable_combine(self, reason: str) -> None:
-        """Turn (B) off for this session (the caller logs ``reason``),
+        """Turn the combined read off for this session (the caller logs ``reason``),
         e.g. in free-run, where no sense epoch is ever a written sample."""
         self._combine_state = "off"
 
     def combine_summary_line(self) -> str:
-        """One line for bridge.log at bridge stop (verifies (B) live)."""
+        """One line for bridge.log at bridge stop (shows whether the combined read was used)."""
         c = self.combine_statistics()
         return (f"combined attitude/rate summary: configured "
                 f"{c['configured']}, state {c['state']}; steps combined "
@@ -531,19 +519,11 @@ class SensingPipeline:
     def health(self) -> Dict[str, ChannelHealth]:
         return dict(self._health)
 
-    #: How long a cached "is this object real-time?" answer is trusted
-    #: before being re-checked. A permanent cache is unsafe: the only
-    #: enforced invalidation point today is the SetPropagator service
-    #: handler, and any other path that switches a propagator (direct
-    #: script use of ActuationDispatcher.prepare_object, a future
-    #: service, ScenarioManager called outside the normal startup
-    #: sequence) would leave a stale answer with no invalidation call at
-    #: all. The dangerous direction is caching True when the truth is
-    #: now False: that would silently reclassify a genuine query error
-    #: as mere staleness (returns None) instead of raising -- exactly
-    #: the kind of masked failure this whole module exists to prevent.
-    #: A bounded TTL caps the exposure instead of requiring every write
-    #: path to remember to invalidate.
+    #: How long a cached "is this object real-time?" answer is trusted.
+    #: Only the SetPropagator service invalidates the cache explicitly; a
+    #: propagator changed by another path would otherwise leave a stale
+    #: True that turns genuine query errors into "stale" results. The TTL
+    #: bounds that exposure.
     _REALTIME_CACHE_TTL_S = 5.0
 
     def _is_realtime(self, object_path: str) -> bool:
@@ -552,10 +532,8 @@ class SensingPipeline:
         Cached with a TTL (see ``_REALTIME_CACHE_TTL_S``): re-querying on
         every read would double the query count on the fast rate group,
         but caching forever risks a stale answer surviving an
-        out-of-band propagator change. ``invalidate_propagator_cache``
-        remains the fast, immediate path for callers that know a change
-        happened (the SetPropagator service uses it); the TTL is the
-        safety net for callers that don't.
+        out-of-band propagator change. ``invalidate_propagator_cache`` is
+        the immediate path for callers that know of a change.
         """
         import time as _time
 
@@ -746,8 +724,7 @@ class SensingPipeline:
         except QueryError:
             # The segment provider carries rates as optional fields; an
             # attitude profile that does not define them yields no
-            # columns. Zero is the honest answer here (no commanded
-            # rate), not an error.
+            # columns, which means zero commanded rate, not an error.
             self._channel("angular_rate").stale_reads += 1
             return None
 

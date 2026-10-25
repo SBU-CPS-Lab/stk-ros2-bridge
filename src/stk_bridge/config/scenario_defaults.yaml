@@ -11,20 +11,17 @@ scenario:
       name: SSS-1
   realtime_objects:
     - "*/Satellite/SSS-1"
-  # Confirmed on a live STK 12.6 install: neither LookAheadTime nor
-  # LookBehindTime exist as Connect keywords or discoverable Object
-  # Model properties on the RealTime propagator (the only match was
-  # `Duration`, tried automatically by com_backend.py). These values are
-  # therefore ASPIRATIONAL on 12.6 -- STK's built-in default governs
-  # until AGI support confirms the correct property name. Track this in
-  # docs/06_troubleshooting.md.
+  # On STK 12.6 the RealTime propagator exposes no LookAhead/LookBehind
+  # property (only `Duration`, which com_backend.py uses for look-ahead),
+  # so look_behind_s may have no effect there and STK's default applies.
+  # See docs/bridge/stk_notes.md.
   look_ahead_s: 3600.0
   look_behind_s: 3600.0
 
 # Nominal SSS-1 orbit, matching backends/mock_backend.py's SSS1_DEFAULTS,
 # for anyone constructing a fresh scenario by hand rather than loading a
-# .sc file. NOT the vehicle's real published elements -- replace with an
-# actual TLE or ephemeris before using this for anything but bring-up.
+# .sc file. Placeholder elements, not a published orbit; replace them with
+# a real TLE or ephemeris for any analysis.
 sss1_nominal_orbit:
   semi_major_axis_km: 6878.137     # ~500 km altitude, circular
   eccentricity: 0.0

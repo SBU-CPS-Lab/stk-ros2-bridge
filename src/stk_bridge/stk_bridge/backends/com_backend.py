@@ -9,22 +9,19 @@ Threading
 ---------
 COM is apartment-threaded. Every method here must be called from the same
 thread that called :meth:`connect`, and that thread must have initialised
-COM. ``core/com_thread.py`` (Phase 3) owns that thread and marshals work
-onto it; this class deliberately takes no locks so that a violation
-surfaces as a clear COM error during development rather than being masked
-into an intermittent deadlock in production.
+COM. ``core/com_thread.py`` owns that thread and marshals work onto it;
+this class takes no locks, so that a violation surfaces as a COM error
+rather than as an intermittent deadlock.
 
 Version drift
 -------------
-This is the file most exposed to STK-version differences: enum names,
-data-provider group structure, and a few property spellings changed
-across the 12.x line, and no model has reliable recall of 12.6's exact
-type library. Every such touch point is routed through
-:meth:`_resolve_enum` or an explicit try/except with a named fallback,
-and :meth:`_probe_capabilities` records what it could not resolve. Run
-``scripts/check_environment.py`` (below) against your install before
-trusting this module; ``core/validation.py`` (Phase 3) additionally
-cross-checks conventions at every startup.
+This module is the most exposed to STK version differences: enum names,
+data-provider group structure and some property spellings changed across
+the 12.x line. Every such touch point goes through :meth:`_resolve_enum`
+or an explicit try/except with a named fallback, and
+:meth:`_probe_capabilities` records what it could not resolve. Run
+``scripts/check_environment.py`` against a new install;
+``core/validation.py`` cross-checks conventions at every startup.
 """
 
 from __future__ import annotations
@@ -72,8 +69,8 @@ class ComBackend(StkBackend):
         super().__init__(BackendType.COM)
         self._attach_to_existing = attach_to_existing
         #: Start an STK when there is none to attach to. Off by default:
-        #: an STK started through COM ran E6 at 95.7 ms against about
-        #: 60 ms (P10 live session), and runs must use the operator's.
+        #: an STK started through COM (as a COM server) was measured to
+        #: step about 1.6x slower than one started by the user.
         self._start_stk = start_stk
         self._visible = visible
         self._user_control = user_control
@@ -96,10 +93,9 @@ class ComBackend(StkBackend):
     def _obtain_application(self):
         """The operator's STK Desktop; a new one only when configured.
 
-        Attaching is the only default. Starting STK (start_stk, or
-        attach_to_existing false) is logged as a warning: that STK is a
-        COM server (AgUiApplication.exe -Embedding), which the run
-        orchestrator refuses for reportable runs.
+        Attaching is the default. Starting STK (``start_stk``, or
+        ``attach_to_existing`` false) is logged as a warning, because that
+        STK runs as a COM server (``AgUiApplication.exe -Embedding``).
         """
         from agi.stk12.stkdesktop import STKDesktop
 
@@ -113,8 +109,7 @@ class ComBackend(StkBackend):
                     raise BackendUnavailableError(
                         BackendType.COM.value,
                         "no running STK Desktop to attach to. Start STK "
-                        "Desktop yourself (runs must use an STK the "
-                        "operator started), or set backend.com.start_stk: "
+                        "Desktop yourself, or set backend.com.start_stk: "
                         "true (build/verify scripts: --start-stk) to let "
                         f"this start one. Underlying error: {exc}",
                     ) from exc
@@ -126,9 +121,8 @@ class ComBackend(StkBackend):
                 BackendType.COM.value, f"failed to start STK Desktop: {exc}"
             ) from exc
         LOGGER.warning(
-            "STARTED A NEW STK Desktop through COM (%s). It is not an "
-            "operator-started STK: the run orchestrator refuses reportable "
-            "runs on it unless --allow-com-started-stk.",
+            "STARTED A NEW STK Desktop through COM (%s). It runs as a COM "
+            "server, which is slower than a user-started STK.",
             "start_stk" if self._attach_to_existing
             else "attach_to_existing is false")
         return application
@@ -152,7 +146,7 @@ class ComBackend(StkBackend):
                 BackendType.COM.value,
                 "cannot import agi.stk12. Install the wheel shipped with "
                 "STK 12.6 from <STK install>\\bin\\AgPythonAPI (see "
-                "docs/01_installation_windows.md). Note STK 12.6's Python "
+                "docs/installation.md). Note STK 12.6's Python "
                 f"API is in-process only -- there is no gRPC remoting until "
                 f"STK 12.8. Underlying error: {exc}",
             ) from exc
@@ -183,10 +177,9 @@ class ComBackend(StkBackend):
         self._root = None
         if self._stk is not None:
             try:
-                # ShutDown() only if we own the process; if we attached to
-                # a user's running STK, closing it out from under them
-                # would be hostile. userControl=True on StartApplication
-                # already means STK stays up for the user.
+                # ShutDown() only if this backend owns the process: an
+                # attached STK belongs to the user, and userControl=True
+                # keeps a started one open for the user.
                 if not self._attach_to_existing and not self._user_control:
                     self._stk.ShutDown()
             except Exception:  # pragma: no cover - best-effort teardown
@@ -203,25 +196,22 @@ class ComBackend(StkBackend):
         connection -- a session missing one unit preference is degraded,
         not unusable.
 
-        Two things measured on a live STK 12.6 install shape this:
+        Two STK 12.6 behaviours shape this:
 
         * **Latitude and Longitude are their own dimensions**, separate
-          from Angle. Setting Angle to radians succeeded and left "LLA
-          State" reporting *degrees*, because that provider's columns
-          are Latitude/Longitude-dimensioned. The bridge reported SI
-          units while handing out degrees, and only a case-study check
-          that compared LLA against a Cartesian position caught it.
-        * **Acceptance is not application.** Every preference is now
-          read back, because the failure above raised nothing and
-          logged a success.
+          from Angle. With only Angle set to radians, "LLA State" still
+          reports degrees, because its columns are Latitude/Longitude
+          dimensioned.
+        * **Acceptance is not application.** ``SetCurrentUnit`` can
+          succeed without changing the unit, so every preference is read
+          back.
         """
         preferences = (
             ("Distance", "m"),
             ("Time", "sec"),
             ("Angle", "rad"),
-            # Separate dimensions from Angle. Without these, every
-            # geodetic latitude and longitude the bridge reports is in
-            # degrees while claiming to be radians.
+            # Separate dimensions from Angle; without them geodetic
+            # latitude and longitude stay in degrees.
             ("Latitude", "rad"),
             ("Longitude", "rad"),
             ("Mass", "kg"),
@@ -258,8 +248,7 @@ class ComBackend(StkBackend):
         """Read each preference back; return the ones that disagree.
 
         ``GetCurrentUnitAbbrv`` is the only direct evidence that a
-        preference applied. If the call itself is unavailable the list
-        comes back empty and the caller is no worse off than before.
+        preference applied. If the call is unavailable the list is empty.
         """
         mismatched: List[str] = []
         for dimension, unit in preferences:
@@ -294,9 +283,7 @@ class ComBackend(StkBackend):
     def _resolve_enum(self, *candidate_names: str) -> Any:
         """Return the first enum/constant that exists under any given name.
 
-        Raises ``AttributeError`` naming all candidates if none resolve,
-        which produces a far more debuggable failure than an
-        ``AttributeError`` on a single guessed spelling.
+        Raises ``AttributeError`` naming all candidates if none resolve.
         """
         module = self._enums.get("module")
         for name in candidate_names:
@@ -464,9 +451,9 @@ class ComBackend(StkBackend):
         return self._revision
 
     def get_propagator_type(self, object_path: str) -> Optional[str]:
-        # IAgSatellite.PropagatorType (AgEVePropagatorType); the live
-        # 12.6 inspection read 'ePropagatorHPOP' this way. PropagatorName,
-        # used by list_objects, is not on the 12.6 Object Model.
+        # IAgSatellite.PropagatorType (AgEVePropagatorType), e.g.
+        # 'ePropagatorHPOP' on STK 12.6. PropagatorName, used by
+        # list_objects, is not on the 12.6 Object Model.
         obj = self._get_object(object_path)
         try:
             name = getattr(obj.PropagatorType, "name", None)
@@ -643,7 +630,7 @@ class ComBackend(StkBackend):
         obj, provider, fixed_position = self._provider_cache[key]
         try:
             if fixed_position:
-                # Still resolve fixed-object geometry at EVERY requested epoch.
+                # Resolve fixed-object geometry at every requested epoch.
                 return self._fixed_position_in_frame(obj, query)
             started = time.perf_counter()
             try:
@@ -683,6 +670,12 @@ class ComBackend(StkBackend):
             self._query_timings_since = now
 
     def _fixed_position_in_frame(self, obj, query):
+        """Position of a static object in the requested frame and epochs.
+
+        Static objects (Target, Facility, Place) serve a fixed data
+        provider that ignores the requested frame and time, so their
+        position is located through the Vector Geometry Tool instead.
+        """
         try:
             body = self._root.CentralBodies.Item(obj.CentralBodyName)
             system = body.Vgt.Systems.Item(query.group_element)
@@ -750,14 +743,10 @@ class ComBackend(StkBackend):
         provider (``AgDataPrvFixed``) describes something that does not
         vary with time, so it takes no epochs at all: ``Exec()``.
 
-        Static objects -- Target, Facility, Place -- serve *every*
-        provider through the fixed interface, position included.
-        Confirmed on a live STK 12.6 install, where reading a target's
-        position failed with ``'AgDataPrvFixed' object has no attribute
-        'ExecSingle'``. That single missing branch made every target and
-        facility position unreadable, which in turn made target
-        placement unverifiable and hid a unit error that put the whole
-        scenario in the wrong place.
+        Static objects (Target, Facility, Place) serve every provider
+        through the fixed interface, position included: on STK 12.6,
+        calling ``ExecSingle`` on them fails with ``'AgDataPrvFixed'
+        object has no attribute 'ExecSingle'``.
         """
         if not hasattr(provider, "ExecSingle"):
             try:
@@ -771,8 +760,8 @@ class ComBackend(StkBackend):
 
         start = (proto.format_utcg(query.start) if query.start
                  else str(self._root.CurrentScenario.StartTime))
-        # Instantaneous reads do not need StopTime: avoid two COM property
-        # accesses on every single-epoch telemetry query.
+        # Instantaneous reads do not need StopTime; skipping it saves two
+        # COM property reads per telemetry query.
         stop = None
         if not query.is_instantaneous:
             stop = (proto.format_utcg(query.stop) if query.stop
@@ -793,6 +782,7 @@ class ComBackend(StkBackend):
 
     @contextmanager
     def _extraction_stage(self, query, stage):
+        """Time one stage of result extraction for the periodic profile."""
         started = time.perf_counter()
         failed = 0
         try:
@@ -808,6 +798,7 @@ class ComBackend(StkBackend):
                                             max(peak, elapsed), errors + failed)
 
     def _flush_extraction_profile(self):
+        """Log and reset the per-stage extraction timings."""
         if not self._extraction_timings:
             return
         for (name, frame, stage), (n, total, peak, errors) in self._extraction_timings.items():
@@ -831,11 +822,13 @@ class ComBackend(StkBackend):
                  ) -> DataProviderData:
         """Pull a DR result into plain Python columns.
 
-        Prefers ``ToNumpyArray()`` (STK 12.6+) for multi-row results
-        because the per-element ``GetValues()`` path makes one COM call
-        per column and that dominates latency on wide providers. Falls
-        back to ``GetValues()`` when NumPy extraction is unavailable, so
-        the backend still works if the install predates it.
+        Reads all column names with one ``DataSets.ElementNames`` call and
+        all values with ``ToNumpyArray()`` (STK 12.6+), because per-column
+        ``Item``/``ElementName``/``GetValues`` calls each cost a COM round
+        trip and dominate latency. Names are read for every result; no
+        column mapping is cached between queries. If the bulk array does
+        not match the names, or bulk extraction is unavailable, the
+        per-column path is used.
         """
         columns: Dict[str, List] = {}
 
@@ -850,8 +843,7 @@ class ComBackend(StkBackend):
         names: List[str] = []
         selected_datasets = []
         try:
-            # STK 12.6 exposes the complete ordered names in one COM call.
-            # Read them afresh: no cross-epoch schema cache or stale mapping.
+            # STK 12.6 returns the complete, ordered names in one COM call.
             with self._extraction_stage(query, 'element_names'):
                 names = [str(name) for name in datasets.ElementNames]
         except Exception:
@@ -920,8 +912,8 @@ class ComBackend(StkBackend):
 
         Walks ``obj.DataProviders`` by index. Individual providers that
         raise while being inspected are skipped rather than aborting the
-        walk, because a single unavailable provider (unlicensed module,
-        wrong object type) must not hide the other eighty.
+        walk, so that one unavailable provider (unlicensed module, wrong
+        object type) does not hide the others.
         """
         obj = self._get_object(object_path)
         providers: Dict[str, List[str]] = {}
@@ -995,24 +987,17 @@ class ComBackend(StkBackend):
                        external_file: str = "") -> None:
         """Switch propagator.
 
-        Implemented through Connect commands rather than the typed
-        ``SetPropagatorType`` API. That is a deliberate choice: the enum
-        names for propagator types moved between 12.x releases, whereas
-        the Connect spellings did not, and this operation happens once at
-        setup where the extra microseconds are irrelevant. The hot path
-        (SetPosition/AddAttitude) is likewise Connect-based for the same
-        reason -- see the note on :meth:`set_position`.
+        Uses the typed ``SetPropagatorType`` first: on STK 12.6 the
+        Connect form ``SetPropagator ... RealTime`` fails while the typed
+        call succeeds. For analytic propagators Connect is the fallback.
+        Switching to RealTime discards the object's analytic ephemeris.
         """
         self._provider_cache.clear()
         self._revision += 1
         if propagator is PropagatorType.REALTIME:
             self._capabilities.require("realtime_propagator")
-            # Confirmed against STK 12.6: the `SetPropagator ... RealTime`
-            # Connect command fails ("Command has failed."), but the typed
-            # Object Model path works. Enum spelling verified on a live
-            # 12.6 install: AgEVePropagatorType.ePropagatorRealtime --
-            # note the lowercase 't' in "Realtime", which differs from the
-            # "RealTime" spelling used elsewhere in STK's own docs.
+            # The enum member is ePropagatorRealtime, with a lowercase 't',
+            # unlike the "RealTime" spelling used elsewhere in STK.
             try:
                 stkobjects = self._enums.get("module")
                 enum_type = self._resolve_enum("AgEVePropagatorType",
@@ -1026,14 +1011,11 @@ class ComBackend(StkBackend):
                                    str(exc)) from exc
 
             # SetPropagatorType leaves Look-Ahead/Look-Behind at STK's
-            # defaults. Those durations decide how far the real-time
-            # propagator extrapolates past the newest injected sample and
-            # how much history it retains, which directly determines
-            # whether a data provider queried at "now" returns anything at
-            # all. Applying them is therefore not optional, but the
-            # property names are version-sensitive, so failure here is a
-            # warning rather than a hard error -- the propagator still
-            # works, just with defaults.
+            # defaults. They decide how far the real-time propagator
+            # extrapolates past the newest sample and how much history it
+            # keeps, i.e. whether a query at "now" returns anything. The
+            # property names are version-sensitive, so a failure is a
+            # warning and the propagator keeps its defaults.
             self._configure_realtime_durations(
                 object_path, look_ahead_s, look_behind_s)
         elif propagator is PropagatorType.EXTERNAL:
@@ -1042,13 +1024,8 @@ class ComBackend(StkBackend):
                                    "EXTERNAL propagator requires external_file")
             self.load_external_ephemeris(object_path, external_file)
         else:
-            # Confirmed on a live STK 12.6 install for RealTime: the
-            # Connect form of SetPropagator fails ("Command has failed.")
-            # while SetPropagatorType on the Object Model succeeds. The
-            # same is assumed to apply to the analytic propagators, so
-            # the typed path is tried FIRST and Connect is the fallback
-            # -- the reverse of the original ordering, which would have
-            # spent a failed round trip on every call.
+            # Typed path first, Connect as the fallback (see the method
+            # docstring).
             enum_member = {
                 PropagatorType.TWO_BODY: "ePropagatorTwoBody",
                 PropagatorType.J4_PERTURBATION: "ePropagatorJ4Perturbation",
@@ -1093,12 +1070,9 @@ class ComBackend(StkBackend):
 
         applied = []
         for candidates, value in (
-            # "Duration" confirmed present on STK 12.6's real-time
-            # propagator via dir(); the LookAhead*/LookBehind* spellings
-            # are not. Duration is tried first for look-ahead. Note that
-            # 12.6 exposes no separate look-behind property here, so
-            # look_behind_s may be unsettable -- reported, not silently
-            # ignored.
+            # STK 12.6's real-time propagator has "Duration" but no
+            # LookAhead*/LookBehind* properties, so look-ahead uses
+            # Duration and look_behind_s may be unsettable (reported).
             (("Duration", "LookAheadDuration", "LookAheadTime",
               "LookAhead"), look_ahead_s),
             (("LookBehindDuration", "LookBehindTime", "LookBehind"),
@@ -1117,10 +1091,8 @@ class ComBackend(StkBackend):
                         ", ".join(applied))
             return
 
-        # None of the candidate spellings worked. Rather than leave the
-        # operator to guess, enumerate what the propagator object
-        # actually exposes -- that turns a dead-end warning into the
-        # exact list of names to add above.
+        # No candidate worked: list what the propagator object exposes, so
+        # the warning names the properties to try.
         discovered = []
         try:
             discovered = [
@@ -1147,10 +1119,8 @@ class ComBackend(StkBackend):
 
         A satellite created via ``Children.New`` has a propagator and
         default elements but *no ephemeris* until propagated, and every
-        data provider on it returns zero rows until then. This is the
-        single most common cause of a silently empty Data Provider
-        result, so it gets a dedicated, explicitly-named method rather
-        than being buried in a query path.
+        data provider on it returns zero rows until then, the most common
+        cause of an empty data provider result.
 
         Returns True if propagation ran, False if the object has no
         propagator that supports it (e.g. real-time, which generates
@@ -1170,16 +1140,14 @@ class ComBackend(StkBackend):
                         angular_resolution_rad: float = 0.017453) -> str:
         """Set a simple-conic pattern, Object Model first.
 
-        The Connect ``Define ... SimpleConic`` form was rejected on a
-        live STK 12.6 install in both angle units, leaving the sensor at
-        STK's default half-angle. That is the same shape of failure as
-        ``SetPropagator ... RealTime``, whose typed equivalent worked,
-        so the typed path is tried first here too.
+        STK 12.6 rejects the Connect ``Define ... SimpleConic`` form in
+        both angle units, while ``CommonTasks.SetPatternSimpleConic``
+        works, so the typed path is tried first.
 
-        Each candidate is confirmed by reading the cone angle back
-        rather than by its return value: the units these accept follow
-        STK's Angle preference, and that preference was observed being
-        honoured for data providers while Connect commands ignored it.
+        Each candidate is confirmed by reading the cone angle back rather
+        than by its return value, because the unit it accepts follows the
+        Angle preference, which data providers honour and Connect
+        commands ignore.
         """
         try:
             sensor = self._get_object(object_path)
@@ -1222,12 +1190,9 @@ class ComBackend(StkBackend):
                        value: float = 0.0) -> str:
         """Object Model first, then Connect.
 
-        Every Connect ``SetAzElMask`` form is rejected on STK 12.6 with
-        the generic "Command has failed."; the typed path works. Member
-        spellings are measured, not guessed -- a live install reports
-        ``eAzElMaskNone``, ``eMaskFile`` and ``eTerrainData``, and the
-        first attempt at ``eAzElMaskTerrainData`` failed with an
-        AttributeError that listed them.
+        STK 12.6 rejects every Connect ``SetAzElMask`` form with "Command
+        has failed."; the typed path works. Its ``AgEAzElMaskType``
+        members are ``eAzElMaskNone``, ``eMaskFile`` and ``eTerrainData``.
         """
         members = {
             "terrain": ("eTerrainData", "eAzElMaskTerrainData"),
@@ -1270,6 +1235,7 @@ class ComBackend(StkBackend):
         raise CommandError("SetAzElMask", object_path, "; ".join(reasons))
 
     def get_az_el_mask(self, object_path: str) -> Optional[str]:
+        """The object's mask type as reported by the Object Model."""
         try:
             obj = self._get_object(object_path)
             return str(obj.GetAzElMask())
@@ -1298,10 +1264,8 @@ class ComBackend(StkBackend):
         """Read the configured cone half-angle back through the Object Model.
 
         Returns radians. The property is reported in STK's current Angle
-        unit, which configure_units() sets to radians -- but that is
-        exactly the assumption that has already been wrong once, so a
-        value too large to be a plausible radian half-angle is treated
-        as degrees rather than believed.
+        unit, which configure_units() sets to radians; a value too large
+        to be a radian half-angle is treated as degrees.
         """
         try:
             sensor = self._get_object(object_path)
@@ -1337,11 +1301,13 @@ class ComBackend(StkBackend):
         self._execute(" ".join(args))
 
     def enable_realtime_attitude(self, object_path: str) -> None:
+        """Activate the real-time attitude profile (``SetAttitude Standard``)."""
         self._provider_cache.clear()
         self._revision += 1
         self._execute(f"SetAttitude {object_path} Standard")
 
     def clear_attitude_data(self, object_path: str) -> None:
+        """Drop the object's real-time attitude history (``ClearData``)."""
         self._revision += 1
         try:
             self._execute(f"SetAttitude {object_path} ClearData")
@@ -1399,6 +1365,7 @@ class ComBackend(StkBackend):
 # ---------------------------------------------------------------------------
 
 def _coerce(value: Any):
+    """A data provider value as float, or as str for times and labels."""
     try:
         return float(value)
     except (TypeError, ValueError):
